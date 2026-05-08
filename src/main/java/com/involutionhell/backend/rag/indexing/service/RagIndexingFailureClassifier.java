@@ -1,6 +1,7 @@
 package com.involutionhell.backend.rag.indexing.service;
 
 import com.involutionhell.backend.rag.indexing.model.RagIndexFailure;
+import com.involutionhell.backend.rag.indexing.workflow.IndexWorkflowTransitionException;
 import java.io.IOException;
 import java.net.ConnectException;
 import java.net.SocketException;
@@ -20,6 +21,9 @@ import org.springframework.stereotype.Component;
 public class RagIndexingFailureClassifier {
 
     public RagIndexFailure classify(Throwable throwable) {
+        if (isTerminalWorkflowGuardFailure(throwable)) {
+            return new RagIndexFailure(false, "stale-message");
+        }
         if (containsCause(throwable, InterruptedException.class)) {
             return new RagIndexFailure(false, "interrupted");
         }
@@ -71,6 +75,18 @@ public class RagIndexingFailureClassifier {
             return new RagIndexFailure(true, "network");
         }
         return new RagIndexFailure(true, "unknown");
+    }
+
+    private boolean isTerminalWorkflowGuardFailure(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof IndexWorkflowTransitionException) {
+                String message = current.getMessage();
+                return message != null && message.contains("终态任务不允许继续推进");
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private boolean containsCause(Throwable throwable, Class<? extends Throwable> type) {

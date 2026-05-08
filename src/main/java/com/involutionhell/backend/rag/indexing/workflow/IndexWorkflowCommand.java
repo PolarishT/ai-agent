@@ -6,6 +6,9 @@ import java.util.Map;
 
 /**
  * 一次索引工作流事件的触发上下文。
+ *
+ * <p>该对象会跨事件监听、异步索引任务和状态机审计链路传递，因此保持只读语义：
+ * record 字段不原地修改，metadata 在构造时做防御性拷贝并以只读 Map 暴露。</p>
  */
 public record IndexWorkflowCommand(
         Long documentId,

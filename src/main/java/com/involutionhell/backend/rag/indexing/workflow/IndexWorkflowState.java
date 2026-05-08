@@ -39,6 +39,9 @@ public enum IndexWorkflowState {
         if (record.stage() == null || record.stage().isBlank()) {
             return QUEUED;
         }
+        if (FAILED.name().equals(record.stage())) {
+            return FAILED;
+        }
         return switch (RagIndexStage.valueOf(record.stage())) {
             case QUEUED -> QUEUED;
             case DISPATCHING -> DISPATCHING;

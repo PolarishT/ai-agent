@@ -8,6 +8,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.function.Supplier;
 
 /**
  * RAG 检索链路的观测埋点。
@@ -37,23 +38,36 @@ public class RagRetrievalMetrics {
         builder.register(meterRegistry).record(duration);
     }
 
+    public <T> T recordStage(String stage, boolean hasFilter, Supplier<T> action) {
+        Timer.Sample sample = meterRegistry == null ? null : Timer.start(meterRegistry);
+        try {
+            T result = action.get();
+            stopStageSample(sample, stage, hasFilter, "success");
+            return result;
+        } catch (RuntimeException exception) {
+            stopStageSample(sample, stage, hasFilter, "error");
+            throw exception;
+        }
+    }
+
     public void recordExpandedQueryCount(int count) {
         recordSummary("rag.retrieval.expanded_query.count", count);
     }
 
-    public void recordHitCount(String branch, String phase, int count) {
+    public void recordHitCount(String branch, String store, String phase, int count) {
         if (meterRegistry == null || count < 0) {
             return;
         }
         DistributionSummary.builder("rag.retrieval.hit.count")
                 .tag("branch", branch)
+                .tag("store", store)
                 .tag("phase", phase)
                 .register(meterRegistry)
                 .record(count);
     }
 
     public void recordFallback(String scope, String branch) {
-        increment("rag.retrieval.fallback.count", "scope", scope, "branch", branch);
+        recordFallback(scope, branch, "unspecified");
     }
 
     public void recordFallback(String scope, String branch, String reason) {
@@ -113,5 +127,16 @@ public class RagRetrievalMetrics {
         for (int index = 0; index + 1 < extraTags.length; index += 2) {
             builder.tag(extraTags[index], extraTags[index + 1]);
         }
+    }
+
+    private void stopStageSample(Timer.Sample sample, String stage, boolean hasFilter, String outcome) {
+        if (sample == null || meterRegistry == null) {
+            return;
+        }
+        sample.stop(Timer.builder("rag.retrieval.stage.duration")
+                .tag("stage", stage)
+                .tag("outcome", outcome)
+                .tag("has_filter", String.valueOf(hasFilter))
+                .register(meterRegistry));
     }
 }

@@ -9,6 +9,7 @@ import com.involutionhell.backend.rag.indexing.service.RagIndexingMetrics;
 import com.involutionhell.backend.rag.shared.properties.RagProperties;
 import com.involutionhell.backend.rag.indexing.persistence.RagIndexOutboxRepository;
 import com.involutionhell.backend.rag.indexing.persistence.RagIndexOutboxRecord;
+import com.involutionhell.backend.rag.shared.support.RagLogFields;
 import com.involutionhell.backend.rag.shared.support.RagLogHelper;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -87,6 +88,17 @@ public class RagIndexOutboxService {
             try {
                 outboxRepository.markSent(event.id(), publishedMessageId);
                 indexingMetrics.recordOutboxDispatchSuccess();
+                log.atInfo()
+                        .addKeyValue(RagLogFields.EVENT_NAME, "rag.outbox.event.published")
+                        .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_SUCCESS)
+                        .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(event.documentId(), event.contentSha256()))
+                        .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, event.documentId())
+                        .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(event.contentSha256()))
+                        .addKeyValue(RagLogFields.RAG_MESSAGE_ID, publishedMessageId)
+                        .addKeyValue("rag.outbox_id", event.id())
+                        .addKeyValue("rag.outbox_event_type", event.eventType())
+                        .addKeyValue("rag.outbox_attempt_count", event.attemptCount())
+                        .log("RAG outbox event published");
                 dispatched++;
             } catch (Exception exception) {
                 indexingMetrics.recordOutboxDispatchFailure("sent_confirmation");

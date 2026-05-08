@@ -9,5 +9,10 @@ import java.util.List;
  */
 public interface RagRetriever {
 
-    List<RagRetrievedChunk> search(String question, int topK, RagSearchFilter filter);
+    List<RagRetrievedChunk> search(RagRetrievalRequest request);
+
+    @Deprecated
+    default List<RagRetrievedChunk> search(String question, int topK, RagSearchFilter filter) {
+        return search(new RagRetrievalRequest(question, filter, RagRetrievalBudget.legacy(topK)));
+    }
 }

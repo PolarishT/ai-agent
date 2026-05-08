@@ -1,6 +1,8 @@
 package com.involutionhell.backend.rag.retrieval.api;
 
+import reactor.core.publisher.Flux;
+
 public interface RagAskFacade {
 
-    RagAnswerResponse ask(RagAskRequest request);
+    Flux<RagAskStreamEvent> askStream(RagAskRequest request);
 }

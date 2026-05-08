@@ -8,6 +8,7 @@ import com.involutionhell.backend.rag.indexing.workflow.IndexWorkflowCommand;
 import com.involutionhell.backend.rag.indexing.workflow.IndexWorkflowService;
 import com.involutionhell.backend.rag.indexing.workflow.IndexWorkflowTriggerType;
 import com.involutionhell.backend.rag.shared.properties.RagProperties;
+import com.involutionhell.backend.rag.shared.support.RagLogFields;
 import com.involutionhell.backend.rag.shared.support.RagLogHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -65,13 +66,17 @@ class IndexingCommandService implements IndexingCommandFacade {
                 triggeredBy
         );
 
-        log.info(
-                "RAG index dispatch started: documentId={}, contentSha={}, rocketMqEnabled={}, outboxEnabled={}",
-                documentId,
-                RagLogHelper.shortSha(contentSha256),
-                ragProperties.rocketMq().enabled(),
-                ragProperties.outbox().enabled()
-        );
+        log.atInfo()
+                .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.dispatch.started")
+                .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_STARTED)
+                .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, contentSha256))
+                .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(contentSha256))
+                .addKeyValue(RagLogFields.RAG_TRIGGER_TYPE, IndexWorkflowTriggerType.API)
+                .addKeyValue(RagLogFields.RAG_TRIGGERED_BY, triggeredBy)
+                .addKeyValue("rag.rocket_mq_enabled", ragProperties.rocketMq().enabled())
+                .addKeyValue("rag.outbox_enabled", ragProperties.outbox().enabled())
+                .log("RAG index dispatch started");
 
         try {
             indexWorkflowService.queue(command);
@@ -103,6 +108,15 @@ class IndexingCommandService implements IndexingCommandFacade {
             indexWorkflowService.dispatch(command);
         } catch (Exception exception) {
             String errorMessage = "索引任务投递失败: " + exception.getMessage();
+            log.atError()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.dispatch.failed")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_FAILURE)
+                    .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, contentSha256))
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                    .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(contentSha256))
+                    .addKeyValue(RagLogFields.RAG_ERROR_SUMMARY, RagLogHelper.errorSummary(exception))
+                    .setCause(exception)
+                    .log("RAG index dispatch failed");
             indexWorkflowService.fail(command.withFailure("dispatch", errorMessage));
             throw exception;
         }
@@ -130,22 +144,28 @@ class IndexingCommandService implements IndexingCommandFacade {
             ragIndexingService.deleteDocumentIndex(documentId);
             documentIndexingSpi.deleteById(documentId);
             indexingMetrics.recordDeleteCleanup("success");
-            log.info("Direct RAG delete cleanup completed: documentId={}", documentId);
+            log.atInfo()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.cleanup.completed")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_SUCCESS)
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                    .log("Direct RAG delete cleanup completed");
         } catch (IllegalArgumentException exception) {
             indexingMetrics.recordDeleteCleanup("skip");
-            log.warn(
-                    "Direct RAG delete cleanup skipped because document is unavailable: documentId={}, error={}",
-                    documentId,
-                    RagLogHelper.errorSummary(exception)
-            );
+            log.atWarn()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.cleanup.skipped")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_SKIPPED)
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                    .addKeyValue(RagLogFields.RAG_ERROR_SUMMARY, RagLogHelper.errorSummary(exception))
+                    .log("Direct RAG delete cleanup skipped because document is unavailable");
         } catch (Exception exception) {
             indexingMetrics.recordDeleteCleanup("failure");
-            log.error(
-                    "Direct RAG delete cleanup failed: documentId={}, error={}",
-                    documentId,
-                    RagLogHelper.errorSummary(exception),
-                    exception
-            );
+            log.atError()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.cleanup.failed")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_FAILURE)
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                    .addKeyValue(RagLogFields.RAG_ERROR_SUMMARY, RagLogHelper.errorSummary(exception))
+                    .setCause(exception)
+                    .log("Direct RAG delete cleanup failed");
         }
     }
 }

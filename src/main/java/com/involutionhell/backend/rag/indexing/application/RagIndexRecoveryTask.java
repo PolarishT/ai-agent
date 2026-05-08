@@ -332,6 +332,14 @@ public class RagIndexRecoveryTask {
     }
 
     private void recordRecoveryFailure(IndexWorkflowCommand command, String note) {
+        if (currentJobIsTerminal(command)) {
+            log.debug(
+                    "RAG recovery failure note skipped because job is already terminal: documentId={}, contentSha={}",
+                    command.documentId(),
+                    RagLogHelper.shortSha(command.contentSha256())
+            );
+            return;
+        }
         try {
             workflowService.skip(
                     command
@@ -347,5 +355,14 @@ public class RagIndexRecoveryTask {
                     RagLogHelper.errorSummary(exception)
             );
         }
+    }
+
+    private boolean currentJobIsTerminal(IndexWorkflowCommand command) {
+        return jobRepository.findByDocumentIdAndContentSha256(command.documentId(), command.contentSha256())
+                .map(job -> RagIndexJobStatus.SUCCEEDED.name().equals(job.status())
+                        || RagIndexJobStatus.FAILED.name().equals(job.status())
+                        || RagIndexJobStatus.SKIPPED.name().equals(job.status())
+                        || "FAILED".equals(job.stage()))
+                .orElse(false);
     }
 }

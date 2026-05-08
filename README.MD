@@ -113,7 +113,34 @@
 
 默认接口入口：`http://127.0.0.1:8080/api/v1`
 
-### 4. 调用示例接口
+### 4. 动态调整日志级别
+服务通过 Actuator 暴露 `loggers` endpoint，可在不重启服务的情况下临时调整包或类的日志级别。
+
+查看某个包当前日志级别：
+
+```bash
+curl http://127.0.0.1:8080/api/v1/actuator/loggers/com.involutionhell.backend.rag
+```
+
+临时开启 RAG 模块 `DEBUG` 日志：
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/actuator/loggers/com.involutionhell.backend.rag \
+  -H "Content-Type: application/json" \
+  -d '{"configuredLevel":"DEBUG"}'
+```
+
+排障结束后恢复为 `INFO`：
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/actuator/loggers/com.involutionhell.backend.rag \
+  -H "Content-Type: application/json" \
+  -d '{"configuredLevel":"INFO"}'
+```
+
+生产环境暴露 `loggers` endpoint 前需确保 Actuator 只在受控网络或鉴权网关后访问。
+
+### 5. 调用示例接口
 文档创建：
 
 ```bash
@@ -134,6 +161,8 @@ curl -X POST http://127.0.0.1:8080/api/v1/public/rag/documents \
 ```bash
 curl -X POST http://127.0.0.1:8080/api/v1/public/rag/ask \
   -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -N \
   -d '{
     "question": "当前知识库里有哪些文档？",
     "topK": 3,
@@ -219,60 +248,31 @@ curl -X POST http://127.0.0.1:8080/api/v1/public/rag/ask \
 > [!NOTE]
 > 下面的清单按“先建立稳定的问答执行模型，再做检索性能，再做召回质量”的顺序排列。
 
-### P0：问答执行模型
-
-目标：把当前同步问答链路升级为可恢复、可流式、可观测的异步执行模型。
-
-- [ ] 将同步阻塞的问答升级为“提交任务 + 异步执行”的架构，避免复杂问题导致 HTTP 超时。
-- [ ] 用户发起提问时立即返回 `ticketId` 或 `conversationId`。
-- [ ] 为问答任务补齐状态机，至少覆盖 `PENDING`、`RUNNING`、`SUCCEEDED`、`FAILED`、`CANCELLED`。
-- [ ] 提供按 `ticketId` 查询问答状态与结果的接口。
-- [ ] 接入 SSE 或 WebSocket，将生成内容按 token / chunk 流式推送到前端。
+### 前置阶段：异步问答与流式返回
+- [ ] 将同步阻塞的 `RagService.ask` 升级为“提交问答任务 + 异步消费执行”的架构，避免复杂问题导致 HTTP / Nginx 超时断开。
+- [ ] 用户发起提问时，立即返回 `ticketId` 或 `conversationId`，后台通过 RocketMQ 异步执行 `query transform`、`multi-retrieval` 与 `answer generate`。
+- [ ] 为问答任务补齐状态机，至少覆盖 `PENDING`、`RUNNING`、`SUCCEEDED`、`FAILED`、`CANCELLED`，并支持按 `ticketId` 查询状态。
 - [ ] 支持流式重连与续传，避免前端断线后整段回答丢失。
-- [ ] 为异步问答链路补齐超时、失败重试、死信和幂等保护。
-- [ ] 评估是否持久化部分生成结果与事件日志，满足审计、排障和对话回放需求。
+- [ ] 为异步问答链路增加超时控制、失败重试、死信处理与幂等保障，避免重复消费或长时间挂起。
+- [ ] 评估是否需要持久化部分生成结果与事件日志，便于审计、排障和对话回放。
 
-### P1：检索性能与稳定性
+### 第二阶段：性能与稳定性
+- [ ] 增加超时后的降级策略，避免单路阻塞拖垮整条问答链路。
 
-目标：减少无效召回、控制扇出成本，并验证离线补偿链路真实可用。
-
-- [ ] 实现自适应 `topK` 与候选集放大策略，减少无效检索和过宽召回。
-- [ ] 验证文档在进入 `FAILED` 后，是否会按 `rag.recovery.*` 配置真正触发补偿并重新推进到 `INDEXED` 或明确终态。
-- [ ] 基于掘金文章 <https://juejin.cn/post/7616598497153810482> 设计并落地结构化日志方案，统一关键链路的字段模型、上下文透传与可检索输出。
-- [ ] 使用 Spring Boot 4 `@HttpExchange` 注解方式优化 Controller 层接口定义，收口 HTTP 契约与调用方式。
-
-### P2：PostgreSQL 检索结构优化
-
+### 第三阶段：PostgreSQL 关键词检索优化
 目标：让关键词检索路径更稳定、更可预测，减少复杂 SQL 退化风险。
 
 - [ ] 用 `EXPLAIN ANALYZE` 验证当前 FTS + `pg_trgm` 查询是否稳定命中索引。
 - [ ] 将 `title`、`headingPathText` 等检索字段下沉到 `rag_chunks`，减少跨表组合计算。
 - [ ] 增加物化 `search_vector` 列，并为其建立单一 GIN 索引。
 - [ ] 评估并优化 `LIKE` 兜底分支比例，避免退化为大范围扫描。
-- [ ] 引入邮件模板引擎用于任务失败通知：对离线阶段 `a / b / c / d` 等多条入库失败记录做聚合后仅发送一次消息，通知内容需包含多条失败记录明细，方案设计上注意通知组装、聚合策略与发送通道解耦。
+- [ ] 修复索引失败通知风暴问题：当大量文档同一时间处理失败时，`SMS` / `Mail` 不应按“单条 index 错误”和“最终入库失败”逐条轰炸收件人；需要引入通知聚合、限流、去重或摘要批次发送机制，并保持通知组装、聚合策略与发送通道解耦。
 
-### P3：召回质量优化
-
-目标：在结构和性能稳定之后，再做策略层面的质量提升。
-
+### 第四阶段：召回质量优化
 - [ ] 根据问题类型做检索策略路由，如代码/API/报错类问题优先 `keyword`，解释型问题优先 `hybrid`。
 - [ ] 将 `multi-query expansion` 改为自适应策略，而不是固定扩 3 路。
 - [ ] 优化标题、Heading、精确 token 命中的 boost 权重。
 - [ ] 在规则优化完成后，再评估是否引入轻量级 reranker。
-
-### 当前建议顺序
-
-- [ ] 第一步：完成 `P0`，先让问答执行模型稳定下来。
-- [ ] 第二步：完成 `P1`，补齐自适应 `topK`、离线补偿验证与结构化日志建设。
-- [ ] 第三步：完成 `P2`，落 PostgreSQL 检索结构优化。
-- [ ] 第四步：完成 `P3`，再做召回质量和 reranker。
-
-### 待确认决策
-
-- [ ] 当前优化优先目标：延迟 / 稳定性 / 召回质量
-- [ ] 是否优先推进“异步问答 + SSE / WebSocket 流式返回”
-- [ ] 是否接受 PostgreSQL schema migration
-- [ ] 是否按 `P0 -> P1 -> P2 -> P3` 顺序推进
 
 ## 贡献规范
 - 保持代码可编译，提交前执行 `./mvnw clean test`。
@@ -294,3 +294,4 @@ curl -X POST "http://localhost:8080/api/v1/public/rag/documents/create" \
   -F "externalRef=rag-md-003" \
   -F "title=agent文档"
 ```
+

@@ -15,6 +15,7 @@ import com.involutionhell.backend.rag.indexing.workflow.IndexWorkflowService;
 import com.involutionhell.backend.rag.indexing.workflow.IndexWorkflowTriggerType;
 import com.involutionhell.backend.rag.shared.properties.RagProperties;
 import com.involutionhell.backend.rag.shared.support.RagJsonCodec;
+import com.involutionhell.backend.rag.shared.support.RagLogFields;
 import com.involutionhell.backend.rag.shared.support.RagLogHelper;
 import org.apache.rocketmq.client.annotation.RocketMQMessageListener;
 import org.apache.rocketmq.client.apis.consumer.ConsumeResult;
@@ -24,7 +25,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 
 import java.nio.ByteBuffer;
 
@@ -34,14 +35,14 @@ import java.nio.ByteBuffer;
  * <p>该监听器负责解析消息、执行一次索引尝试，并根据失败类型决定
  * 是交给 RocketMQ 继续重试，还是直接落最终失败状态。
  */
-@Component
+@Service
 @ConditionalOnProperty(prefix = "rag.rocketmq", name = "enabled", havingValue = "true")
 @ConditionalOnProperty(prefix = "rag.rocketmq", name = {"endpoints", "topic"})
 @RocketMQMessageListener(
-        endpoints = "${rag.rocketmq.endpoints:}",
-        topic = "${rag.rocketmq.topic:}",
-        tag = "*",
-        consumerGroup = "${rag.rocketmq.consumer-group:rag-index-consumer}"
+        endpoints = "${rag.rocketmq.endpoints:localhost:9200}",
+        topic = "${rag.rocketmq.topic:offline-rag-index-consumer}",
+        tag = "${rag.rocketmq.tag:'*'}",
+        consumerGroup = "${rag.rocketmq.consumer-group:offline-rag-index-consumer}"
 )
 public class RagIndexMessageListener implements RocketMQListener {
 
@@ -97,13 +98,15 @@ public class RagIndexMessageListener implements RocketMQListener {
             body.get(bytes);
             message = jsonCodec.read(bytes, RagIndexMessage.class);
             // 将 messageId 绑定到 job，方便后续从库表和日志一起追踪一次消费。
-            log.info(
-                    "RAG index message received: messageId={}, documentId={}, contentSha={}, deliveryAttempt={}",
-                    messageView.getMessageId(),
-                    message.documentId(),
-                    RagLogHelper.shortSha(message.contentSha256()),
-                    deliveryAttempt
-            );
+            log.atInfo()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.message.received")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_STARTED)
+                    .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.messageCorrelationId(messageId))
+                    .addKeyValue(RagLogFields.RAG_MESSAGE_ID, messageId)
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, message.documentId())
+                    .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(message.contentSha256()))
+                    .addKeyValue(RagLogFields.RAG_DELIVERY_ATTEMPT, deliveryAttempt)
+                    .log("RAG MQ message received");
             workflowService.attachMessageId(message.documentId(), message.contentSha256(), messageId);
             ragIndexingService.indexDocument(
                     message.documentId(),
@@ -118,23 +121,27 @@ public class RagIndexMessageListener implements RocketMQListener {
                         messageId
                 );
             } catch (Exception confirmException) {
-                log.error(
-                        "RAG index message succeeded but outbox confirmation failed, MQ will retry: messageId={}, documentId={}, contentSha={}, error={}",
-                        messageView.getMessageId(),
-                        message.documentId(),
-                        RagLogHelper.shortSha(message.contentSha256()),
-                        RagLogHelper.errorSummary(confirmException),
-                        confirmException
-                );
+                log.atError()
+                        .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.message.confirm_failed")
+                        .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_RETRY)
+                        .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.messageCorrelationId(messageId))
+                        .addKeyValue(RagLogFields.RAG_MESSAGE_ID, messageId)
+                        .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, message.documentId())
+                        .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(message.contentSha256()))
+                        .addKeyValue(RagLogFields.RAG_ERROR_SUMMARY, RagLogHelper.errorSummary(confirmException))
+                        .setCause(confirmException)
+                        .log("RAG index message succeeded but outbox confirmation failed, MQ will retry");
                 return ConsumeResult.FAILURE;
             }
 
-            log.debug(
-                    "RAG index message handled successfully: messageId={}, documentId={}, contentSha={}",
-                    messageView.getMessageId(),
-                    message.documentId(),
-                    RagLogHelper.shortSha(message.contentSha256())
-            );
+            log.atInfo()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.message.completed")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_SUCCESS)
+                    .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.messageCorrelationId(messageId))
+                    .addKeyValue(RagLogFields.RAG_MESSAGE_ID, messageId)
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, message.documentId())
+                    .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(message.contentSha256()))
+                    .log("RAG MQ message consumed");
             return ConsumeResult.SUCCESS;
         } catch (IllegalArgumentException exception) {
             if (message != null) {
@@ -143,11 +150,15 @@ public class RagIndexMessageListener implements RocketMQListener {
                         .withFailure("invalid", exception.getMessage());
                 terminalStateService.skipAndConfirmConsumed(skipCommand);
             }
-            log.warn(
-                    "RAG index message ignored because document is unavailable: messageId={}, error={}",
-                    messageView.getMessageId(),
-                    RagLogHelper.errorSummary(exception)
-            );
+            log.atWarn()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.message.ignored")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_SKIPPED)
+                    .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.messageCorrelationId(messageId))
+                    .addKeyValue(RagLogFields.RAG_MESSAGE_ID, messageId)
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, message == null ? null : message.documentId())
+                    .addKeyValue(RagLogFields.EVENT_REASON, "document_unavailable")
+                    .addKeyValue(RagLogFields.RAG_ERROR_SUMMARY, RagLogHelper.errorSummary(exception))
+                    .log("RAG index message ignored because document is unavailable");
             return ConsumeResult.SUCCESS;
         } catch (RagIndexAttemptException exception) {
             return handleIndexFailure(messageView, message, messageId, deliveryAttempt, exception);
@@ -171,24 +182,28 @@ public class RagIndexMessageListener implements RocketMQListener {
                             );
                         }
                     }
-                    log.error(
-                            "RAG index message parsing failed repeatedly and is now acknowledged for manual intervention: messageId={}, deliveryAttempt={}, failureCount={}, topic={}, payloadPreview={}",
-                            messageView.getMessageId(),
-                            deliveryAttempt,
-                            audit.failureCount(),
-                            messageView.getTopic(),
-                            RagLogHelper.abbreviate(audit.payloadPreview(), 160),
-                            exception
-                    );
+                    log.atError()
+                            .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.message.parse_failed_threshold_reached")
+                            .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_FAILURE)
+                            .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.messageCorrelationId(messageId))
+                            .addKeyValue(RagLogFields.RAG_MESSAGE_ID, messageId)
+                            .addKeyValue(RagLogFields.RAG_DELIVERY_ATTEMPT, deliveryAttempt)
+                            .addKeyValue("rag.failure_count", audit.failureCount())
+                            .addKeyValue("messaging.destination.name", messageView.getTopic())
+                            .addKeyValue("rag.payload_preview", RagLogHelper.abbreviate(audit.payloadPreview(), 160))
+                            .setCause(exception)
+                            .log("RAG index message parsing failed repeatedly and is now acknowledged for manual intervention");
                     return ConsumeResult.SUCCESS;
                 }
-                log.error(
-                        "RAG index message parsing failed and will be retried by MQ: messageId={}, deliveryAttempt={}, error={}",
-                        messageView.getMessageId(),
-                        deliveryAttempt,
-                        RagLogHelper.errorSummary(exception),
-                        exception
-                );
+                log.atError()
+                        .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.message.parse_failed")
+                        .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_RETRY)
+                        .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.messageCorrelationId(messageId))
+                        .addKeyValue(RagLogFields.RAG_MESSAGE_ID, messageId)
+                        .addKeyValue(RagLogFields.RAG_DELIVERY_ATTEMPT, deliveryAttempt)
+                        .addKeyValue(RagLogFields.RAG_ERROR_SUMMARY, RagLogHelper.errorSummary(exception))
+                        .setCause(exception)
+                        .log("RAG index message parsing failed and will be retried by MQ");
                 return ConsumeResult.FAILURE;
             }
             RagIndexFailure failure = failureClassifier.classify(exception);
@@ -246,19 +261,36 @@ public class RagIndexMessageListener implements RocketMQListener {
         int maxAttempts = ragProperties.indexing().maxRetries() + 1;
         IndexWorkflowCommand command = command(message, messageId, deliveryAttempt)
                 .withFailure(reason, errorMessage);
+        if ("stale-message".equals(reason)) {
+            confirmStaleMessageConsumed(message, messageId);
+            log.atInfo()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.message.stale_ignored")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_SKIPPED)
+                    .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.messageCorrelationId(messageId))
+                    .addKeyValue(RagLogFields.RAG_MESSAGE_ID, messageId)
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, message.documentId())
+                    .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(message.contentSha256()))
+                    .addKeyValue(RagLogFields.RAG_DELIVERY_ATTEMPT, deliveryAttempt)
+                    .addKeyValue(RagLogFields.EVENT_REASON, reason)
+                    .log("RAG index message ignored because workflow is already terminal");
+            return ConsumeResult.SUCCESS;
+        }
         if (retryable && deliveryAttempt < maxAttempts) {
             // 可重试错误不在本地阻塞等待，直接交回 RocketMQ 走延迟重试。
             workflowService.retry(command);
-            log.warn(
-                    "RAG index message failed and will be retried by MQ: messageId={}, documentId={}, contentSha={}, deliveryAttempt={}/{}, reason={}, error={}",
-                    messageView.getMessageId(),
-                    message.documentId(),
-                    RagLogHelper.shortSha(message.contentSha256()),
-                    deliveryAttempt,
-                    maxAttempts,
-                    reason,
-                    RagLogHelper.errorSummary(exception)
-            );
+            log.atWarn()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.message.retry_scheduled")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_RETRY)
+                    .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.messageCorrelationId(messageId))
+                    .addKeyValue(RagLogFields.RAG_MESSAGE_ID, messageId)
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, message.documentId())
+                    .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(message.contentSha256()))
+                    .addKeyValue(RagLogFields.RAG_DELIVERY_ATTEMPT, deliveryAttempt)
+                    .addKeyValue(RagLogFields.RAG_MAX_ATTEMPTS, maxAttempts)
+                    .addKeyValue(RagLogFields.EVENT_REASON, reason)
+                    .addKeyValue(RagLogFields.RAG_RETRYABLE, true)
+                    .addKeyValue(RagLogFields.RAG_ERROR_SUMMARY, RagLogHelper.errorSummary(exception))
+                    .log("RAG index message failed and will be retried by MQ");
             return ConsumeResult.FAILURE;
         }
 
@@ -282,37 +314,59 @@ public class RagIndexMessageListener implements RocketMQListener {
                 );
             } catch (Exception notifyException) {
                 // 通知失败不应影响消费结果，仅记录告警
-                log.warn(
-                        "RAG final failure email notification failed: messageId={}, documentId={}, error={}",
-                        messageId,
-                        message.documentId(),
-                        RagLogHelper.errorSummary(notifyException)
-                );
+                log.atWarn()
+                        .addKeyValue(RagLogFields.EVENT_NAME, "rag.notification.email.failed")
+                        .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_FAILURE)
+                        .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.messageCorrelationId(messageId))
+                        .addKeyValue(RagLogFields.RAG_MESSAGE_ID, messageId)
+                        .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, message.documentId())
+                        .addKeyValue(RagLogFields.RAG_ERROR_SUMMARY, RagLogHelper.errorSummary(notifyException))
+                        .log("RAG final failure email notification failed");
             }
         }
 
         if (retryable) {
-            log.error(
-                    "RAG index message reached max retry attempts and is now failed: messageId={}, documentId={}, contentSha={}, deliveryAttempt={}/{}, reason={}",
-                    messageView.getMessageId(),
-                    message.documentId(),
-                    RagLogHelper.shortSha(message.contentSha256()),
-                    deliveryAttempt,
-                    maxAttempts,
-                    reason,
-                    exception
-            );
+            log.atError()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.message.failed")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_FAILURE)
+                    .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.messageCorrelationId(messageId))
+                    .addKeyValue(RagLogFields.RAG_MESSAGE_ID, messageId)
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, message.documentId())
+                    .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(message.contentSha256()))
+                    .addKeyValue(RagLogFields.RAG_DELIVERY_ATTEMPT, deliveryAttempt)
+                    .addKeyValue(RagLogFields.RAG_MAX_ATTEMPTS, maxAttempts)
+                    .addKeyValue(RagLogFields.EVENT_REASON, reason)
+                    .addKeyValue(RagLogFields.RAG_RETRYABLE, true)
+                    .setCause(exception)
+                    .log("RAG index message reached max retry attempts and is now failed");
         } else {
-            log.error(
-                    "RAG index message failed permanently: messageId={}, documentId={}, contentSha={}, reason={}",
-                    messageView.getMessageId(),
-                    message.documentId(),
-                    RagLogHelper.shortSha(message.contentSha256()),
-                    reason,
-                    exception
-            );
+            log.atError()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.message.failed")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_FAILURE)
+                    .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.messageCorrelationId(messageId))
+                    .addKeyValue(RagLogFields.RAG_MESSAGE_ID, messageId)
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, message.documentId())
+                    .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(message.contentSha256()))
+                    .addKeyValue(RagLogFields.EVENT_REASON, reason)
+                    .addKeyValue(RagLogFields.RAG_RETRYABLE, false)
+                    .setCause(exception)
+                    .log("RAG index message failed permanently");
         }
         return ConsumeResult.SUCCESS;
+    }
+
+    private void confirmStaleMessageConsumed(RagIndexMessage message, String messageId) {
+        if (messageId == null || messageId.isBlank()) {
+            return;
+        }
+        boolean confirmed = outboxRepository.confirmConsumed(
+                message.documentId(),
+                message.contentSha256(),
+                messageId
+        );
+        if (!confirmed) {
+            confirmConsumptionByMessageId(messageId);
+        }
     }
 
     private void confirmConsumptionByMessageId(String messageId) {
@@ -322,11 +376,13 @@ public class RagIndexMessageListener implements RocketMQListener {
         try {
             outboxRepository.confirmConsumedByMessageId(messageId);
         } catch (Exception exception) {
-            log.warn(
-                    "RAG outbox consumption confirmation by messageId failed: messageId={}, error={}",
-                    messageId,
-                    RagLogHelper.errorSummary(exception)
-            );
+            log.atWarn()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.message.confirm_failed")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_FAILURE)
+                    .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.messageCorrelationId(messageId))
+                    .addKeyValue(RagLogFields.RAG_MESSAGE_ID, messageId)
+                    .addKeyValue(RagLogFields.RAG_ERROR_SUMMARY, RagLogHelper.errorSummary(exception))
+                    .log("RAG outbox consumption confirmation by messageId failed");
         }
     }
 

@@ -13,6 +13,7 @@ import com.involutionhell.backend.rag.indexing.workflow.IndexWorkflowService;
 import com.involutionhell.backend.rag.indexing.workflow.IndexWorkflowState;
 import com.involutionhell.backend.rag.shared.model.RagDocumentStatus;
 import com.involutionhell.backend.rag.shared.properties.RagProperties;
+import com.involutionhell.backend.rag.shared.support.RagLogFields;
 import com.involutionhell.backend.rag.shared.support.RagLogHelper;
 import io.milvus.v2.exception.ErrorCode;
 import io.milvus.v2.exception.MilvusClientException;
@@ -77,20 +78,26 @@ public class RagIndexingService {
      */
     public void indexDocument(Long documentId, String expectedContentSha256, IndexWorkflowCommand workflowCommand) {
         DocumentIndexingView document = loadDocument(documentId);
+        if (alreadyReachedTerminalState(documentId, expectedContentSha256, workflowCommand)) {
+            return;
+        }
         long startedAt = System.nanoTime();
         long targetGeneration = nextIndexGeneration(document);
         AtomicReference<IndexWorkflowState> currentState = new AtomicReference<>(IndexWorkflowState.DISPATCHING);
         AtomicBoolean vectorWriteApplied = new AtomicBoolean(false);
-        log.info(
-                "RAG indexing started: documentId={}, contentSha={}, targetGeneration={}, currentGeneration={}, hasExpectedVersion={}, triggerType={}, triggeredBy={}",
-                documentId,
-                RagLogHelper.shortSha(document.contentSha256()),
-                targetGeneration,
-                document.indexedGeneration(),
-                expectedContentSha256 != null && !expectedContentSha256.isBlank(),
-                workflowCommand.triggerType(),
-                workflowCommand.triggeredBy()
-        );
+        log.atInfo()
+                .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.attempt.started")
+                .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_STARTED)
+                .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, document.contentSha256()))
+                .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(document.contentSha256()))
+                .addKeyValue(RagLogFields.RAG_INDEX_GENERATION, targetGeneration)
+                .addKeyValue("rag.current_generation", document.indexedGeneration())
+                .addKeyValue("rag.has_expected_version", expectedContentSha256 != null && !expectedContentSha256.isBlank())
+                .addKeyValue(RagLogFields.RAG_TRIGGER_TYPE, workflowCommand.triggerType())
+                .addKeyValue(RagLogFields.RAG_TRIGGERED_BY, workflowCommand.triggeredBy())
+                .addKeyValue(RagLogFields.RAG_MESSAGE_ID, workflowCommand.messageId())
+                .log("RAG indexing attempt started");
 
         try {
             validateIndexableDocument(document, expectedContentSha256, false);
@@ -102,14 +109,17 @@ public class RagIndexingService {
             currentState.set(IndexWorkflowState.PREPARING);
             int chunkCount = indexDocumentOnce(documentId, document, targetGeneration, attemptCommand, currentState, vectorWriteApplied);
             indexingMetrics.recordIndexSuccess(chunkCount, Duration.ofNanos(System.nanoTime() - startedAt));
-            log.info(
-                    "RAG indexing completed: documentId={}, contentSha={}, targetGeneration={}, chunkCount={}, elapsedMs={}",
-                    documentId,
-                    RagLogHelper.shortSha(currentContentSha256),
-                    targetGeneration,
-                    chunkCount,
-                    Duration.ofNanos(System.nanoTime() - startedAt).toMillis()
-            );
+            log.atInfo()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.completed")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_SUCCESS)
+                    .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, currentContentSha256))
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                    .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(currentContentSha256))
+                    .addKeyValue(RagLogFields.RAG_INDEX_GENERATION, targetGeneration)
+                    .addKeyValue(RagLogFields.RAG_CHUNK_COUNT, chunkCount)
+                    .addKeyValue(RagLogFields.RAG_ELAPSED_MS, Duration.ofNanos(System.nanoTime() - startedAt).toMillis())
+                    .addKeyValue(RagLogFields.RAG_MESSAGE_ID, workflowCommand.messageId())
+                    .log("RAG indexing attempt completed");
         } catch (SkippedIndexingException exception) {
             if (exception.requiresCleanup()) {
                 cleanupFailedGenerationSafely(documentId, targetGeneration, document.indexedGeneration(), vectorWriteApplied.get());
@@ -121,13 +131,16 @@ public class RagIndexingService {
                                 .withFailure("skipped", exception.reason())
                 );
             }
-            log.info(
-                    "RAG indexing skipped: documentId={}, contentSha={}, reason={}, requiresCleanup={}",
-                    documentId,
-                    RagLogHelper.shortSha(exception.contentSha256()),
-                    exception.reason(),
-                    exception.requiresCleanup()
-            );
+            log.atInfo()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.skipped")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_SKIPPED)
+                    .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, exception.contentSha256()))
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                    .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(exception.contentSha256()))
+                    .addKeyValue(RagLogFields.EVENT_REASON, exception.reason())
+                    .addKeyValue("rag.requires_cleanup", exception.requiresCleanup())
+                    .addKeyValue(RagLogFields.RAG_MESSAGE_ID, workflowCommand.messageId())
+                    .log("RAG indexing skipped");
         } catch (IllegalArgumentException exception) {
             throw exception;
         } catch (Exception exception) {
@@ -136,24 +149,33 @@ public class RagIndexingService {
             cleanupFailedGenerationSafely(documentId, targetGeneration, document.indexedGeneration(), vectorWriteApplied.get());
 
             if (failure.retryable()) {
-                log.warn(
-                        "RAG indexing failed with recoverable error: documentId={}, contentSha={}, stage={}, reason={}, error={}",
-                        documentId,
-                        RagLogHelper.shortSha(document.contentSha256()),
-                        currentState.get(),
-                        failure.reason(),
-                        RagLogHelper.errorSummary(exception)
-                );
+                log.atWarn()
+                        .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.failed")
+                        .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_RETRY)
+                        .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, document.contentSha256()))
+                        .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                        .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(document.contentSha256()))
+                        .addKeyValue(RagLogFields.RAG_INDEX_STAGE, currentState.get())
+                        .addKeyValue(RagLogFields.EVENT_REASON, failure.reason())
+                        .addKeyValue(RagLogFields.RAG_RETRYABLE, true)
+                        .addKeyValue(RagLogFields.RAG_ERROR_SUMMARY, RagLogHelper.errorSummary(exception))
+                        .addKeyValue(RagLogFields.RAG_MESSAGE_ID, workflowCommand.messageId())
+                        .log("RAG indexing failed with recoverable error");
                 indexingMetrics.recordRetry(failure.reason());
             } else {
-                log.error(
-                        "RAG indexing failed permanently: documentId={}, contentSha={}, stage={}, reason={}, error={}",
-                        documentId,
-                        RagLogHelper.shortSha(document.contentSha256()),
-                        currentState.get(),
-                        failure.reason(),
-                        RagLogHelper.errorSummary(exception)
-                );
+                log.atError()
+                        .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.failed")
+                        .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_FAILURE)
+                        .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, document.contentSha256()))
+                        .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                        .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(document.contentSha256()))
+                        .addKeyValue(RagLogFields.RAG_INDEX_STAGE, currentState.get())
+                        .addKeyValue(RagLogFields.EVENT_REASON, failure.reason())
+                        .addKeyValue(RagLogFields.RAG_RETRYABLE, false)
+                        .addKeyValue(RagLogFields.RAG_ERROR_SUMMARY, RagLogHelper.errorSummary(exception))
+                        .addKeyValue(RagLogFields.RAG_MESSAGE_ID, workflowCommand.messageId())
+                        .setCause(exception)
+                        .log("RAG indexing failed permanently");
                 indexingMetrics.recordFailure(failure.reason(), false);
             }
 
@@ -165,6 +187,35 @@ public class RagIndexingService {
                     exception
             );
         }
+    }
+
+    private boolean alreadyReachedTerminalState(
+            Long documentId,
+            String expectedContentSha256,
+            IndexWorkflowCommand workflowCommand
+    ) {
+        if (expectedContentSha256 == null || expectedContentSha256.isBlank()) {
+            return false;
+        }
+        return indexJobRepository.findByDocumentIdAndContentSha256(documentId, expectedContentSha256)
+                .filter(job -> RagIndexJobStatus.SUCCEEDED.name().equals(job.status())
+                        || RagIndexJobStatus.FAILED.name().equals(job.status()))
+                .map(job -> {
+                    log.atInfo()
+                            .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.message.stale_ignored")
+                            .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_SKIPPED)
+                            .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, expectedContentSha256))
+                            .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                            .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(expectedContentSha256))
+                            .addKeyValue(RagLogFields.RAG_TRIGGER_TYPE, workflowCommand.triggerType())
+                            .addKeyValue(RagLogFields.RAG_TRIGGERED_BY, workflowCommand.triggeredBy())
+                            .addKeyValue(RagLogFields.RAG_MESSAGE_ID, workflowCommand.messageId())
+                            .addKeyValue("rag.job_status", job.status())
+                            .addKeyValue("rag.job_stage", job.stage())
+                            .log("RAG index message ignored because workflow already reached terminal state");
+                    return true;
+                })
+                .orElse(false);
     }
 
     /**

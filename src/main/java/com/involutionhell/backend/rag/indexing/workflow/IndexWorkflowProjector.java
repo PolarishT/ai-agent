@@ -40,15 +40,14 @@ public class IndexWorkflowProjector {
         Long documentId = command.documentId();
         String contentSha256 = command.contentSha256();
 
-        // 1. 确定预期的旧状态 (CAS 中的 Compare 环节)
-        RagIndexStage expectedFromStage = toRagIndexStage(fromState);
         switch (toState) {
             case QUEUED -> {
-                if (fromState == IndexWorkflowState.NEW) {
-                    // 全新创建，内部使用 INSERT ... ON CONFLICT 防御
+                if (fromState == IndexWorkflowState.NEW || fromState == IndexWorkflowState.FAILED) {
+                    // 全新创建或失败重排队，内部使用 INSERT ... ON CONFLICT 防御
                     jobRepository.queue(documentId, contentSha256);
                 } else {
                     // 重复排队，基于旧状态进行原子重置
+                    RagIndexStage expectedFromStage = toRagIndexStage(fromState);
                     int rows = jobRepository.updateStage(documentId, contentSha256, expectedFromStage, RagIndexStage.QUEUED);
                     requireCasSuccess(rows, "RESET_TO_QUEUED");
                 }
@@ -60,38 +59,45 @@ public class IndexWorkflowProjector {
                 }
             }
             case DISPATCHING -> {
+                RagIndexStage expectedFromStage = toRagIndexStage(fromState);
                 int rows = jobRepository.updateStage(documentId, contentSha256, expectedFromStage, RagIndexStage.DISPATCHING);
                 requireCasSuccess(rows, "DISPATCHING");
                 jobRepository.annotateEvent(documentId, contentSha256, event.name());
             }
             case PREPARING -> {
                 // startAttempt 包含尝试次数 +1 的原子操作
+                RagIndexStage expectedFromStage = toRagIndexStage(fromState);
                 int rows = jobRepository.startAttempt(documentId, contentSha256, expectedFromStage, command.targetGeneration());
                 requireCasSuccess(rows, "PREPARING");
                 jobRepository.annotateEvent(documentId, contentSha256, event.name());
                 documentIndexingSpi.markProcessing(documentId);
             }
             case CHUNKING -> {
+                RagIndexStage expectedFromStage = toRagIndexStage(fromState);
                 int rows = jobRepository.updateStage(documentId, contentSha256, expectedFromStage, RagIndexStage.CHUNKING);
                 requireCasSuccess(rows, "CHUNKING");
                 jobRepository.annotateEvent(documentId, contentSha256, event.name());
             }
             case SAVE_CHUNKS -> {
+                RagIndexStage expectedFromStage = toRagIndexStage(fromState);
                 int rows = jobRepository.updateStage(documentId, contentSha256, expectedFromStage, RagIndexStage.SAVE_CHUNKS);
                 requireCasSuccess(rows, "SAVE_CHUNKS");
                 jobRepository.annotateEvent(documentId, contentSha256, event.name());
             }
             case VECTOR_INDEXING -> {
+                RagIndexStage expectedFromStage = toRagIndexStage(fromState);
                 int rows = jobRepository.updateStage(documentId, contentSha256, expectedFromStage, RagIndexStage.VECTOR_INDEXING);
                 requireCasSuccess(rows, "VECTOR_INDEXING");
                 jobRepository.annotateEvent(documentId, contentSha256, event.name());
             }
             case COMMIT_INDEX -> {
+                RagIndexStage expectedFromStage = toRagIndexStage(fromState);
                 int rows = jobRepository.updateStage(documentId, contentSha256, expectedFromStage, RagIndexStage.COMMIT_INDEX);
                 requireCasSuccess(rows, "COMMIT_INDEX");
                 jobRepository.annotateEvent(documentId, contentSha256, event.name());
             }
             case COMPLETED -> {
+                RagIndexStage expectedFromStage = toRagIndexStage(fromState);
                 int rows = jobRepository.markSucceeded(documentId, contentSha256, expectedFromStage, command.targetGeneration());
                 requireCasSuccess(rows, "COMPLETED");
                 jobRepository.annotateEvent(documentId, contentSha256, event.name());
@@ -103,6 +109,7 @@ public class IndexWorkflowProjector {
                 );
             }
             case FAILED -> {
+                RagIndexStage expectedFromStage = toRagIndexStage(fromState);
                 int rows = jobRepository.markFailed(
                         documentId,
                         contentSha256,
@@ -115,6 +122,7 @@ public class IndexWorkflowProjector {
                 documentIndexingSpi.markFailed(documentId, defaultErrorMessage(command));
             }
             case SKIPPED -> {
+                RagIndexStage expectedFromStage = toRagIndexStage(fromState);
                 int rows = jobRepository.markSkipped(documentId, contentSha256, expectedFromStage, defaultSkipReason(command));
                 requireCasSuccess(rows, "SKIPPED");
                 jobRepository.annotateEvent(documentId, contentSha256, event.name());

@@ -8,7 +8,6 @@ import org.apache.rocketmq.client.core.RocketMQClientTemplate;
 import org.apache.rocketmq.client.support.RocketMQHeaders;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.stereotype.Service;
@@ -54,12 +53,12 @@ public class RagRocketMqIndexEventPublisher implements RagIndexEventPublisher {
             String payload = jsonCodec.write(
                     new RagIndexMessage(documentId, contentSha256, OffsetDateTime.now())
             );
-            SendReceipt receipt = rocketMQClientTemplate.syncSendNormalMessage(
-                    topic,
+            SendReceipt receipt = rocketMQClientTemplate.syncSendFifoMessage(
+                    topic + ":" + tag,
                     MessageBuilder.withPayload(payload)
                             .setHeader(RocketMQHeaders.TAGS, tag)
                             .setHeader(RocketMQHeaders.KEYS, "rag-doc-" + documentId)
-                            .build()
+                            .build(), "involutionhell-doc-index" + documentId
             );
             log.debug("RAG index message published to RocketMQ: documentId={}, contentSha={}, topic={}", documentId, RagLogHelper.shortSha(contentSha256), topic);
             return receipt == null || receipt.getMessageId() == null ? null : receipt.getMessageId().toString();

@@ -2,14 +2,19 @@ package com.involutionhell.backend.rag.retrieval.service;
 
 import com.involutionhell.backend.rag.shared.properties.RagProperties;
 import com.involutionhell.backend.rag.retrieval.model.RagRetrievedChunk;
+import com.involutionhell.backend.rag.retrieval.observability.RagRetrievalMetrics;
+import com.involutionhell.backend.rag.retrieval.support.RagRequestFeedbacks;
 import com.involutionhell.backend.rag.shared.metadata.RagSearchFilter;
 import com.involutionhell.backend.rag.shared.support.RagLogHelper;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.vectorstore.milvus.MilvusVectorStore;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
@@ -30,17 +35,23 @@ public class HybridRagRetriever implements RagRetriever {
     private final KeywordRagRetriever keywordRagRetriever;
     private final RagDocumentJoiner ragDocumentJoiner;
     private final RagProperties ragProperties;
+    private final Executor ragVirtualThreadExecutor;
+    private final RagRetrievalMetrics retrievalMetrics;
 
     @Autowired
     public HybridRagRetriever(
             RagMilvusRetriever ragMilvusRetriever,
             KeywordRagRetriever keywordRagRetriever,
             RagDocumentJoiner ragDocumentJoiner,
-            RagProperties ragProperties) {
+            RagProperties ragProperties,
+            @Qualifier("ragVirtualThreadExecutor") Executor ragVirtualThreadExecutor,
+            RagRetrievalMetrics retrievalMetrics) {
         this.ragMilvusRetriever = ragMilvusRetriever;
         this.keywordRagRetriever = keywordRagRetriever;
         this.ragDocumentJoiner = ragDocumentJoiner;
         this.ragProperties = ragProperties;
+        this.ragVirtualThreadExecutor = ragVirtualThreadExecutor;
+        this.retrievalMetrics = retrievalMetrics;
     }
 
     /**
@@ -55,26 +66,90 @@ public class HybridRagRetriever implements RagRetriever {
             RagProperties ragProperties,
             Object ignoredMetrics
     ) {
-        this(ragMilvusRetriever, keywordRagRetriever, ragDocumentJoiner, ragProperties);
+        this.ragMilvusRetriever = ragMilvusRetriever;
+        this.keywordRagRetriever = keywordRagRetriever;
+        this.ragDocumentJoiner = ragDocumentJoiner;
+        this.ragProperties = ragProperties;
+        this.ragVirtualThreadExecutor = ignoredExecutor;
+        this.retrievalMetrics = ignoredMetrics instanceof RagRetrievalMetrics metrics ? metrics : null;
     }
 
     @Override
-    public List<RagRetrievedChunk> search(String question, int topK, RagSearchFilter filter) {
-        int perRetrieverTopK = Math.min(
-                Math.max(topK * ragProperties.retrieval().hybridPerRetrieverMultiplier(), topK),
-                ragProperties.retrieval().hybridPerRetrieverTopKMax());
-        List<RagRetrievedChunk> semanticResults = ragMilvusRetriever.search(question, perRetrieverTopK, filter);
-        List<RagRetrievedChunk> keywordResults = keywordRagRetriever.search(question, perRetrieverTopK, filter);
-        List<RagRetrievedChunk> joined = ragDocumentJoiner.join(List.of(semanticResults, keywordResults), topK);
+    public List<RagRetrievedChunk> search(RagRetrievalRequest request) {
+        String question = request.query();
+        RagSearchFilter filter = request.filter();
+        RagRetrievalBudget budget = request.budget();
+        // semantic / keyword 互为降级来源，任何单分支慢或失败都不应阻塞另一分支产出结果。
+        CompletableFuture<BranchResult> semanticFuture = CompletableFuture.supplyAsync(
+                () -> searchBranch("semantic", () -> ragMilvusRetriever.search(request)),
+                ragVirtualThreadExecutor
+        );
+        CompletableFuture<BranchResult> keywordFuture = CompletableFuture.supplyAsync(
+                () -> searchBranch("keyword", () -> keywordRagRetriever.search(request)),
+                ragVirtualThreadExecutor
+        );
+        BranchResult semantic = semanticFuture.join();
+        BranchResult keyword = keywordFuture.join();
+        if (semantic.failed() && keyword.failed()) {
+            recordFallback("hybrid", "all_branches_failed");
+            RagRequestFeedbacks.record("hybrid_retrieve", "all_branches_failed", "混合检索所有分支均失败，已返回空上下文。");
+        }
+        List<RagRetrievedChunk> semanticResults = semantic.results();
+        List<RagRetrievedChunk> keywordResults = keyword.results();
+        List<RagRetrievedChunk> joined = ragDocumentJoiner.join(List.of(semanticResults, keywordResults), budget.perQueryTopK());
         log.debug(
-                "Hybrid retrieval completed: questionPreview={}, topK={}, perRetrieverTopK={}, semanticCount={}, keywordCount={}, joinedCount={}, hasFilter={}",
+                "Hybrid retrieval completed: questionPreview={}, answerTopK={}, perQueryTopK={}, semanticCandidateTopK={}, keywordCandidateTopK={}, semanticCount={}, keywordCount={}, joinedCount={}, hasFilter={}",
                 RagLogHelper.previewQuestion(question),
-                topK,
-                perRetrieverTopK,
+                budget.answerTopK(),
+                budget.perQueryTopK(),
+                budget.semanticCandidateTopK(),
+                budget.keywordCandidateTopK(),
                 semanticResults.size(),
                 keywordResults.size(),
                 joined.size(),
                 filter != null && !filter.isEmpty());
         return joined;
+    }
+
+    private BranchResult searchBranch(String branch, BranchSearch search) {
+        try {
+            return new BranchResult(search.search(), false);
+        } catch (RuntimeException exception) {
+            // 分支异常在 hybrid 层收敛为 notice，避免一次 Milvus/JDBC 抖动放大成整次问答失败。
+            recordFallback(branch, "error");
+            RagRequestFeedbacks.record(
+                    "hybrid_retrieve",
+                    branch + "_error",
+                    ("semantic".equals(branch) ? "语义检索" : "关键词检索") + "分支失败，已跳过该分支。"
+            );
+            log.warn(
+                    "Hybrid retrieval branch failed and will be skipped: branch={}, error={}",
+                    branch,
+                    RagLogHelper.errorSummary(unwrap(exception))
+            );
+            return new BranchResult(List.of(), true);
+        }
+    }
+
+    private void recordFallback(String branch, String reason) {
+        if (retrievalMetrics != null) {
+            retrievalMetrics.recordFallback("retrieve", branch, reason);
+        }
+    }
+
+    private Throwable unwrap(Throwable error) {
+        Throwable current = error;
+        while (current instanceof CompletionException && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current;
+    }
+
+    @FunctionalInterface
+    private interface BranchSearch {
+        List<RagRetrievedChunk> search();
+    }
+
+    private record BranchResult(List<RagRetrievedChunk> results, boolean failed) {
     }
 }

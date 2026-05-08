@@ -1,5 +1,6 @@
 package com.involutionhell.backend.rag.retrieval.service;
 
+import com.involutionhell.backend.rag.retrieval.observability.RagRetrievalMetrics;
 import com.involutionhell.backend.rag.shared.properties.RagProperties;
 import com.involutionhell.backend.rag.shared.support.RagLogHelper;
 import org.slf4j.Logger;
@@ -22,12 +23,15 @@ public class RagQueryExpander {
 
     private final RagProperties ragProperties;
     private final MultiQueryExpander multiQueryExpander;
+    private final RagRetrievalMetrics retrievalMetrics;
 
     public RagQueryExpander(
             ObjectProvider<MultiQueryExpander> multiQueryExpanderProvider,
-            RagProperties ragProperties
+            RagProperties ragProperties,
+            RagRetrievalMetrics retrievalMetrics
     ) {
         this.ragProperties = ragProperties;
+        this.retrievalMetrics = retrievalMetrics;
         this.multiQueryExpander = resolveMultiQueryExpander(multiQueryExpanderProvider);
     }
 
@@ -62,6 +66,7 @@ public class RagQueryExpander {
                     .toList();
             if (textQueries.isEmpty()) {
                 log.warn("MultiQueryExpander returned empty result, falling back to original query.");
+                retrievalMetrics.recordFallback("query_expand", "multi_query", "empty_result");
                 return new RagQueryExpansionResult(normalizedQuestion, List.of(normalizedQuestion), false, false);
             }
 
@@ -77,6 +82,7 @@ public class RagQueryExpander {
             return new RagQueryExpansionResult(normalizedQuestion, textQueries, isExpanded, true);
         } catch (Exception exception) {
             log.warn("MultiQueryExpander failed, falling back to original query: error={}", RagLogHelper.errorSummary(exception));
+            retrievalMetrics.recordFallback("query_expand", "multi_query", "error");
             return new RagQueryExpansionResult(normalizedQuestion, List.of(normalizedQuestion), false, false);
         }
     }

@@ -56,18 +56,19 @@ public class KeywordRagRetriever implements RagRetriever {
     }
 
     @Override
-    public List<RagRetrievedChunk> search(String question, int topK, RagSearchFilter filter) {
+    public List<RagRetrievedChunk> search(RagRetrievalRequest request) {
+        String question = request.query();
+        RagSearchFilter filter = request.filter();
+        RagRetrievalBudget budget = request.budget();
+        int topK = budget.perQueryTopK();
+        int candidateTopK = Math.max(topK, budget.keywordCandidateTopK());
         boolean hasFilter = filter != null && !filter.isEmpty();
         retrievalMetrics.recordRequest("keyword");
         long stageStart = System.nanoTime();
-        int candidateTopK = Math.min(
-                Math.max(topK * ragProperties.retrieval().keywordCandidateMultiplier(), topK),
-                ragProperties.retrieval().keywordCandidateTopKMax()
-        );
         try {
             KeywordSearchOutcome outcome = executeSearch(question, topK, candidateTopK, filter);
-            retrievalMetrics.recordHitCount("keyword", "raw", outcome.rawHitCount());
-            retrievalMetrics.recordHitCount("keyword", "final", outcome.results().size());
+            retrievalMetrics.recordHitCount("keyword", "pgsql", "raw", outcome.rawHitCount());
+            retrievalMetrics.recordHitCount("keyword", "pgsql", "final", outcome.results().size());
             if (outcome.results().isEmpty()) {
                 retrievalMetrics.recordZeroHit("keyword");
             }
@@ -103,6 +104,7 @@ public class KeywordRagRetriever implements RagRetriever {
                         RagLogHelper.previewQuestion(question)
                 );
                 RagRequestFeedbacks.recordTimeout("keyword_retrieve", "关键词检索超时，已跳过该检索分支。");
+                retrievalMetrics.recordFallback("retrieve", "keyword", "timeout");
                 retrievalMetrics.recordStage(
                         "keyword_retrieve",
                         Duration.ofNanos(System.nanoTime() - stageStart),
@@ -117,6 +119,7 @@ public class KeywordRagRetriever implements RagRetriever {
                     hasFilter,
                     false
             );
+            retrievalMetrics.recordFallback("retrieve", "keyword", "error");
             throw exception;
         }
     }

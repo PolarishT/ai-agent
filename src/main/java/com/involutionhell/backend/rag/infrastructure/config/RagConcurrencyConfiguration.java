@@ -2,8 +2,11 @@ package com.involutionhell.backend.rag.infrastructure.config;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import reactor.core.scheduler.Scheduler;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * RAG 检索链路的并发执行配置。
@@ -17,5 +20,13 @@ public class RagConcurrencyConfiguration {
     @Bean(name = "ragVirtualThreadExecutor", destroyMethod = "close")
     public ExecutorService ragVirtualThreadExecutor() {
         return Executors.newVirtualThreadPerTaskExecutor();
+    }
+
+    /**
+     * Reactor 侧复用同一组虚拟线程执行 JDBC、Milvus 和 Spring AI 等阻塞调用。
+     */
+    @Bean(name = "ragBlockingScheduler")
+    public Scheduler ragBlockingScheduler(@Qualifier("ragVirtualThreadExecutor") ExecutorService executorService) {
+        return Schedulers.fromExecutor(executorService);
     }
 }

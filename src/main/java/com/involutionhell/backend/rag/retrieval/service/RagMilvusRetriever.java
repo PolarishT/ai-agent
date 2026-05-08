@@ -70,21 +70,20 @@ public class RagMilvusRetriever implements RagRetriever {
     }
 
     @Override
-    public List<RagRetrievedChunk> search(String question, int topK, RagSearchFilter filter) {
+    public List<RagRetrievedChunk> search(RagRetrievalRequest request) {
+        String question = request.query();
+        RagSearchFilter filter = request.filter();
+        RagRetrievalBudget budget = request.budget();
+        int topK = budget.perQueryTopK();
+        int candidateTopK = Math.max(topK, budget.semanticCandidateTopK());
         boolean hasFilter = filter != null && !filter.isEmpty();
         retrievalMetrics.recordRequest("semantic");
         long stageStart = System.nanoTime();
-        int candidateMultiplier = filter != null && !filter.isEmpty()
-                ? ragProperties.retrieval().semanticFilteredCandidateMultiplier()
-                : ragProperties.retrieval().semanticCandidateMultiplier();
-        int candidateTopK = Math.min(
-                Math.max(topK * candidateMultiplier, topK),
-                ragProperties.retrieval().semanticCandidateTopKMax()
-        );
         try {
             MilvusSearchOutcome outcome = executeSearch(question, topK, candidateTopK, filter);
-            retrievalMetrics.recordHitCount("semantic", "raw", outcome.rawHitCount());
-            retrievalMetrics.recordHitCount("semantic", "final", outcome.results().size());
+            retrievalMetrics.recordHitCount("semantic", "milvus", "raw", outcome.rawHitCount());
+            retrievalMetrics.recordHitCount("semantic", "milvus", "vector_id", outcome.vectorIdCount());
+            retrievalMetrics.recordHitCount("semantic", "milvus", "final", outcome.results().size());
             if (outcome.results().isEmpty()) {
                 retrievalMetrics.recordZeroHit("semantic");
             }
@@ -103,9 +102,10 @@ public class RagMilvusRetriever implements RagRetriever {
                 hasFilter
             );
             log.debug(
-                    "Semantic retrieval reranked: vectorIdCount={}, scoreCount={}, finalCount={}",
+                    "Semantic retrieval reranked: vectorIdCount={}, scoreCount={}, searchableCount={}, finalCount={}",
                     outcome.vectorIdCount(),
                     outcome.scoreCount(),
+                    outcome.searchableHitCount(),
                     outcome.results().size()
             );
             return outcome.results();
@@ -126,6 +126,7 @@ public class RagMilvusRetriever implements RagRetriever {
                         RagLogHelper.previewQuestion(question)
                 );
                 RagRequestFeedbacks.recordTimeout("semantic_retrieve", "语义检索超时，已跳过该检索分支。");
+                retrievalMetrics.recordFallback("retrieve", "semantic", "timeout");
                 retrievalMetrics.recordStage(
                         "semantic_retrieve",
                         Duration.ofNanos(System.nanoTime() - stageStart),
@@ -140,6 +141,7 @@ public class RagMilvusRetriever implements RagRetriever {
                     hasFilter,
                     false
             );
+            retrievalMetrics.recordFallback("retrieve", "semantic", "error");
             throw exception;
         }
     }
@@ -167,7 +169,7 @@ public class RagMilvusRetriever implements RagRetriever {
                 .toList();
         if (vectorIds.isEmpty()) {
             log.debug("Semantic retrieval returned no usable vectorId: questionPreview={}", RagLogHelper.previewQuestion(question));
-            return new MilvusSearchOutcome(List.of(), documents.size(), 0, 0);
+            return new MilvusSearchOutcome(List.of(), documents.size(), 0, 0, 0);
         }
 
         Map<String, Double> scoreByVectorId = new LinkedHashMap<>();
@@ -185,7 +187,8 @@ public class RagMilvusRetriever implements RagRetriever {
         }
 
         Set<String> tokens = retrievalScorer.extractTokens(question);
-        List<RagRetrievedChunk> results = indexingChunkQueryFacade.findSearchableByVectorIds(vectorIds).stream()
+        List<RagChunkSearchView> searchableChunks = indexingChunkQueryFacade.findSearchableByVectorIds(vectorIds);
+        List<RagRetrievedChunk> results = searchableChunks.stream()
                 .map(row -> toRetrievedChunk(row, scoreByVectorId, generationByVectorId, tokens, filter))
                 .filter(Objects::nonNull)
                 .filter(chunk -> chunk.score() > 0)
@@ -194,7 +197,7 @@ public class RagMilvusRetriever implements RagRetriever {
                         .thenComparing(RagRetrievedChunk::chunkIndex))
                 .limit(topK)
                 .toList();
-        return new MilvusSearchOutcome(results, documents.size(), vectorIds.size(), scoreByVectorId.size());
+        return new MilvusSearchOutcome(results, documents.size(), vectorIds.size(), scoreByVectorId.size(), searchableChunks.size());
     }
 
     private RagRetrievedChunk toRetrievedChunk(
@@ -324,7 +327,8 @@ public class RagMilvusRetriever implements RagRetriever {
             List<RagRetrievedChunk> results,
             int rawHitCount,
             int vectorIdCount,
-            int scoreCount
+            int scoreCount,
+            int searchableHitCount
     ) {
     }
 }

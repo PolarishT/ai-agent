@@ -1,24 +1,28 @@
 package com.involutionhell.backend.rag.indexing.notification;
 
-import java.time.OffsetDateTime;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
-import java.util.Arrays;
-import java.util.Locale;
-import java.util.Objects;
+import jakarta.mail.internet.MimeMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.nio.charset.StandardCharsets;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+
 /**
- * 当 RocketMQ 索引消息反序列化失败达到阈值时，发送外部告警邮件。
+ * 修正版：RocketMQ 索引消息解析失败邮件告警服务
  */
 @Service
 @ConditionalOnBean(JavaMailSender.class)
@@ -63,76 +67,92 @@ public class RagIndexMessageParseFailureEmailNotifier implements RagIndexMessage
                 .map(String::trim)
                 .filter(StringUtils::hasText)
                 .toArray(String[]::new);
+
         if (resolvedRecipients.length == 0) {
-            log.warn(
-                    "Skip parse failure alert email because no recipients are configured: messageId={}, topic={}",
-                    messageId,
-                    topic
-            );
+            log.warn("Skip alert email: no recipients configured for messageId={}", messageId);
             return;
         }
 
         try {
-            SimpleMailMessage message = new SimpleMailMessage();
+            MimeMessage message = mailSender.createMimeMessage();
+            // 生产环境建议：multipart 设为 true 以支持附件或内嵌资源，虽然目前只用 HTML
+            MimeMessageHelper helper = new MimeMessageHelper(message, true, StandardCharsets.UTF_8.name());
+
             if (StringUtils.hasText(from)) {
-                message.setFrom(from);
+                helper.setFrom(from);
             }
-            message.setTo(resolvedRecipients);
-            message.setSubject(buildSubject(topic));
-            message.setText(buildBody(messageId, topic, deliveryAttempt, failureCount, errorMessage, payloadPreview, propertiesJson));
+            helper.setTo(resolvedRecipients);
+            helper.setSubject(buildSubject(topic));
+
+            // 生成两个版本的正文：纯文本（Text）和 样式（HTML）
+            String plainText = buildPlainTextBody(messageId, topic, deliveryAttempt, failureCount, errorMessage, payloadPreview, propertiesJson);
+            String htmlContent = buildHtmlBody(messageId, topic, deliveryAttempt, failureCount, errorMessage, payloadPreview, propertiesJson);
+
+            // 设置邮件内容，第二个参数 true 表示这是 HTML
+            helper.setText(plainText, htmlContent);
+
             mailSender.send(message);
-            log.warn(
-                    "RAG parse failure alert email sent: messageId={}, topic={}, recipientCount={}",
-                    messageId,
-                    topic,
-                    resolvedRecipients.length
-            );
+            log.warn("RAG alert email sent successfully to {} recipients for topic={}", resolvedRecipients.length, topic);
         } catch (Exception exception) {
-            log.warn(
-                    "Failed to send parse failure alert email: messageId={}, topic={}, error={}",
-                    messageId,
-                    topic,
-                    exception.getMessage()
-            );
+            log.error("Failed to send RAG parse failure email for messageId={}", messageId, exception);
         }
     }
 
     private String buildSubject(String topic) {
         String prefix = StringUtils.hasText(subjectPrefix) ? subjectPrefix.trim() + " " : "";
-        return prefix + "RocketMQ 索引消息解析失败达到阈值: " + topic;
+        return prefix + "索引消息解析失败告警: " + (StringUtils.hasText(topic) ? topic : "未知队列");
     }
 
-    private String buildBody(
-            String messageId,
-            String topic,
-            int deliveryAttempt,
-            int failureCount,
-            String errorMessage,
-            String payloadPreview,
-            String propertiesJson
+    /**
+     * 构建纯文本版本（供不支持 HTML 的老旧客户端查看）
+     */
+    private String buildPlainTextBody(
+            String messageId, String topic, int deliveryAttempt, int failureCount,
+            String errorMessage, String payloadPreview, String propertiesJson
     ) {
-        StringBuilder body = new StringBuilder();
-        body.append("你好，\n\n");
-        body.append("有一条 RocketMQ 索引消息在应用侧连续解析失败，并已达到告警阈值。\n\n");
-        body.append("消息信息：\n");
-        body.append("- Message ID: ").append(defaultString(messageId, "-")).append('\n');
-        body.append("- Topic: ").append(defaultString(topic, "-")).append('\n');
-        body.append("- 当前投递次数: ").append(deliveryAttempt).append('\n');
-        body.append("- 累计解析失败次数: ").append(failureCount).append('\n');
-        body.append("- 最近错误: ").append(defaultString(errorMessage, "未知错误")).append('\n');
-        body.append("- Payload Preview: ").append(defaultString(payloadPreview, "-")).append('\n');
-        body.append("- Properties JSON: ").append(defaultString(propertiesJson, "{}")).append('\n');
-        body.append("- 告警时间: ")
-                .append(OffsetDateTime.now().atZoneSameInstant(ZoneId.systemDefault()).format(TIMESTAMP_FORMATTER))
-                .append("\n\n");
-        body.append("建议：\n");
-        body.append("1. 检查消息发布方与消费方的 payload 结构是否一致。\n");
-        body.append("2. 检查是否存在脏消息、兼容性变更或序列化配置漂移。\n");
-        body.append("3. 确认死信队列或人工补偿流程是否需要介入。\n");
-        return body.toString();
+        return "RocketMQ 索引消息解析失败告警\n" +
+                "================================\n" +
+                "Message ID: " + messageId + "\n" +
+                "Topic: " + topic + "\n" +
+                "投递次数: " + deliveryAttempt + "\n" +
+                "错误详情: " + errorMessage + "\n" +
+                "Payload 预览: " + payloadPreview + "\n" +
+                "告警时间: " + getCurrentTimeStr();
     }
 
-    private String defaultString(String value, String defaultValue) {
-        return StringUtils.hasText(value) ? value : defaultValue;
+    /**
+     * 调用模板渲染美化的 HTML 版本
+     */
+    private String buildHtmlBody(
+            String messageId, String topic, int deliveryAttempt, int failureCount,
+            String errorMessage, String payloadPreview, String propertiesJson
+    ) {
+        // 构造字段列表，注意 multiline 参数的使用
+        List<RagEmailTemplates.Field> fields = List.of(
+                new RagEmailTemplates.Field("Message ID", messageId, false),
+                new RagEmailTemplates.Field("Topic", topic, false),
+                new RagEmailTemplates.Field("投递/失败次数", deliveryAttempt + " / " + failureCount, false),
+                new RagEmailTemplates.Field("最近错误", errorMessage, true),
+                new RagEmailTemplates.Field("Payload 预览", payloadPreview, true),
+                new RagEmailTemplates.Field("Properties JSON", propertiesJson, true),
+                new RagEmailTemplates.Field("告警时间", getCurrentTimeStr(), false)
+        );
+
+        List<String> suggestions = List.of(
+                "检查消息发布方与消费方的 Data Transfer Object (DTO) 是否版本一致",
+                "排查是否存在因业务变更导致的脏数据或非法 JSON 格式",
+                "若故障持续，请手动检查 RocketMQ 死信队列 (DLQ) 并根据 TraceID 追踪链路"
+        );
+
+        return RagEmailTemplates.parseFailureHtml(
+                "消息解析异常告警",
+                "检测到 RocketMQ 索引消息反序列化失败次数已超过设定阈值，系统已自动挂起该消息的进一步重试。",
+                fields,
+                suggestions
+        );
+    }
+
+    private String getCurrentTimeStr() {
+        return OffsetDateTime.now().atZoneSameInstant(ZoneId.systemDefault()).format(TIMESTAMP_FORMATTER);
     }
 }

@@ -1,12 +1,11 @@
 package com.involutionhell.backend.rag.infrastructure.mq;
 
-import java.time.Duration;
-
 import com.involutionhell.backend.rag.shared.properties.RagProperties;
 import jakarta.annotation.PostConstruct;
 import org.apache.rocketmq.client.apis.ClientConfiguration;
 import org.apache.rocketmq.client.apis.ClientConfigurationBuilder;
 import org.apache.rocketmq.client.apis.ClientServiceProvider;
+import org.apache.rocketmq.client.apis.consumer.SimpleConsumerBuilder;
 import org.apache.rocketmq.client.apis.producer.ProducerBuilder;
 import org.apache.rocketmq.client.core.RocketMQClientTemplate;
 import org.apache.rocketmq.client.support.RocketMQMessageConverter;
@@ -16,6 +15,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.time.Duration;
 
 /**
  * RAG RocketMQ 生产端配置。
@@ -54,7 +55,7 @@ public class RagRocketMqConfiguration {
      * <p>该模板用于发送 RAG 离线索引消息，供 Outbox 分发器或直接发布链路复用。
      * 当应用里已经存在同类型模板时，这里不会重复装配。
      *
-     * @param ragProperties RAG 配置
+     * @param ragProperties            RAG 配置
      * @param rocketMQMessageConverter RocketMQ 消息转换器
      * @return 用于发送索引任务消息的 RocketMQ 客户端模板
      */
@@ -82,11 +83,18 @@ public class RagRocketMqConfiguration {
         ProducerBuilder producerBuilder = provider.newProducerBuilder()
                 .setClientConfiguration(clientConfigurationBuilder.build())
                 .setTopics(rocketMq.topic())
-                .setMaxAttempts(3);
+                .setMaxAttempts(rocketMq.maxAttemptTimes());
+
+        SimpleConsumerBuilder simpleConsumerBuilder = provider.newSimpleConsumerBuilder()
+                .setClientConfiguration(clientConfigurationBuilder.build())
+                .setConsumerGroup(rocketMq.consumerGroup());
 
         RocketMQClientTemplate template = new RocketMQClientTemplate();
         template.setProducerBuilder(producerBuilder);
+        template.setSimpleConsumerBuilder(simpleConsumerBuilder);
         template.setMessageConverter(rocketMQMessageConverter.getMessageConverter());
         return template;
     }
+
+
 }

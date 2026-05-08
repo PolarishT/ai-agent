@@ -1,5 +1,6 @@
 package com.involutionhell.backend.rag.indexing.application;
 
+import com.involutionhell.backend.rag.indexing.model.RagIndexJobStatus;
 import com.involutionhell.backend.rag.indexing.persistence.RagIndexJobRecord;
 import com.involutionhell.backend.rag.indexing.persistence.RagIndexJobRepository;
 import com.involutionhell.backend.rag.indexing.workflow.IndexWorkflowCommand;
@@ -56,8 +57,7 @@ public class RagIndexMaintenanceService {
         for (RagIndexJobRecord job : staleJobs) {
             Boolean success = transactionTemplate.execute(status -> {
                 try {
-                    processSingleOrphan(job);
-                    return Boolean.TRUE;
+                    return processSingleOrphan(job);
                 } catch (Exception e) {
                     status.setRollbackOnly();
                     log.error(
@@ -78,7 +78,18 @@ public class RagIndexMaintenanceService {
         return repaired;
     }
 
-    private void processSingleOrphan(RagIndexJobRecord job) {
+    private boolean processSingleOrphan(RagIndexJobRecord job) {
+        if (isTerminal(job)) {
+            log.info(
+                    "跳过已处于终态的孤儿索引任务: jobId={}, documentId={}, contentSha={}, status={}",
+                    job.id(),
+                    job.documentId(),
+                    RagLogHelper.shortSha(job.contentSha256()),
+                    job.status()
+            );
+            return false;
+        }
+
         log.warn("发现异常超时的索引任务，启动自动修复: documentId={}, generation={}",
                 job.documentId(), job.targetGeneration());
 
@@ -89,7 +100,7 @@ public class RagIndexMaintenanceService {
                     IndexWorkflowTriggerType.SYSTEM,
                     "orphan-cleaner"
             ).withFailure("timeout", "任务处理超时且缺少 targetGeneration，系统已标记为失败等待人工介入"));
-            return;
+            return true;
         }
 
         // 1. 回收该次 attempt 遗留的 generation 数据，避免半路崩溃留下脏向量或脏 chunk。
@@ -102,5 +113,12 @@ public class RagIndexMaintenanceService {
                 IndexWorkflowTriggerType.SYSTEM,
                 "orphan-cleaner"
         ).withFailure("timeout", "任务处理超时且进程已失联，系统自动回收资源"));
+        return true;
+    }
+
+    private boolean isTerminal(RagIndexJobRecord job) {
+        return RagIndexJobStatus.SUCCEEDED.name().equals(job.status())
+                || RagIndexJobStatus.FAILED.name().equals(job.status())
+                || RagIndexJobStatus.SKIPPED.name().equals(job.status());
     }
 }

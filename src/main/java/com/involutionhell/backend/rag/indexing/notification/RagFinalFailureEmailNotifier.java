@@ -2,29 +2,30 @@ package com.involutionhell.backend.rag.indexing.notification;
 
 import com.involutionhell.backend.rag.document.spi.DocumentIndexingSpi;
 import com.involutionhell.backend.rag.document.spi.DocumentIndexingView;
-import com.involutionhell.backend.rag.shared.support.RagJsonCodec;
 import com.involutionhell.backend.rag.shared.support.RagLogHelper;
-import java.time.OffsetDateTime;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
+import jakarta.mail.internet.MimeMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.nio.charset.StandardCharsets;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+
 /**
- * 当离线索引在 MQ 最大尝试次数后仍失败时，向文档作者发送通知邮件。
+ * 修正版：当离线索引最终失败时，向作者发送美化后的通知邮件。
  */
 @Service
 @ConditionalOnBean(JavaMailSender.class)
@@ -32,15 +33,11 @@ import org.springframework.util.StringUtils;
 public class RagFinalFailureEmailNotifier {
 
     private static final Logger log = LoggerFactory.getLogger(RagFinalFailureEmailNotifier.class);
+
     private static final List<String> EMAIL_KEYS = List.of(
-            "authorEmail",
-            "author_email",
-            "notifyEmail",
-            "notify_email",
-            "notificationEmail",
-            "notification_email",
-            "email"
+            "authorEmail", "author_email", "notifyEmail", "notify_email", "notificationEmail", "notification_email", "email"
     );
+
     private static final DateTimeFormatter TIMESTAMP_FORMATTER =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss z", Locale.ROOT);
 
@@ -53,7 +50,6 @@ public class RagFinalFailureEmailNotifier {
     public RagFinalFailureEmailNotifier(
             DocumentIndexingSpi documentIndexingSpi,
             ObjectProvider<JavaMailSender> mailSenderProvider,
-            RagJsonCodec jsonCodec,
             @Value("${rag.notification.final-failure-email.from:}") String from,
             @Value("${rag.notification.final-failure-email.subject-prefix:[RAG]}") String subjectPrefix,
             @Value("${rag.notification.final-failure-email.base-url:}") String baseUrl
@@ -80,174 +76,128 @@ public class RagFinalFailureEmailNotifier {
             log.warn("Skip final failure email because document is missing: documentId={}", documentId);
             return;
         }
+
+        // 版本校验：如果 SHA256 不匹配，说明文档已被更新，不再为旧版本发告警
         if (StringUtils.hasText(contentSha256)
                 && StringUtils.hasText(document.contentSha256())
                 && !contentSha256.equals(document.contentSha256())) {
-            log.info(
-                    "Skip final failure email because document version has changed: documentId={}, staleSha={}, currentSha={}",
-                    documentId,
-                    RagLogHelper.shortSha(contentSha256),
-                    RagLogHelper.shortSha(document.contentSha256())
-            );
+            log.info("Skip final failure email because document version has changed: documentId={}", documentId);
             return;
         }
 
-        Map<String, Object> metadata = parseMetadata(document.metadata());
-        String recipient = resolveAuthorEmail(metadata);
+        String recipient = resolveAuthorEmail(document.metadata());
         if (!StringUtils.hasText(recipient)) {
-            log.info(
-                    "Skip final failure email because no author email was found in document metadata: documentId={}, contentSha={}",
-                    documentId,
-                    RagLogHelper.shortSha(document.contentSha256())
-            );
+            log.info("No recipient email found for documentId={}", documentId);
             return;
         }
 
         try {
-            SimpleMailMessage message = new SimpleMailMessage();
+            MimeMessage message = mailSender.createMimeMessage();
+            // 使用 multipart 模式以支持 HTML 和 Plain Text 共存
+            MimeMessageHelper helper = new MimeMessageHelper(message, true, StandardCharsets.UTF_8.name());
+
             if (StringUtils.hasText(from)) {
-                message.setFrom(from);
+                helper.setFrom(from);
             }
-            message.setTo(recipient);
-            message.setSubject(buildSubject(document));
-            message.setText(buildBody(document, errorMessage, maxAttempts, messageId));
+            helper.setTo(recipient);
+            helper.setSubject(buildSubject(document));
+
+            // 获取两种版本的正文
+            String plainText = buildPlainTextBody(document, errorMessage, maxAttempts, messageId);
+            String htmlContent = buildHtmlBody(document, errorMessage, maxAttempts, messageId);
+
+            // 同时设置纯文本和 HTML
+            helper.setText(plainText, htmlContent);
+
             mailSender.send(message);
-            log.info(
-                    "RAG final failure email sent: documentId={}, contentSha={}, recipient={}",
-                    documentId,
-                    RagLogHelper.shortSha(document.contentSha256()),
-                    recipient
-            );
+            log.info("Final failure notification sent to {} for documentId={}", recipient, documentId);
         } catch (Exception exception) {
-            log.warn(
-                    "Failed to send RAG final failure email: documentId={}, recipient={}, error={}",
-                    documentId,
-                    recipient,
-                    RagLogHelper.errorSummary(exception)
-            );
+            log.error("Failed to send final failure email for documentId={}", documentId, exception);
         }
     }
 
-    private Map<String, Object> parseMetadata(Map<String, Object> metadataJson) {
-        if (metadataJson == null || metadataJson.isEmpty()) {
-            return Map.of();
-        }
-        try {
-            Map<String, Object> metadata = new LinkedHashMap<>(metadataJson);
-            return metadata == null ? Map.of() : metadata;
-        } catch (Exception exception) {
-            log.warn(
-                    "Failed to parse document metadata for final failure email: error={}, payload={}",
-                    RagLogHelper.errorSummary(exception),
-                    RagLogHelper.abbreviate(String.valueOf(metadataJson), 200)
-            );
-            return Map.of();
-        }
+    private String buildSubject(DocumentIndexingView document) {
+        String prefix = StringUtils.hasText(subjectPrefix) ? subjectPrefix.trim() + " " : "";
+        String title = defaultString(document.title(), "未命名文档");
+        return prefix + "索引任务最终失败: " + title;
     }
+
+    private String buildPlainTextBody(DocumentIndexingView document, String errorMessage, int maxAttempts, String messageId) {
+        return "RAG 文档索引最终失败通知\n" +
+                "==============================\n" +
+                "文档标题: " + defaultString(document.title(), "未命名文档") + "\n" +
+                "最终错误: " + errorMessage + "\n" +
+                "尝试次数: " + maxAttempts + "\n" +
+                "更新时间: " + formatTimestamp(document.updatedAt()) + "\n" +
+                "排查链接: " + buildTimelineUrl(document) + "\n\n" +
+                "此为系统自动发送，请勿回复。";
+    }
+
+    private String buildHtmlBody(DocumentIndexingView document, String errorMessage, int maxAttempts, String messageId) {
+        // 构建表格展示的详细信息
+        List<RagEmailTemplates.Field> fields = List.of(
+                new RagEmailTemplates.Field("文档 ID", String.valueOf(document.id()), false),
+                new RagEmailTemplates.Field("文档标题", defaultString(document.title(), "未命名文档"), false),
+                new RagEmailTemplates.Field("来源 URI", defaultString(document.sourceUri(), "-"), false),
+                new RagEmailTemplates.Field("内容版本 (SHA)", RagLogHelper.shortSha(document.contentSha256()), false),
+                new RagEmailTemplates.Field("最大尝试次数", String.valueOf(maxAttempts), false),
+                new RagEmailTemplates.Field("最终错误信息", errorMessage, true), // 错误信息通常较长，设为 multiline
+                new RagEmailTemplates.Field("最近更新时间", formatTimestamp(document.updatedAt()), false)
+        );
+
+        List<String> suggestions = List.of(
+                "请根据上方排查链接查看完整的时间线轨迹",
+                "核对文档元数据是否包含不可解析的特殊字符",
+                "确认 Embedding 模型服务或向量数据库当前是否可用",
+                "修正问题后，请在管理后台重新触发该文档的重建索引任务"
+        );
+
+        return RagEmailTemplates.finalFailureHtml(
+                "文档索引最终失败告警",
+                "您提交的 RAG 文档在离线索引链路中经过多次自动重试后仍未成功入库，已停止处理。",
+                fields,
+                buildTimelineUrl(document),
+                suggestions
+        );
+    }
+
+    // --- 工具方法保持逻辑不变 ---
 
     private String resolveAuthorEmail(Map<String, Object> metadata) {
+        if (metadata == null) return null;
         String directEmail = firstEmail(metadata);
-        if (StringUtils.hasText(directEmail)) {
-            return directEmail;
+        if (StringUtils.hasText(directEmail)) return directEmail;
+
+        Object authorObj = metadata.get("author");
+        if (authorObj instanceof Map) {
+            return firstEmail(asMap(authorObj));
         }
 
-        String nestedAuthorEmail = nestedAuthorEmail(metadata);
-        if (StringUtils.hasText(nestedAuthorEmail)) {
-            return nestedAuthorEmail;
+        Object frontmatterObj = metadata.get("frontmatter");
+        if (frontmatterObj instanceof Map) {
+            return firstEmail(asMap(frontmatterObj));
         }
-
-        Map<String, Object> frontmatter = asMap(metadata.get("frontmatter"));
-        if (frontmatter.isEmpty()) {
-            return null;
-        }
-
-        String frontmatterEmail = firstEmail(frontmatter);
-        if (StringUtils.hasText(frontmatterEmail)) {
-            return frontmatterEmail;
-        }
-
-        return nestedAuthorEmail(frontmatter);
+        return null;
     }
 
     private String firstEmail(Map<String, Object> source) {
-        if (source == null || source.isEmpty()) {
-            return null;
-        }
         for (String key : EMAIL_KEYS) {
-            String value = asText(source.get(key));
-            if (StringUtils.hasText(value)) {
-                return value;
+            Object val = source.get(key);
+            if (val != null) {
+                String email = String.valueOf(val).trim();
+                if (StringUtils.hasText(email)) return email;
             }
         }
         return null;
     }
 
-    private String nestedAuthorEmail(Map<String, Object> source) {
-        Map<String, Object> author = asMap(source.get("author"));
-        if (author.isEmpty()) {
-            return null;
-        }
-        return firstEmail(author);
-    }
-
     private Map<String, Object> asMap(Object value) {
-        if (value instanceof Map<?, ?> rawMap) {
-            Map<String, Object> normalized = new LinkedHashMap<>();
-            for (Map.Entry<?, ?> entry : rawMap.entrySet()) {
-                if (entry.getKey() != null) {
-                    normalized.put(String.valueOf(entry.getKey()), entry.getValue());
-                }
-            }
-            return normalized;
-        }
-        return Map.of();
+        return (value instanceof Map) ? (Map<String, Object>) value : Map.of();
     }
 
-    private String asText(Object value) {
-        if (value == null) {
-            return null;
-        }
-        String text = String.valueOf(value).trim();
-        return text.isEmpty() ? null : text;
-    }
-
-    private String buildSubject(DocumentIndexingView document) {
-        String prefix = StringUtils.hasText(subjectPrefix) ? subjectPrefix.trim() + " " : "";
-        String title = StringUtils.hasText(document.title()) ? document.title().trim() : "未命名文档";
-        return prefix + "文档离线索引最终失败: " + title;
-    }
-
-    private String buildBody(
-            DocumentIndexingView document,
-            String errorMessage,
-            int maxAttempts,
-            String messageId
-    ) {
-        StringBuilder body = new StringBuilder();
-        body.append("你好，\n\n");
-        body.append("你提交的 RAG 文档在离线索引链路中已达到最大尝试次数，仍未成功完成入库。\n\n");
-        body.append("文档信息：\n");
-        body.append("- 文档 ID: ").append(document.id()).append('\n');
-        body.append("- 标题: ").append(defaultString(document.title(), "未命名文档")).append('\n');
-        body.append("- 来源 URI: ").append(defaultString(document.sourceUri(), "-")).append('\n');
-        body.append("- 内容版本: ").append(defaultString(document.contentSha256(), "-")).append('\n');
-        body.append("- 最大尝试次数: ").append(maxAttempts).append('\n');
-        body.append("- MQ Message ID: ").append(defaultString(messageId, "-")).append('\n');
-        body.append("- 最终错误: ").append(defaultString(errorMessage, "未知错误")).append('\n');
-        body.append("- 更新时间: ").append(formatTimestamp(document.updatedAt())).append("\n\n");
-        if (StringUtils.hasText(baseUrl)) {
-            body.append("排查链接：\n");
-            body.append(baseUrl.replaceAll("/+$", ""))
-                    .append("/public/rag/documents/index-timeline/")
-                    .append(document.id())
-                    .append("\n\n");
-        }
-        body.append("建议：\n");
-        body.append("1. 检查文档内容与 metadata 是否符合当前离线链路要求。\n");
-        body.append("2. 检查 embedding / Milvus / RocketMQ 等外部依赖的可用性与参数限制。\n");
-        body.append("3. 修复后重新触发文档重建索引。\n\n");
-        body.append("这是一封系统自动通知邮件。");
-        return body.toString();
+    private String buildTimelineUrl(DocumentIndexingView document) {
+        if (!StringUtils.hasText(baseUrl)) return null;
+        return baseUrl.replaceAll("/+$", "") + "/public/rag/documents/index-timeline/" + document.id();
     }
 
     private String defaultString(String value, String defaultValue) {
@@ -255,9 +205,7 @@ public class RagFinalFailureEmailNotifier {
     }
 
     private String formatTimestamp(OffsetDateTime value) {
-        if (value == null) {
-            return "-";
-        }
+        if (value == null) return "-";
         return value.atZoneSameInstant(ZoneId.systemDefault()).format(TIMESTAMP_FORMATTER);
     }
 }

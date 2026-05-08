@@ -288,3 +288,101 @@ CREATE TABLE IF NOT EXISTS rag_embedding_cache (
 
 CREATE INDEX IF NOT EXISTS idx_rag_embedding_cache_model
     ON rag_embedding_cache(embedding_model, embedding_dimension);
+
+-- RAG 全开放会话用户表：不承载认证，仅记录业务 userId 的首次/最近访问时间
+CREATE TABLE IF NOT EXISTS rag_users (
+    id            BIGSERIAL PRIMARY KEY,
+    user_id       VARCHAR(128) NOT NULL UNIQUE,
+    metadata      JSONB NOT NULL DEFAULT '{}'::jsonb,
+    first_seen_at TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
+    last_seen_at  TIMESTAMPTZ(6) NOT NULL DEFAULT now()
+);
+
+-- RAG 会话表：conversation_id 由前端生成，但由外部系统预置；ask 不自动创建
+CREATE TABLE IF NOT EXISTS rag_conversations (
+    id              BIGSERIAL PRIMARY KEY,
+    conversation_id VARCHAR(128) NOT NULL UNIQUE,
+    user_id         VARCHAR(128) NOT NULL,
+    title           VARCHAR(200),
+    status          VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
+    message_count   INTEGER NOT NULL DEFAULT 0,
+    metadata        JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at      TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
+    last_message_at TIMESTAMPTZ(6),
+    CONSTRAINT fk_rag_conversations_user
+        FOREIGN KEY (user_id) REFERENCES rag_users(user_id),
+    CONSTRAINT rag_conversations_status_chk
+        CHECK (status IN ('ACTIVE', 'ARCHIVED', 'DELETED'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_conversations_user_cursor
+    ON rag_conversations(user_id, last_message_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS rag_conversation_messages (
+    id              BIGSERIAL PRIMARY KEY,
+    message_id      VARCHAR(128) NOT NULL UNIQUE,
+    conversation_id BIGINT NOT NULL,
+    role            VARCHAR(16) NOT NULL,
+    content         TEXT NOT NULL,
+    status          VARCHAR(16) NOT NULL DEFAULT 'SUCCEEDED',
+    token_count     INTEGER,
+    correlation_id  VARCHAR(128),
+    sequence_no     INTEGER NOT NULL,
+    metadata        JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at      TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
+    CONSTRAINT fk_rag_messages_conversation
+        FOREIGN KEY (conversation_id) REFERENCES rag_conversations(id) ON DELETE CASCADE,
+    CONSTRAINT rag_messages_role_chk
+        CHECK (role IN ('user', 'assistant', 'system')),
+    CONSTRAINT rag_messages_status_chk
+        CHECK (status IN ('PENDING', 'STREAMING', 'SUCCEEDED', 'FAILED')),
+    CONSTRAINT uq_rag_messages_conversation_sequence
+        UNIQUE (conversation_id, sequence_no)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_messages_conversation_sequence
+    ON rag_conversation_messages(conversation_id, sequence_no);
+
+CREATE TABLE IF NOT EXISTS rag_ask_runs (
+    id                   BIGSERIAL PRIMARY KEY,
+    run_id               VARCHAR(128) NOT NULL UNIQUE,
+    correlation_id       VARCHAR(128) NOT NULL UNIQUE,
+    user_id              VARCHAR(128) NOT NULL,
+    conversation_id      BIGINT NOT NULL,
+    user_message_id      BIGINT,
+    assistant_message_id BIGINT,
+    request_id           VARCHAR(128),
+    question             TEXT NOT NULL,
+    retrieval_question   TEXT,
+    top_k                INTEGER,
+    filters              JSONB NOT NULL DEFAULT '{}'::jsonb,
+    retrieval_queries    JSONB NOT NULL DEFAULT '[]'::jsonb,
+    retrieved_contexts   JSONB NOT NULL DEFAULT '[]'::jsonb,
+    notices              JSONB NOT NULL DEFAULT '[]'::jsonb,
+    generated_by_model   BOOLEAN NOT NULL DEFAULT FALSE,
+    degraded             BOOLEAN NOT NULL DEFAULT FALSE,
+    status               VARCHAR(16) NOT NULL DEFAULT 'RUNNING',
+    error_code           VARCHAR(64),
+    error_message        TEXT,
+    started_at           TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
+    completed_at         TIMESTAMPTZ(6),
+    CONSTRAINT fk_rag_ask_runs_conversation
+        FOREIGN KEY (conversation_id) REFERENCES rag_conversations(id) ON DELETE CASCADE,
+    CONSTRAINT fk_rag_ask_runs_user_message
+        FOREIGN KEY (user_message_id) REFERENCES rag_conversation_messages(id),
+    CONSTRAINT fk_rag_ask_runs_assistant_message
+        FOREIGN KEY (assistant_message_id) REFERENCES rag_conversation_messages(id),
+    CONSTRAINT rag_ask_runs_status_chk
+        CHECK (status IN ('RUNNING', 'SUCCEEDED', 'FAILED'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_ask_runs_user_started
+    ON rag_ask_runs(user_id, started_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_rag_ask_runs_conversation_started
+    ON rag_ask_runs(conversation_id, started_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rag_ask_runs_request
+    ON rag_ask_runs(user_id, conversation_id, request_id)
+    WHERE request_id IS NOT NULL;

@@ -113,10 +113,12 @@ public record RagProperties(
             @DefaultValue("3")
             int parseFailureAlertThreshold,
             @DefaultValue("1000")
-            int parseFailurePayloadPreviewLength
+            int parseFailurePayloadPreviewLength,
+            @DefaultValue("3")
+            int maxAttemptTimes
     ) {
         public static RocketMq defaults() {
-            return new RocketMq(false, null, null, "rag-index", "rag-index-consumer", 3, true, 3, 1000);
+            return new RocketMq(false, null, null, "dev-rag-index", "dev-rag-index-consumer", 3, true, 3, 1000,3);
         }
     }
 
@@ -297,12 +299,18 @@ public record RagProperties(
      * @param semanticCandidateMultiplier 语义检索候选倍数
      * @param semanticFilteredCandidateMultiplier 带过滤条件时的语义候选倍数
      * @param semanticCandidateTopKMax 语义检索候选上限
+     * @param adaptiveSingleQueryJoinCandidateMultiplier 单 query 时 join 候选总预算倍数
+     * @param adaptiveMultiQueryJoinCandidateMultiplier 多 query 时 join 候选总预算倍数
+     * @param maxTotalJoinCandidateBudget 初次检索 join 候选总预算上限
+     * @param progressiveWideningEnabled 是否在召回不足时启用二次放大
+     * @param progressiveMaxTotalJoinCandidateBudget 二次放大 join 候选总预算上限
      * @param rrfK RRF 融合参数 K
      * @param neighborWindowBefore 返回上下文时向前扩展的切片数
      * @param neighborWindowAfter 返回上下文时向后扩展的切片数
      * @param semanticTimeoutMillis 语义检索超时，单位毫秒；小于等于 0 表示不启用超时
      * @param keywordTimeoutMillis 关键词检索超时，单位毫秒；小于等于 0 表示不启用超时
      * @param queryTimeoutMillis 单个扩展 query 的总检索超时，单位毫秒；小于等于 0 表示不启用超时
+     * @param queryConcurrency 多 query 检索并发度
      * @param answerGenerationTimeoutMillis 答案生成超时，单位毫秒；小于等于 0 表示不启用超时
      */
     public record Retrieval(
@@ -345,6 +353,29 @@ public record RagProperties(
             @DefaultValue("50")
             int semanticCandidateTopKMax,
 
+            @DefaultValue("2")
+            @Min(1)
+            @Max(16)
+            int adaptiveSingleQueryJoinCandidateMultiplier,
+
+            @DefaultValue("4")
+            @Min(1)
+            @Max(16)
+            int adaptiveMultiQueryJoinCandidateMultiplier,
+
+            @DefaultValue("24")
+            @Min(1)
+            @Max(512)
+            int maxTotalJoinCandidateBudget,
+
+            @DefaultValue("true")
+            boolean progressiveWideningEnabled,
+
+            @DefaultValue("48")
+            @Min(1)
+            @Max(1024)
+            int progressiveMaxTotalJoinCandidateBudget,
+
             @DefaultValue("60.0")
             double rrfK,
 
@@ -369,13 +400,18 @@ public record RagProperties(
             @Max(120_000)
             long queryTimeoutMillis,
 
+            @DefaultValue("4")
+            @Min(1)
+            @Max(16)
+            int queryConcurrency,
+
             @DefaultValue("12000")
             @Min(0)
             @Max(300_000)
             long answerGenerationTimeoutMillis
     ) {
         public static Retrieval defaults() {
-            return new Retrieval(4.0d, 1.5d, 1.0d, 0.25d, 8, 100, 2, 20, 2, 10, 3, 5, 50, 60.0d, 1, 1, 1_500L, 1_500L, 3_000L, 12_000L);
+            return new Retrieval(4.0d, 1.5d, 1.0d, 0.25d, 8, 100, 2, 20, 2, 10, 3, 5, 50, 2, 4, 24, true, 48, 60.0d, 1, 1, 1_500L, 1_500L, 3_000L, 4, 12_000L);
         }
     }
 

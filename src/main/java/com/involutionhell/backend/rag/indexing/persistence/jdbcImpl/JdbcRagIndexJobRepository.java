@@ -159,7 +159,7 @@ public class JdbcRagIndexJobRepository implements RagIndexJobRepository {
         return jdbc.query(
                 """
                         SELECT * FROM rag_index_jobs
-                         WHERE status NOT IN ('SUCCEEDED', 'SKIPPED')
+                         WHERE status NOT IN ('SUCCEEDED', 'FAILED', 'SKIPPED')
                            AND updated_at < ?
                          ORDER BY updated_at
                          LIMIT ?

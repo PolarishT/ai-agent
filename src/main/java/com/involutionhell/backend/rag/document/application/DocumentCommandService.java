@@ -5,6 +5,7 @@ import com.involutionhell.backend.rag.document.persistence.RagDocumentRecord;
 import com.involutionhell.backend.rag.document.persistence.RagDocumentRepository;
 import com.involutionhell.backend.rag.shared.markdown.MarkdownDocumentParser;
 import com.involutionhell.backend.rag.shared.model.RagDocumentStatus;
+import com.involutionhell.backend.rag.shared.support.RagLogFields;
 import com.involutionhell.backend.rag.shared.support.RagLogHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -109,14 +110,23 @@ class DocumentCommandService implements DocumentCommandFacade {
     public void deleteDocument(Long documentId) {
         RagDocumentRecord document = requireDocument(documentId);
         if (RagDocumentStatus.DELETING.name().equals(document.status())) {
-            log.info("RAG delete ignored because document is already deleting: documentId={}", documentId);
+            log.atInfo()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.document.delete.ignored")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_SKIPPED)
+                    .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, document.contentSha256()))
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                    .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(document.contentSha256()))
+                    .addKeyValue(RagLogFields.EVENT_REASON, "already_deleting")
+                    .log("RAG delete ignored because document is already deleting");
             return;
         }
-        log.info(
-                "RAG document marked deleting: documentId={}, contentSha={}",
-                documentId,
-                RagLogHelper.shortSha(document.contentSha256())
-        );
+        log.atInfo()
+                .addKeyValue(RagLogFields.EVENT_NAME, "rag.document.delete.requested")
+                .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_STARTED)
+                .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, document.contentSha256()))
+                .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(document.contentSha256()))
+                .log("RAG document marked deleting");
         documentRepository.markDeleting(documentId, "文档删除已受理，等待完成向量与切片清理");
         eventPublisher.publishEvent(new DocumentIndexCleanupRequestedEvent(documentId));
     }
@@ -206,35 +216,41 @@ class DocumentCommandService implements DocumentCommandFacade {
     }
 
     private void logCreate(RagDocumentRecord record, PreparedDocument prepared) {
-        log.info(
-                "RAG document created: documentId={}, contentSha={}, sourceType={}, sourceUri={}, title={}, contentLength={}",
-                record.id(),
-                RagLogHelper.shortSha(prepared.contentSha256()),
-                prepared.sourceType(),
-                prepared.sourceUri(),
-                prepared.title(),
-                prepared.content().length()
-        );
+        log.atInfo()
+                .addKeyValue(RagLogFields.EVENT_NAME, "rag.document.created")
+                .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_SUCCESS)
+                .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(record.id(), prepared.contentSha256()))
+                .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, record.id())
+                .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(prepared.contentSha256()))
+                .addKeyValue("rag.source_type", prepared.sourceType())
+                .addKeyValue("rag.source_uri", prepared.sourceUri())
+                .addKeyValue("rag.title", prepared.title())
+                .addKeyValue("rag.content_length", prepared.content().length())
+                .log("RAG document created");
     }
 
     private void logUpdate(Long documentId, PreparedDocument prepared) {
-        log.info(
-                "RAG document updated: documentId={}, contentSha={}, sourceType={}, sourceUri={}, title={}, contentLength={}",
-                documentId,
-                RagLogHelper.shortSha(prepared.contentSha256()),
-                prepared.sourceType(),
-                prepared.sourceUri(),
-                prepared.title(),
-                prepared.content().length()
-        );
+        log.atInfo()
+                .addKeyValue(RagLogFields.EVENT_NAME, "rag.document.updated")
+                .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_SUCCESS)
+                .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, prepared.contentSha256()))
+                .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(prepared.contentSha256()))
+                .addKeyValue("rag.source_type", prepared.sourceType())
+                .addKeyValue("rag.source_uri", prepared.sourceUri())
+                .addKeyValue("rag.title", prepared.title())
+                .addKeyValue("rag.content_length", prepared.content().length())
+                .log("RAG document updated");
     }
 
     private void logReindex(Long documentId, String contentSha256) {
-        log.info(
-                "RAG reindex requested: documentId={}, contentSha={}",
-                documentId,
-                RagLogHelper.shortSha(contentSha256)
-        );
+        log.atInfo()
+                .addKeyValue(RagLogFields.EVENT_NAME, "rag.document.reindex.requested")
+                .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_STARTED)
+                .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, contentSha256))
+                .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(contentSha256))
+                .log("RAG reindex requested");
     }
 
     private record PreparedDocument(

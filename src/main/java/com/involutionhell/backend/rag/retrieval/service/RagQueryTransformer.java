@@ -1,6 +1,7 @@
 package com.involutionhell.backend.rag.retrieval.service;
 
 import com.involutionhell.backend.rag.retrieval.api.RagConversationMessage;
+import com.involutionhell.backend.rag.retrieval.observability.RagRetrievalMetrics;
 import com.involutionhell.backend.rag.shared.properties.RagProperties;
 import com.involutionhell.backend.rag.shared.support.RagLogHelper;
 import com.involutionhell.backend.rag.shared.support.RagOpenAiTokenCounter;
@@ -34,15 +35,18 @@ public class RagQueryTransformer {
     private final CompressionQueryTransformer compressionQueryTransformer;
     private final RewriteQueryTransformer rewriteQueryTransformer;
     private final RagOpenAiTokenCounter tokenCounter;
+    private final RagRetrievalMetrics retrievalMetrics;
 
     public RagQueryTransformer(
             ObjectProvider<RewriteQueryTransformer> rewriteQueryTransformerProvider,
             ObjectProvider<CompressionQueryTransformer> compressionQueryTransformerProvider,
             RagProperties ragProperties,
-            RagOpenAiTokenCounter tokenCounter
+            RagOpenAiTokenCounter tokenCounter,
+            RagRetrievalMetrics retrievalMetrics
     ) {
         this.ragProperties = ragProperties;
         this.tokenCounter = tokenCounter;
+        this.retrievalMetrics = retrievalMetrics;
         this.rewriteQueryTransformer = resolveRewriteQueryTransformer(rewriteQueryTransformerProvider);
         this.compressionQueryTransformer = resolveCompressionQueryTransformer(compressionQueryTransformerProvider);
     }
@@ -100,6 +104,7 @@ public class RagQueryTransformer {
         String retrievalQuestion = workingQuery.text() == null ? "" : workingQuery.text().trim();
         if (retrievalQuestion.isEmpty()) {
             log.warn("Query transformation returned empty retrieval question, falling back to original query.");
+            retrievalMetrics.recordFallback("query_transform", "transform", "empty_result");
             return new RagQueryTransformationResult(normalizedQuestion, normalizedQuestion, false, false, conversationTurns);
         }
 
@@ -126,11 +131,13 @@ public class RagQueryTransformer {
             String retrievalQuestion = compressedQuery.text() == null ? "" : compressedQuery.text().trim();
             if (retrievalQuestion.isEmpty()) {
                 log.warn("CompressionQueryTransformer returned empty result, falling back to pre-compression query.");
+                retrievalMetrics.recordFallback("query_transform", "compression", "empty_result");
                 return query;
             }
             return new Query(retrievalQuestion, query.history(), query.context());
         } catch (Exception exception) {
             log.warn("CompressionQueryTransformer failed, falling back to pre-compression query: error={}", RagLogHelper.errorSummary(exception));
+            retrievalMetrics.recordFallback("query_transform", "compression", "error");
             return query;
         }
     }
@@ -145,11 +152,13 @@ public class RagQueryTransformer {
             String retrievalQuestion = rewrittenQuery.text() == null ? "" : rewrittenQuery.text().trim();
             if (retrievalQuestion.isEmpty()) {
                 log.warn("RewriteQueryTransformer returned empty result, falling back to pre-rewrite query.");
+                retrievalMetrics.recordFallback("query_transform", "rewrite", "empty_result");
                 return query;
             }
             return new Query(retrievalQuestion, query.history(), query.context());
         } catch (Exception exception) {
             log.warn("RewriteQueryTransformer failed, falling back to pre-rewrite query: error={}", RagLogHelper.errorSummary(exception));
+            retrievalMetrics.recordFallback("query_transform", "rewrite", "error");
             return query;
         }
     }
