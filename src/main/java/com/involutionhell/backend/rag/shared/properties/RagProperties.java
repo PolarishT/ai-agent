@@ -465,7 +465,7 @@ public record RagProperties(
      * @param batchSize 单次补偿批量大小
      */
     public record Recovery(
-            @DefaultValue("true")
+            @DefaultValue("false")
             boolean enabled,
 
             @DefaultValue("60000")

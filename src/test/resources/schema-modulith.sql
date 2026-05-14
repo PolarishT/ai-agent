@@ -130,9 +130,7 @@ CREATE TABLE IF NOT EXISTS rag_conversations (
     metadata CLOB NOT NULL DEFAULT '{}',
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_message_at TIMESTAMP,
-    CONSTRAINT fk_rag_conversations_user
-        FOREIGN KEY (user_id) REFERENCES rag_users(user_id)
+    last_message_at TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_rag_conversations_user_cursor
@@ -150,8 +148,6 @@ CREATE TABLE IF NOT EXISTS rag_conversation_messages (
     sequence_no INTEGER NOT NULL,
     metadata CLOB NOT NULL DEFAULT '{}',
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_rag_messages_conversation
-        FOREIGN KEY (conversation_id) REFERENCES rag_conversations(id) ON DELETE CASCADE,
     CONSTRAINT uq_rag_messages_conversation_sequence
         UNIQUE (conversation_id, sequence_no)
 );
@@ -181,13 +177,7 @@ CREATE TABLE IF NOT EXISTS rag_ask_runs (
     error_code VARCHAR(64),
     error_message CLOB,
     started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    completed_at TIMESTAMP,
-    CONSTRAINT fk_rag_ask_runs_conversation
-        FOREIGN KEY (conversation_id) REFERENCES rag_conversations(id) ON DELETE CASCADE,
-    CONSTRAINT fk_rag_ask_runs_user_message
-        FOREIGN KEY (user_message_id) REFERENCES rag_conversation_messages(id),
-    CONSTRAINT fk_rag_ask_runs_assistant_message
-        FOREIGN KEY (assistant_message_id) REFERENCES rag_conversation_messages(id)
+    completed_at TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_rag_ask_runs_user_started

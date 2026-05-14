@@ -288,10 +288,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/public/rag/ask \
 ```text
 curl -X POST "http://localhost:8080/api/v1/public/rag/documents/create" \
   -H "Accept: application/json" \
-  -F "file=@/Users/polaris/Downloads/AGENT.md" \
-  -F "sourceType=MARKDOWN" \
-  -F "sourceUri=file:///Users/polaris/Downloads/AGENT.md" \
-  -F "externalRef=rag-md-003" \
-  -F "title=agent文档"
+  -F "file=@/Users/polaris/Downloads/AGENT.md"
 ```
 
+Multipart 上传时，`sourceType`、`sourceUri`、`externalRef`、`title` 会从 Markdown frontmatter / 正文标题 / 文件名中自动推导，不需要作为表单字段手动上传。

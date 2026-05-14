@@ -24,6 +24,8 @@
         <rocketmq.version>2.3.5</rocketmq.version>
         <openai.version>4.11.0</openai.version>
         <native.maven.plugin.version>0.11.3</native.maven.plugin.version>
+        <opentelemetry-instrumentation-alpha.version>2.27.0-alpha</opentelemetry-instrumentation-alpha.version>
+        <protobuf.version>4.32.0</protobuf.version>
     </properties>
 
     <dependencies>
@@ -57,6 +59,18 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!-- OpenTelemetry OTLP export for metrics, traces and logs -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-opentelemetry</artifactId>
+        </dependency>
+
+        <!-- Bridges Logback events into the OpenTelemetry logging SDK -->
+        <dependency>
+            <groupId>io.opentelemetry.instrumentation</groupId>
+            <artifactId>opentelemetry-logback-appender-1.0</artifactId>
+        </dependency>
+
         <!-- mail -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -73,12 +87,6 @@
         <dependency>
             <groupId>org.springframework.modulith</groupId>
             <artifactId>spring-modulith-actuator</artifactId>
-        </dependency>
-
-        <!-- security exception types used by GlobalExceptionHandler -->
-        <dependency>
-            <groupId>org.springframework.security</groupId>
-            <artifactId>spring-security-core</artifactId>
         </dependency>
 
         <!-- rocketmq 5.x grpc spring boot -->
@@ -216,6 +224,18 @@
     <dependencyManagement>
         <dependencies>
             <dependency>
+                <groupId>io.opentelemetry.instrumentation</groupId>
+                <artifactId>opentelemetry-instrumentation-bom-alpha</artifactId>
+                <version>${opentelemetry-instrumentation-alpha.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>com.google.protobuf</groupId>
+                <artifactId>protobuf-java</artifactId>
+                <version>${protobuf.version}</version>
+            </dependency>
+            <dependency>
                 <groupId>org.springframework.ai</groupId>
                 <artifactId>spring-ai-bom</artifactId>
                 <version>${spring-ai.version}</version>
@@ -260,6 +280,11 @@
                     <plugin>
                         <groupId>org.graalvm.buildtools</groupId>
                         <artifactId>native-maven-plugin</artifactId>
+                        <configuration>
+                            <buildArgs>
+                                <buildArg>--initialize-at-run-time=io.grpc.netty.shaded.io.netty</buildArg>
+                            </buildArgs>
+                        </configuration>
                         <executions>
                             <execution>
                                 <id>add-reachability-metadata</id>

@@ -223,8 +223,6 @@ CREATE TABLE IF NOT EXISTS rag_conversations (
     created_at      TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
     last_message_at TIMESTAMPTZ(6),
-    CONSTRAINT fk_rag_conversations_user
-        FOREIGN KEY (user_id) REFERENCES rag_users(user_id),
     CONSTRAINT rag_conversations_status_chk
         CHECK (status IN ('ACTIVE', 'ARCHIVED', 'DELETED'))
 );
@@ -244,8 +242,6 @@ CREATE TABLE IF NOT EXISTS rag_conversation_messages (
     sequence_no     INTEGER        NOT NULL,
     metadata        JSONB          NOT NULL DEFAULT '{}'::jsonb,
     created_at      TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
-    CONSTRAINT fk_rag_messages_conversation
-        FOREIGN KEY (conversation_id) REFERENCES rag_conversations(id) ON DELETE CASCADE,
     CONSTRAINT rag_messages_role_chk
         CHECK (role IN ('user', 'assistant', 'system')),
     CONSTRAINT rag_messages_status_chk
@@ -280,12 +276,6 @@ CREATE TABLE IF NOT EXISTS rag_ask_runs (
     error_message        TEXT,
     started_at           TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
     completed_at         TIMESTAMPTZ(6),
-    CONSTRAINT fk_rag_ask_runs_conversation
-        FOREIGN KEY (conversation_id) REFERENCES rag_conversations(id) ON DELETE CASCADE,
-    CONSTRAINT fk_rag_ask_runs_user_message
-        FOREIGN KEY (user_message_id) REFERENCES rag_conversation_messages(id),
-    CONSTRAINT fk_rag_ask_runs_assistant_message
-        FOREIGN KEY (assistant_message_id) REFERENCES rag_conversation_messages(id),
     CONSTRAINT rag_ask_runs_status_chk
         CHECK (status IN ('RUNNING', 'SUCCEEDED', 'FAILED'))
 );
@@ -297,5 +287,17 @@ CREATE INDEX IF NOT EXISTS idx_rag_ask_runs_conversation_started
 CREATE UNIQUE INDEX IF NOT EXISTS uq_rag_ask_runs_request
     ON rag_ask_runs(user_id, conversation_id, request_id)
     WHERE request_id IS NOT NULL;
+
+-- 数据库层禁止使用外键约束；兼容已初始化过的环境，显式移除历史外键。
+ALTER TABLE rag_conversations
+    DROP CONSTRAINT IF EXISTS fk_rag_conversations_user;
+ALTER TABLE rag_conversation_messages
+    DROP CONSTRAINT IF EXISTS fk_rag_messages_conversation;
+ALTER TABLE rag_ask_runs
+    DROP CONSTRAINT IF EXISTS fk_rag_ask_runs_conversation;
+ALTER TABLE rag_ask_runs
+    DROP CONSTRAINT IF EXISTS fk_rag_ask_runs_user_message;
+ALTER TABLE rag_ask_runs
+    DROP CONSTRAINT IF EXISTS fk_rag_ask_runs_assistant_message;
 
 COMMIT;
