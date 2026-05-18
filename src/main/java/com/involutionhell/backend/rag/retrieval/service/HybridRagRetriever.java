@@ -1,15 +1,17 @@
 package com.involutionhell.backend.rag.retrieval.service;
 
-import com.involutionhell.backend.rag.shared.properties.RagProperties;
+import com.involutionhell.backend.rag.retrieval.api.RagResponseNoticeView;
 import com.involutionhell.backend.rag.retrieval.model.RagRetrievedChunk;
 import com.involutionhell.backend.rag.retrieval.observability.RagRetrievalMetrics;
 import com.involutionhell.backend.rag.retrieval.support.RagRequestFeedbacks;
 import com.involutionhell.backend.rag.shared.metadata.RagSearchFilter;
+import com.involutionhell.backend.rag.shared.properties.RagProperties;
 import com.involutionhell.backend.rag.shared.support.RagLogHelper;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
-import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.vectorstore.milvus.MilvusVectorStore;
@@ -79,20 +81,21 @@ public class HybridRagRetriever implements RagRetriever {
         String question = request.query();
         RagSearchFilter filter = request.filter();
         RagRetrievalBudget budget = request.budget();
+        Set<RagResponseNoticeView> feedbacks = request.feedbacks();
         // semantic / keyword 互为降级来源，任何单分支慢或失败都不应阻塞另一分支产出结果。
         CompletableFuture<BranchResult> semanticFuture = CompletableFuture.supplyAsync(
-                () -> searchBranch("semantic", () -> ragMilvusRetriever.search(request)),
+                () -> searchBranch("semantic", feedbacks, () -> ragMilvusRetriever.search(request)),
                 ragVirtualThreadExecutor
         );
         CompletableFuture<BranchResult> keywordFuture = CompletableFuture.supplyAsync(
-                () -> searchBranch("keyword", () -> keywordRagRetriever.search(request)),
+                () -> searchBranch("keyword", feedbacks, () -> keywordRagRetriever.search(request)),
                 ragVirtualThreadExecutor
         );
         BranchResult semantic = semanticFuture.join();
         BranchResult keyword = keywordFuture.join();
         if (semantic.failed() && keyword.failed()) {
             recordFallback("hybrid", "all_branches_failed");
-            RagRequestFeedbacks.record("hybrid_retrieve", "all_branches_failed", "混合检索所有分支均失败，已返回空上下文。");
+            RagRequestFeedbacks.record(feedbacks, "hybrid_retrieve", "all_branches_failed", "混合检索所有分支均失败，已返回空上下文。");
         }
         List<RagRetrievedChunk> semanticResults = semantic.results();
         List<RagRetrievedChunk> keywordResults = keyword.results();
@@ -111,13 +114,14 @@ public class HybridRagRetriever implements RagRetriever {
         return joined;
     }
 
-    private BranchResult searchBranch(String branch, BranchSearch search) {
+    private BranchResult searchBranch(String branch, Set<RagResponseNoticeView> feedbacks, BranchSearch search) {
         try {
             return new BranchResult(search.search(), false);
         } catch (RuntimeException exception) {
             // 分支异常在 hybrid 层收敛为 notice，避免一次 Milvus/JDBC 抖动放大成整次问答失败。
             recordFallback(branch, "error");
             RagRequestFeedbacks.record(
+                    feedbacks,
                     "hybrid_retrieve",
                     branch + "_error",
                     ("semantic".equals(branch) ? "语义检索" : "关键词检索") + "分支失败，已跳过该分支。"

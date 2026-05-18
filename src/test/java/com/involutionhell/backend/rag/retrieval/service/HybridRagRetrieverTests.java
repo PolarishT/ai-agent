@@ -1,9 +1,12 @@
 package com.involutionhell.backend.rag.retrieval.service;
 
+import com.involutionhell.backend.rag.retrieval.api.RagResponseNoticeView;
 import com.involutionhell.backend.rag.retrieval.model.RagRetrievedChunk;
+import com.involutionhell.backend.rag.retrieval.support.RagRequestFeedbacks;
 import com.involutionhell.backend.rag.shared.metadata.RagSearchFilter;
 import com.involutionhell.backend.rag.shared.properties.RagProperties;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -57,6 +60,31 @@ class HybridRagRetrieverTests {
             );
 
             assertThat(retriever.search("question", 3, null)).isEmpty();
+        }
+    }
+
+    @Test
+    void recordsBranchFailureNoticeIntoExplicitFeedbacksFromVirtualThread() {
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            Set<RagResponseNoticeView> feedbacks = RagRequestFeedbacks.begin();
+            HybridRagRetriever retriever = retriever(
+                    new FixedMilvusRetriever(new IllegalStateException("milvus down")),
+                    new FixedKeywordRetriever(List.of(chunk(1L, 0, 0.8d))),
+                    executor
+            );
+
+            retriever.search(new RagRetrievalRequest(
+                    "question",
+                    null,
+                    RagRetrievalBudget.legacy(3),
+                    feedbacks
+            ));
+
+            assertThat(RagRequestFeedbacks.snapshot(feedbacks))
+                    .anySatisfy(notice -> {
+                        assertThat(notice.stage()).isEqualTo("hybrid_retrieve");
+                        assertThat(notice.code()).isEqualTo("semantic_error");
+                    });
         }
     }
 

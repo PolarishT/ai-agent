@@ -101,6 +101,30 @@ class RagAskServiceBudgetTests {
     }
 
     @Test
+    void includesAnswerFallbackNoticeWhenChatModelIsUnavailable() {
+        FixedExpander expander = new FixedExpander(List.of("q1"));
+        RecordingPlanner planner = new RecordingPlanner(
+                new RagRetrievalBudget(1, 1, 1, 3, 8, false, "initial"),
+                new RagRetrievalBudget(1, 1, 2, 6, 12, false, "retry")
+        );
+        RecordingRetriever retriever = new RecordingRetriever(ignored -> List.of(chunk(1L)));
+        RagAskService service = service(expander, planner, retriever);
+
+        List<RagAskStreamEvent> events = service.askStream(request(1)).collectList().block();
+
+        RagAskCompletedView completed = (RagAskCompletedView) events.stream()
+                .filter(event -> "completed".equals(event.event()))
+                .findFirst()
+                .orElseThrow()
+                .data();
+        assertThat(completed.degraded()).isTrue();
+        assertThat(completed.notices()).anySatisfy(notice -> {
+            assertThat(notice.stage()).isEqualTo("answer_generate");
+            assertThat(notice.code()).isEqualTo("no_chat_model");
+        });
+    }
+
+    @Test
     void persistsAnswerBeforeEmittingDeltaWhenFinalCompletionFails() {
         FixedExpander expander = new FixedExpander(List.of("q1"));
         RecordingPlanner planner = new RecordingPlanner(
@@ -117,6 +141,22 @@ class RagAskServiceBudgetTests {
         assertThat(events).extracting(RagAskStreamEvent::event).containsSubsequence("answer_delta", "error");
         assertThat(conversationService.streamedAnswer).contains("content 1");
         assertThat(conversationService.failedAnswer).isEqualTo(conversationService.streamedAnswer);
+    }
+
+    @Test
+    void stillEmitsErrorWhenFailureMarkingAlsoFails() {
+        FixedExpander expander = new FixedExpander(List.of("q1"));
+        RecordingPlanner planner = new RecordingPlanner(
+                new RagRetrievalBudget(1, 1, 1, 3, 8, false, "initial"),
+                new RagRetrievalBudget(1, 1, 2, 6, 12, false, "retry")
+        );
+        RecordingRetriever retriever = new RecordingRetriever(ignored -> List.of(chunk(1L)));
+        RagAskService service = service(expander, planner, retriever, new StubConversationService(true, true));
+
+        List<RagAskStreamEvent> events = service.askStream(request(1)).collectList().block();
+
+        assertThat(events).isNotNull();
+        assertThat(events).extracting(RagAskStreamEvent::event).contains("error");
     }
 
     private RagAskService service(
@@ -283,12 +323,18 @@ class RagAskServiceBudgetTests {
     private static final class StubConversationService extends RagConversationService {
 
         private final boolean failComplete;
+        private final boolean failFailureMarking;
         private String streamedAnswer = "";
         private String failedAnswer = "";
 
         private StubConversationService(boolean failComplete) {
+            this(failComplete, false);
+        }
+
+        private StubConversationService(boolean failComplete, boolean failFailureMarking) {
             super(null, null, null, null, null);
             this.failComplete = failComplete;
+            this.failFailureMarking = failFailureMarking;
         }
 
         @Override
@@ -343,6 +389,9 @@ class RagAskServiceBudgetTests {
 
         @Override
         public void failAsk(AskConversationState state, Throwable exception, List<com.involutionhell.backend.rag.retrieval.api.RagResponseNoticeView> notices) {
+            if (failFailureMarking) {
+                throw new IllegalStateException("fail marking failed");
+            }
             failedAnswer = streamedAnswer;
         }
 

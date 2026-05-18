@@ -1,13 +1,16 @@
 package com.involutionhell.backend.rag.retrieval.service;
 
-import com.involutionhell.backend.rag.retrieval.model.RagRetrievedChunk;
-import com.involutionhell.backend.rag.shared.properties.RagProperties;
 import com.involutionhell.backend.rag.indexing.api.IndexingChunkQueryFacade;
 import com.involutionhell.backend.rag.indexing.api.RagChunkSearchView;
+import com.involutionhell.backend.rag.retrieval.api.RagResponseNoticeView;
+import com.involutionhell.backend.rag.retrieval.model.RagRetrievedChunk;
 import com.involutionhell.backend.rag.retrieval.observability.RagRetrievalMetrics;
+import com.involutionhell.backend.rag.retrieval.support.RagRequestFeedbacks;
+import com.involutionhell.backend.rag.retrieval.support.RagStageTimeoutException;
 import com.involutionhell.backend.rag.shared.metadata.RagChunkMetadataHelper;
 import com.involutionhell.backend.rag.shared.metadata.RagChunkMetadataView;
 import com.involutionhell.backend.rag.shared.metadata.RagSearchFilter;
+import com.involutionhell.backend.rag.shared.properties.RagProperties;
 import com.involutionhell.backend.rag.shared.support.RagLogHelper;
 import java.time.Duration;
 import java.util.Comparator;
@@ -21,8 +24,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
-import com.involutionhell.backend.rag.retrieval.support.RagRequestFeedbacks;
-import com.involutionhell.backend.rag.retrieval.support.RagStageTimeoutException;
 
 /**
  * 关键词检索器，既可作为单独回退，也可参与混合检索融合。
@@ -60,6 +61,7 @@ public class KeywordRagRetriever implements RagRetriever {
         String question = request.query();
         RagSearchFilter filter = request.filter();
         RagRetrievalBudget budget = request.budget();
+        Set<RagResponseNoticeView> feedbacks = request.feedbacks();
         int topK = budget.perQueryTopK();
         int candidateTopK = Math.max(topK, budget.keywordCandidateTopK());
         boolean hasFilter = filter != null && !filter.isEmpty();
@@ -103,7 +105,7 @@ public class KeywordRagRetriever implements RagRetriever {
                         hasFilter,
                         RagLogHelper.previewQuestion(question)
                 );
-                RagRequestFeedbacks.recordTimeout("keyword_retrieve", "关键词检索超时，已跳过该检索分支。");
+                RagRequestFeedbacks.recordTimeout(feedbacks, "keyword_retrieve", "关键词检索超时，已跳过该检索分支。");
                 retrievalMetrics.recordFallback("retrieve", "keyword", "timeout");
                 retrievalMetrics.recordStage(
                         "keyword_retrieve",

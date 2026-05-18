@@ -1,5 +1,6 @@
 package com.involutionhell.backend.rag.retrieval.service;
 
+import com.involutionhell.backend.rag.retrieval.api.RagResponseNoticeView;
 import com.involutionhell.backend.rag.retrieval.model.RagRetrievedChunk;
 import com.involutionhell.backend.rag.retrieval.observability.RagRetrievalMetrics;
 import com.involutionhell.backend.rag.retrieval.support.RagRequestFeedbacks;
@@ -7,6 +8,7 @@ import com.involutionhell.backend.rag.shared.properties.RagProperties;
 import com.involutionhell.backend.rag.shared.support.RagLogHelper;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,12 +47,13 @@ public class RagAnswerGenerator {
     public Flux<String> generateStream(
             String question,
             List<RagRetrievedChunk> contexts,
+            Set<RagResponseNoticeView> feedbacks,
             Consumer<Boolean> generatedByModelCallback
     ) {
         if (contexts == null || contexts.isEmpty()) {
             log.debug("Streaming answer generation skipped because no context was retrieved: questionPreview={}", RagLogHelper.previewQuestion(question));
             retrievalMetrics.recordFallback("answer_generate", "answer", "no_context");
-            RagRequestFeedbacks.record("answer_generate", "no_context", "未检索到可用上下文，已返回本地摘要。");
+            RagRequestFeedbacks.record(feedbacks, "answer_generate", "no_context", "未检索到可用上下文，已返回本地摘要。");
             generatedByModelCallback.accept(false);
             return Flux.just(fallback(question, contexts, null).answer());
         }
@@ -58,7 +61,7 @@ public class RagAnswerGenerator {
         if (chatClient == null) {
             log.debug("Streaming answer generation falling back because ChatClient is unavailable: contextCount={}", contexts.size());
             retrievalMetrics.recordFallback("answer_generate", "answer", "no_chat_model");
-            RagRequestFeedbacks.record("answer_generate", "no_chat_model", "大模型不可用，已回退为检索摘要。");
+            RagRequestFeedbacks.record(feedbacks, "answer_generate", "no_chat_model", "大模型不可用，已回退为检索摘要。");
             generatedByModelCallback.accept(false);
             return Flux.just(fallback(question, contexts, null).answer());
         }
@@ -81,7 +84,7 @@ public class RagAnswerGenerator {
                     // 空流对前端等同于无回答，必须转为可见的 fallback delta。
                     log.warn("Streaming answer generation returned empty content, falling back to summary: contextCount={}", contexts.size());
                     retrievalMetrics.recordFallback("answer_generate", "answer", "empty_response");
-                    RagRequestFeedbacks.record("answer_generate", "empty_response", "大模型返回空内容，已回退为检索摘要。");
+                    RagRequestFeedbacks.record(feedbacks, "answer_generate", "empty_response", "大模型返回空内容，已回退为检索摘要。");
                     generatedByModelCallback.accept(false);
                     return Flux.just(fallback(question, contexts, "OpenAI 调用失败，已回退为检索摘要。").answer());
                 }))
@@ -89,7 +92,7 @@ public class RagAnswerGenerator {
                     // SSE 不因模型异常直接中断，优先返回可解释的检索摘要并通过 notice 暴露降级。
                     log.warn("Streaming answer generation failed, falling back to summary: error={}", RagLogHelper.errorSummary(exception));
                     retrievalMetrics.recordFallback("answer_generate", "answer", "error");
-                    RagRequestFeedbacks.record("answer_generate", "error", "大模型生成失败，已回退为检索摘要。");
+                    RagRequestFeedbacks.record(feedbacks, "answer_generate", "error", "大模型生成失败，已回退为检索摘要。");
                     generatedByModelCallback.accept(false);
                     return Flux.just(fallback(question, contexts, "大模型生成失败，已回退为检索摘要。").answer());
                 });

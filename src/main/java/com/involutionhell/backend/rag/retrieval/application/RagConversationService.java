@@ -16,6 +16,7 @@ import com.involutionhell.backend.rag.retrieval.persistence.RagConversationMessa
 import com.involutionhell.backend.rag.retrieval.persistence.RagConversationPage;
 import com.involutionhell.backend.rag.retrieval.persistence.RagConversationRecord;
 import com.involutionhell.backend.rag.retrieval.persistence.RagConversationRepository;
+import com.involutionhell.backend.rag.retrieval.persistence.RagStaleAskRunRecord;
 import com.involutionhell.backend.rag.retrieval.persistence.RagUserRepository;
 import com.involutionhell.backend.rag.shared.metadata.RagSearchFilter;
 import com.involutionhell.backend.rag.shared.support.RagJsonCodec;
@@ -40,6 +41,8 @@ public class RagConversationService {
     private static final int DEFAULT_PAGE_LIMIT = 20;
     private static final int MAX_PAGE_LIMIT = 100;
     private static final String ASK_FAILED_MESSAGE_PREFIX = "本轮问答失败，请重试。原因：";
+    private static final String STALE_ASK_RECOVERY_CODE = "StaleRunningAskRecovered";
+    private static final String STALE_ASK_RECOVERY_MESSAGE = "问答流异常中断且失败标记未及时落库，系统已自动恢复失败状态。";
 
     private final RagUserRepository userRepository;
     private final RagConversationRepository conversationRepository;
@@ -198,6 +201,33 @@ public class RagConversationService {
                 exception.getClass().getSimpleName(),
                 RagLogHelper.errorSummary(exception),
                 notices
+        );
+    }
+
+    @Transactional(readOnly = true)
+    public List<RagStaleAskRunRecord> findStaleRunningAsks(OffsetDateTime startedBefore, int limit) {
+        return askRunRepository.findStaleRunning(startedBefore, limit);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void recoverStaleRunningAsk(RagStaleAskRunRecord staleRun) {
+        if (staleRun == null) {
+            return;
+        }
+        conversationRepository.lockById(staleRun.conversationId());
+        if (staleRun.assistantMessageId() != null) {
+            RagConversationMessageRecord assistantMessage = messageRepository.findById(staleRun.assistantMessageId());
+            String content = StringUtils.hasText(assistantMessage.content())
+                    ? assistantMessage.content()
+                    : ASK_FAILED_MESSAGE_PREFIX + STALE_ASK_RECOVERY_MESSAGE;
+            messageRepository.updateContentAndStatus(staleRun.assistantMessageId(), content, "FAILED");
+        }
+        conversationRepository.refreshStats(staleRun.conversationId());
+        askRunRepository.markFailed(
+                staleRun.runId(),
+                STALE_ASK_RECOVERY_CODE,
+                STALE_ASK_RECOVERY_MESSAGE,
+                List.of(new RagResponseNoticeView("ask", "recovered_failure", STALE_ASK_RECOVERY_MESSAGE))
         );
     }
 

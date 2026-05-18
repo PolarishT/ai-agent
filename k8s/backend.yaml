@@ -1,0 +1,144 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rag
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: rag
+data:
+  SPRING_PROFILES_ACTIVE: "prod"
+  SPRING_APPLICATION_NAME: "backend"
+  SERVER_PORT: "8080"
+  LOGGING_STRUCTURED_ECS_SERVICE_ENVIRONMENT: "prod"
+
+  # PostgreSQL connection. Replace the host/database values for your cluster.
+  PGHOST: "postgresql.rag.svc.cluster.local"
+  PGPORT: "5432"
+  PGDATABASE: "neondb"
+  PGUSER: "neondb_owner"
+  PGSSLMODE: "disable"
+  SPRING_SQL_INIT_MODE: "never"
+
+  # Optional integrations. Enable them only after their services are ready.
+  RAG_MILVUS_ENABLED: "false"
+  RAG_MILVUS_URI: ""
+  RAG_MILVUS_DATABASE_NAME: ""
+  RAG_MILVUS_COLLECTION_NAME: "rag_chunks"
+  RAG_ROCKETMQ_ENABLED: "false"
+  RAG_ROCKETMQ_ENDPOINTS: ""
+  RAG_ROCKETMQ_TOPIC: "rag-index-topic"
+  RAG_ROCKETMQ_CONSUMER_GROUP: "rag-index-consumer"
+
+  # Runtime tuning.
+  RAG_DEFAULT_TOP_K: "6"
+  RAG_CHUNK_SIZE: "400"
+  RAG_CHUNK_OVERLAP: "80"
+  MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,metrics"
+  MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED: "true"
+
+  # OpenTelemetry OTLP export. Replace the service name/namespace with your Fleet APM service.
+  MANAGEMENT_OTLP_METRICS_EXPORT_URL: "http://fleet-apm.elastic-system.svc.cluster.local:8200/v1/metrics"
+  MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT: "http://fleet-apm.elastic-system.svc.cluster.local:8200/v1/traces"
+  MANAGEMENT_OPENTELEMETRY_LOGGING_EXPORT_OTLP_ENDPOINT: "http://fleet-apm.elastic-system.svc.cluster.local:8200/v1/logs"
+  MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "0.1"
+  MANAGEMENT_OPENTELEMETRY_RESOURCE_ATTRIBUTES: "service.name=backend,service.namespace=rag,deployment.environment=prod"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backend-secret
+  namespace: rag
+type: Opaque
+stringData:
+  # Do not commit real secret values here. Replace these before applying.
+  PGPASSWORD: "change-me"
+  OPENAI_API_KEY: "change-me"
+  SPRING_AI_OPENAI_BASE_URL: "https://api.openai.com"
+  RAG_MILVUS_TOKEN: ""
+  # Use "ApiKey <api-key>" instead if your Fleet APM integration authenticates with an API key.
+  MANAGEMENT_OTLP_METRICS_EXPORT_HEADERS_AUTHORIZATION: "Bearer <apm-secret-token>"
+  MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_HEADERS_AUTHORIZATION: "Bearer <apm-secret-token>"
+  MANAGEMENT_OPENTELEMETRY_LOGGING_EXPORT_OTLP_HEADERS_AUTHORIZATION: "Bearer <apm-secret-token>"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: rag
+  labels:
+    app: backend
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: backend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: your-registry.example.com/rag/backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:
+                name: backend-secret
+          readinessProbe:
+            httpGet:
+              path: /api/v1/actuator/health/readiness
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /api/v1/actuator/health/liveness
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: rag
+  labels:
+    app: backend
+spec:
+  type: ClusterIP
+  selector:
+    app: backend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

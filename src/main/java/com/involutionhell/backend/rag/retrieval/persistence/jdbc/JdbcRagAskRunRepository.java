@@ -1,8 +1,12 @@
 package com.involutionhell.backend.rag.retrieval.persistence.jdbc;
 
-import com.involutionhell.backend.rag.retrieval.persistence.RagAskRunRepository;
 import com.involutionhell.backend.rag.retrieval.persistence.RagAskRunRecord;
+import com.involutionhell.backend.rag.retrieval.persistence.RagAskRunRepository;
+import com.involutionhell.backend.rag.retrieval.persistence.RagStaleAskRunRecord;
 import com.involutionhell.backend.rag.shared.support.RagJsonCodec;
+import java.sql.Timestamp;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -88,6 +92,28 @@ public class JdbcRagAskRunRepository implements RagAskRunRepository {
     }
 
     @Override
+    public List<RagStaleAskRunRecord> findStaleRunning(OffsetDateTime startedBefore, int limit) {
+        return jdbc.query(
+                """
+                  SELECT run_id, conversation_id, assistant_message_id, started_at
+                    FROM rag_ask_runs
+                   WHERE status = 'RUNNING'
+                     AND started_at < ?
+                   ORDER BY started_at ASC
+                   LIMIT ?
+                """,
+                (rs, _) -> new RagStaleAskRunRecord(
+                        rs.getString("run_id"),
+                        rs.getLong("conversation_id"),
+                        rs.getLong("assistant_message_id"),
+                        toOffsetDateTime(rs.getTimestamp("started_at"))
+                ),
+                Timestamp.from(startedBefore.toInstant()),
+                limit
+        );
+    }
+
+    @Override
     public void markSucceeded(
             String runId,
             Long assistantMessageId,
@@ -145,5 +171,9 @@ public class JdbcRagAskRunRepository implements RagAskRunRepository {
                 errorMessage,
                 runId
         );
+    }
+
+    private static OffsetDateTime toOffsetDateTime(Timestamp timestamp) {
+        return timestamp == null ? null : timestamp.toInstant().atOffset(ZoneOffset.UTC);
     }
 }

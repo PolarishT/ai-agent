@@ -1,5 +1,6 @@
 package com.involutionhell.backend.rag.retrieval.persistence;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -20,6 +21,8 @@ public interface RagAskRunRepository {
     );
 
     Optional<RagAskRunRecord> findByRequestId(String userId, Long conversationId, String requestId);
+
+    List<RagStaleAskRunRecord> findStaleRunning(OffsetDateTime startedBefore, int limit);
 
     void markSucceeded(
             String runId,

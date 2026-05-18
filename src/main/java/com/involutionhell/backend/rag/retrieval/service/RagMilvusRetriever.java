@@ -1,17 +1,24 @@
 package com.involutionhell.backend.rag.retrieval.service;
 
-import com.involutionhell.backend.rag.retrieval.model.RagRetrievedChunk;
-import com.involutionhell.backend.rag.shared.properties.RagProperties;
 import com.involutionhell.backend.rag.indexing.api.IndexingChunkQueryFacade;
 import com.involutionhell.backend.rag.indexing.api.RagChunkSearchView;
+import com.involutionhell.backend.rag.retrieval.api.RagResponseNoticeView;
+import com.involutionhell.backend.rag.retrieval.model.RagRetrievedChunk;
 import com.involutionhell.backend.rag.retrieval.observability.RagRetrievalMetrics;
+import com.involutionhell.backend.rag.retrieval.support.RagRequestFeedbacks;
+import com.involutionhell.backend.rag.retrieval.support.RagStageTimeoutException;
 import com.involutionhell.backend.rag.shared.metadata.RagChunkMetadataHelper;
 import com.involutionhell.backend.rag.shared.metadata.RagChunkMetadataView;
 import com.involutionhell.backend.rag.shared.metadata.RagSearchFilter;
+import com.involutionhell.backend.rag.shared.properties.RagProperties;
 import com.involutionhell.backend.rag.shared.support.RagLogHelper;
-import com.involutionhell.backend.rag.retrieval.support.RagRequestFeedbacks;
-import com.involutionhell.backend.rag.retrieval.support.RagStageTimeoutException;
 import java.time.Duration;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
@@ -27,8 +34,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
-
-import java.util.*;
 
 /**
  * 启用 Milvus 后，改用向量相似度检索。
@@ -74,6 +79,7 @@ public class RagMilvusRetriever implements RagRetriever {
         String question = request.query();
         RagSearchFilter filter = request.filter();
         RagRetrievalBudget budget = request.budget();
+        Set<RagResponseNoticeView> feedbacks = request.feedbacks();
         int topK = budget.perQueryTopK();
         int candidateTopK = Math.max(topK, budget.semanticCandidateTopK());
         boolean hasFilter = filter != null && !filter.isEmpty();
@@ -125,7 +131,7 @@ public class RagMilvusRetriever implements RagRetriever {
                         hasFilter,
                         RagLogHelper.previewQuestion(question)
                 );
-                RagRequestFeedbacks.recordTimeout("semantic_retrieve", "语义检索超时，已跳过该检索分支。");
+                RagRequestFeedbacks.recordTimeout(feedbacks, "semantic_retrieve", "语义检索超时，已跳过该检索分支。");
                 retrievalMetrics.recordFallback("retrieve", "semantic", "timeout");
                 retrievalMetrics.recordStage(
                         "semantic_retrieve",

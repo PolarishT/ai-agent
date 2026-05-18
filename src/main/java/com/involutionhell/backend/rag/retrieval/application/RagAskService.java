@@ -118,8 +118,7 @@ class RagAskService implements RagAskFacade {
                     new RagAskStartedView(correlationId, request.question(), initialState.topK())
             );
             if (conversationState.existing()) {
-                return replayExistingAsk(sequence, correlationId, request.question(), initialState.topK(), conversationState)
-                        .doFinally(ignored -> RagRequestFeedbacks.clear());
+                return replayExistingAsk(sequence, correlationId, request.question(), initialState.topK(), conversationState);
             }
 
             return Flux.concat(
@@ -144,19 +143,18 @@ class RagAskService implements RagAskFacade {
                     .onErrorResume(exception -> {
                         RagAskStreamEvent errorEvent = toErrorEvent(sequence, correlationId, feedbacks, exception);
                         if (askFinalized.compareAndSet(false, true)) {
-                            conversationService.failAsk(conversationState, exception, RagRequestFeedbacks.snapshot());
+                            failAskSafely(conversationState, exception, feedbacks);
                         }
                         return Flux.just(errorEvent);
                     })
                     .doFinally(signalType -> {
                         if (signalType == SignalType.CANCEL && askFinalized.compareAndSet(false, true)) {
-                            conversationService.failAsk(
+                            failAskSafely(
                                     conversationState,
                                     new CancellationException("RAG ask stream cancelled by client"),
-                                    RagRequestFeedbacks.snapshot()
+                                    feedbacks
                             );
                         }
-                        RagRequestFeedbacks.clear();
                     });
         });
     }
@@ -266,10 +264,8 @@ class RagAskService implements RagAskFacade {
         }
         return transform
                 .onErrorResume(TimeoutException.class, exception -> {
-                    // Reactor timeout 可能切到非子虚拟线程，显式恢复反馈集合后才能把 notice 汇总回 completed 事件。
-                    RagRequestFeedbacks.restore(state.feedbacks());
                     retrievalMetrics.recordFallback("query_transform", "transform", "timeout");
-                    RagRequestFeedbacks.recordTimeout("query_transform", "查询改写超时，已使用原始问题继续检索。");
+                    RagRequestFeedbacks.recordTimeout(state.feedbacks(), "query_transform", "查询改写超时，已使用原始问题继续检索。");
                     return Mono.just(new RagQueryTransformationResult(
                             state.request().question(),
                             state.request().question(),
@@ -301,9 +297,8 @@ class RagAskService implements RagAskFacade {
         }
         return expand
                 .onErrorResume(TimeoutException.class, exception -> {
-                    RagRequestFeedbacks.restore(state.initial().feedbacks());
                     retrievalMetrics.recordFallback("query_expand", "multi_query", "timeout");
-                    RagRequestFeedbacks.recordTimeout("query_expand", "查询扩展超时，已使用单查询继续检索。");
+                    RagRequestFeedbacks.recordTimeout(state.initial().feedbacks(), "query_expand", "查询扩展超时，已使用单查询继续检索。");
                     String retrievalQuestion = state.transformedQuery().retrievalQuestion();
                     return Mono.just(new RagQueryExpansionResult(retrievalQuestion, List.of(retrievalQuestion), false, false));
                 })
@@ -347,7 +342,8 @@ class RagAskService implements RagAskFacade {
         Mono<List<RagRetrievedChunk>> retrieve = Mono.fromCallable(() -> ragRetriever.search(new RagRetrievalRequest(
                         query,
                         state.transformed().initial().filter(),
-                        budget
+                        budget,
+                        state.transformed().initial().feedbacks()
                 )))
                 .subscribeOn(ragBlockingScheduler);
         long timeoutMillis = ragProperties.retrieval().queryTimeoutMillis();
@@ -355,12 +351,16 @@ class RagAskService implements RagAskFacade {
             retrieve = retrieve.timeout(Duration.ofMillis(timeoutMillis));
         }
         return retrieve.onErrorResume(exception -> {
-            RagRequestFeedbacks.restore(state.transformed().initial().feedbacks());
             retrievalMetrics.recordFallback("retrieve", "query", isTimeout(exception) ? "timeout" : "error");
             String message = isTimeout(exception)
                     ? "单路检索超时，已跳过该查询分支。"
                     : "单路检索失败，已跳过该查询分支。";
-            RagRequestFeedbacks.record("retrieve", isTimeout(exception) ? "timeout" : "error", message);
+            RagRequestFeedbacks.record(
+                    state.transformed().initial().feedbacks(),
+                    "retrieve",
+                    isTimeout(exception) ? "timeout" : "error",
+                    message
+            );
             log.warn(
                     "RAG query branch failed and will be skipped: queryPreview={}, error={}",
                     RagLogHelper.previewQuestion(query),
@@ -388,8 +388,8 @@ class RagAskService implements RagAskFacade {
         if (!initialBudget.progressiveEnabled() || joined.size() >= initialBudget.answerTopK()) {
             return Mono.just(joined);
         }
-        RagRequestFeedbacks.restore(state.transformed().initial().feedbacks());
         RagRequestFeedbacks.record(
+                state.transformed().initial().feedbacks(),
                 "retrieve",
                 "progressive_widening",
                 "初次召回上下文不足，已触发二次候选集放大。"
@@ -448,7 +448,12 @@ class RagAskService implements RagAskFacade {
                 new RagContextsView(state.contexts().stream().map(this::toContextView).toList())
         );
         Flux<RagAskStreamEvent> answerEvents = answerGenerator
-                .generateStream(request.question(), state.contexts(), generatedByModel::set)
+                .generateStream(
+                        request.question(),
+                        state.contexts(),
+                        state.expanded().transformed().initial().feedbacks(),
+                        generatedByModel::set
+                )
                 .concatMap(delta -> Mono.fromCallable(() -> {
                     answer.append(delta);
                     conversationService.streamAssistantAnswer(
@@ -472,8 +477,7 @@ class RagAskService implements RagAskFacade {
             Set<RagResponseNoticeView> feedbacks
     ) {
         return Flux.defer(() -> {
-            RagRequestFeedbacks.restore(feedbacks);
-            return Flux.fromIterable(RagRequestFeedbacks.snapshot())
+            return Flux.fromIterable(RagRequestFeedbacks.snapshot(feedbacks))
                     .map(notice -> event(sequence, "notice", correlationId, notice));
         });
     }
@@ -486,8 +490,9 @@ class RagAskService implements RagAskFacade {
             AtomicBoolean askFinalized
     ) {
         String correlationId = state.expanded().transformed().initial().correlationId();
-        RagRequestFeedbacks.restore(state.expanded().transformed().initial().feedbacks());
-        List<RagResponseNoticeView> notices = RagRequestFeedbacks.snapshot();
+        List<RagResponseNoticeView> notices = RagRequestFeedbacks.snapshot(
+                state.expanded().transformed().initial().feedbacks()
+        );
         boolean degraded = !notices.isEmpty();
         List<RagContextView> contextViews = state.contexts().stream().map(this::toContextView).toList();
         conversationService.completeAsk(
@@ -558,14 +563,30 @@ class RagAskService implements RagAskFacade {
             Throwable exception
     ) {
         log.error("RAG ask stream failed: correlationId={}", correlationId, exception);
-        RagRequestFeedbacks.restore(feedbacks);
-        RagRequestFeedbacks.record("ask", "error", "问答链路发生异常，流已终止。");
+        RagRequestFeedbacks.record(feedbacks, "ask", "error", "问答链路发生异常，流已终止。");
         return event(
                 sequence,
                 "error",
                 correlationId,
                 new RagStreamErrorView("error", RagLogHelper.errorSummary(exception), true)
         );
+    }
+
+    private void failAskSafely(
+            RagConversationService.AskConversationState conversationState,
+            Throwable exception,
+            Set<RagResponseNoticeView> feedbacks
+    ) {
+        try {
+            conversationService.failAsk(conversationState, exception, RagRequestFeedbacks.snapshot(feedbacks));
+        } catch (RuntimeException failure) {
+            log.error(
+                    "Failed to mark RAG ask as failed; stale ask recovery should repair it later: correlationId={}, error={}",
+                    conversationState == null ? null : conversationState.correlationId(),
+                    RagLogHelper.errorSummary(failure),
+                    failure
+            );
+        }
     }
 
     private RagAskStreamEvent event(AtomicInteger sequence, String eventName, String correlationId, Object data) {
