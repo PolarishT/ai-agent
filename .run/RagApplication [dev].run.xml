@@ -1,9 +1,12 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="RagApplication [dev]" type="SpringBootApplicationConfigurationType" factoryName="Spring Boot">
     <option name="ACTIVE_PROFILES" value="dev" />
-    <module name="backend" />
+    <module name="ai-agent" />
     <option name="SPRING_BOOT_MAIN_CLASS" value="com.bytedance.ai.RagApplication" />
-    <option name="VM_PARAMETERS" value="-javaagent:$PROJECT_DIR$/elastic-otel-javaagent.jar  -Dotel.metric.export.interval=10000 -Dotel.exporter.otlp.endpoint=http://apm-server.interview.svc.cluster.local:8200 -Dotel.exporter.otlp.headers=Authorization=Bearer%20ce144da9728e670f43de75e5b1389e0134f5d16072b1904121f4a528d872dc9e -Dotel.exporter.otlp.protocol=grpc -Dotel.service.name=rag-backend-dev -Dotel.resource.attributes=deployment.environment=dev,service.namespace=rag -Dotel.traces.exporter=otlp -Dotel.metrics.exporter=otlp -Dotel.logs.exporter=otlp -Dotel.instrumentation.micrometer.enabled=true -Dotel.instrumentation.runtime-telemetry.enabled=true -Dotel.instrumentation.runtime-telemetry.emit-experimental-metrics=true -Dotel.instrumentation.runtime-telemetry.emit-experimental-telemetry=true -Dotel.instrumentation.http.server.emit-experimental-telemetry=true -Dotel.instrumentation.servlet.experimental.capture-request-parameters=* -Dotel.traces.sampler=always_on -Dotel.instrumentation.rocketmq-client.enabled=true --enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow" />
+    <!-- 本地默认 -Dotel.sdk.disabled=true：apm-server 在 k8s 集群内，本机无法解析其 DNS。
+         需要本地链路调试时，把 otel.sdk.disabled 改为 false，并通过 kubectl port-forward
+         或 IDEA k8s 隧道把 endpoint 重定向到 http://localhost:8200。 -->
+    <option name="VM_PARAMETERS" value="-javaagent:$PROJECT_DIR$/elastic-otel-javaagent.jar -Dotel.sdk.disabled=true -Dotel.metric.export.interval=10000 -Dotel.exporter.otlp.endpoint=http://apm-server.interview.svc.cluster.local:8200 -Dotel.exporter.otlp.headers=Authorization=Bearer%20ce144da9728e670f43de75e5b1389e0134f5d16072b1904121f4a528d872dc9e -Dotel.exporter.otlp.protocol=grpc -Dotel.service.name=rag-backend-dev -Dotel.resource.attributes=deployment.environment=dev,service.namespace=rag -Dotel.traces.exporter=otlp -Dotel.metrics.exporter=otlp -Dotel.logs.exporter=otlp -Dotel.instrumentation.micrometer.enabled=true -Dotel.instrumentation.runtime-telemetry.enabled=true -Dotel.instrumentation.runtime-telemetry.emit-experimental-metrics=true -Dotel.instrumentation.runtime-telemetry.emit-experimental-telemetry=true -Dotel.instrumentation.http.server.emit-experimental-telemetry=true -Dotel.instrumentation.servlet.experimental.capture-request-parameters=* -Dotel.traces.sampler=always_on -Dotel.instrumentation.rocketmq-client.enabled=true --enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow" />
     <method v="2">
       <option name="Make" enabled="true" />
     </method>
