@@ -352,4 +352,26 @@ CREATE TABLE IF NOT EXISTS catalog_sku (
 );
 CREATE INDEX IF NOT EXISTS idx_catalog_sku_spu_id ON catalog_sku (spu_id);
 
+-- catalog 抽属性 Outbox：导入事务内同步写一行，dispatcher 扫描 PENDING 发 RocketMQ；
+-- 与 rag_index_outbox 等价的可靠性级别，但只跨 catalog 侧的属性抽取链路使用。
+CREATE TABLE IF NOT EXISTS catalog_attribute_outbox (
+                                                        id              BIGSERIAL PRIMARY KEY,
+                                                        spu_id          BIGINT         NOT NULL,
+                                                        external_ref    VARCHAR(64)    NOT NULL,
+                                                        payload_json    JSONB          NOT NULL DEFAULT '{}'::jsonb,
+                                                        status          VARCHAR(16)    NOT NULL DEFAULT 'PENDING',
+                                                        attempt_count   INTEGER        NOT NULL DEFAULT 0,
+                                                        last_error      TEXT,
+                                                        next_send_after TIMESTAMPTZ(6),
+                                                        message_id      VARCHAR(128),
+                                                        created_at      TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
+                                                        updated_at      TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
+                                                        CONSTRAINT catalog_attr_outbox_status_chk
+                                                            CHECK (status IN ('PENDING', 'SENDING', 'SENT', 'FAILED'))
+);
+CREATE INDEX IF NOT EXISTS idx_catalog_attr_outbox_status_next
+    ON catalog_attribute_outbox(status, next_send_after);
+CREATE INDEX IF NOT EXISTS idx_catalog_attr_outbox_spu_id
+    ON catalog_attribute_outbox(spu_id);
+
 COMMIT;
