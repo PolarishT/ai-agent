@@ -66,16 +66,16 @@ public class SearchProductsToolCallback implements AgentToolCallback {
     @Override
     public String call(String toolInput) {
         SearchProductsInput input = jsonCodec.read(toolInput, SearchProductsInput.class);
+        return jsonCodec.write(search(input));
+    }
+
+    public SearchProductsOutput search(SearchProductsInput input) {
         if (input == null || !StringUtils.hasText(input.query())) {
             throw new IllegalArgumentException("search_products.query 不能为空");
         }
         List<ProductSearchHit> hits = productSearchSpi.search(toRequest(input));
         List<SpuCardView> cards = enrichWithCatalog(hits);
-        return jsonCodec.write(Map.of(
-                "toolName", TOOL_NAME,
-                "cards", cards,
-                "facetsApplied", facetsApplied(input.slots())
-        ));
+        return new SearchProductsOutput(TOOL_NAME, cards, facetsApplied(input.slots()));
     }
 
     @Override
@@ -206,5 +206,16 @@ public class SearchProductsToolCallback implements AgentToolCallback {
             Integer topK,
             List<String> includeChunkTypes
     ) {
+    }
+
+    public record SearchProductsOutput(
+            String toolName,
+            List<SpuCardView> cards,
+            Map<String, Object> facetsApplied
+    ) {
+        public SearchProductsOutput {
+            cards = cards == null ? List.of() : List.copyOf(cards);
+            facetsApplied = facetsApplied == null ? Map.of() : Map.copyOf(facetsApplied);
+        }
     }
 }
