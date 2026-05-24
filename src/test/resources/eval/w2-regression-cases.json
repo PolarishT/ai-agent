@@ -1,0 +1,419 @@
+{
+  "datasetVersion": "w2-regression-2026-05",
+  "description": "W2 回归集：5 个意图 × 10 题 = 50 题。EvalRunner 据此批量跑 query 并计算 HR@5 / P@5 / 否定违反率。",
+  "catalogFixture": "src/test/resources/sample-catalog.json",
+  "intents": ["basic_recommend", "filter_by_attr", "compare", "negation", "out_of_scope"],
+  "cases": [
+    {
+      "id": "r-bv-01",
+      "category": "basic_recommend",
+      "intent": "RECOMMEND_VAGUE",
+      "query": "推荐一款适合通勤的双肩包",
+      "expectedSpuRefs": ["SPU-0001"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-bv-02",
+      "category": "basic_recommend",
+      "intent": "RECOMMEND_VAGUE",
+      "query": "找件能日常穿的纯棉 T 恤",
+      "expectedSpuRefs": ["SPU-0002"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-bv-03",
+      "category": "basic_recommend",
+      "intent": "RECOMMEND_VAGUE",
+      "query": "户外徒步用的防水冲锋衣",
+      "expectedSpuRefs": ["SPU-0003"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-bv-04",
+      "category": "basic_recommend",
+      "intent": "RECOMMEND_VAGUE",
+      "query": "上班穿的商务西装外套",
+      "expectedSpuRefs": ["SPU-0004"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-bv-05",
+      "category": "basic_recommend",
+      "intent": "RECOMMEND_VAGUE",
+      "query": "降噪好的蓝牙耳机",
+      "expectedSpuRefs": ["SPU-0005"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-bv-06",
+      "category": "basic_recommend",
+      "intent": "RECOMMEND_VAGUE",
+      "query": "拍照清晰的智能手机",
+      "expectedSpuRefs": ["SPU-0006"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-bv-07",
+      "category": "basic_recommend",
+      "intent": "RECOMMEND_VAGUE",
+      "query": "轻薄办公笔记本",
+      "expectedSpuRefs": ["SPU-0007"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-bv-08",
+      "category": "basic_recommend",
+      "intent": "RECOMMEND_VAGUE",
+      "query": "油皮温和的洗面奶",
+      "expectedSpuRefs": ["SPU-0008"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-bv-09",
+      "category": "basic_recommend",
+      "intent": "RECOMMEND_VAGUE",
+      "query": "敏感肌纯物理防晒",
+      "expectedSpuRefs": ["SPU-0009"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-bv-10",
+      "category": "basic_recommend",
+      "intent": "RECOMMEND_VAGUE",
+      "query": "干皮急救补水精华",
+      "expectedSpuRefs": ["SPU-0010"],
+      "mustNotTags": []
+    },
+
+    {
+      "id": "r-fa-01",
+      "category": "filter_by_attr",
+      "intent": "FILTER_BY_ATTR",
+      "query": "200 元以下的双肩包",
+      "expectedSpuRefs": ["SPU-0001"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-fa-02",
+      "category": "filter_by_attr",
+      "intent": "FILTER_BY_ATTR",
+      "query": "1000 元以内能买到的主动降噪蓝牙耳机",
+      "expectedSpuRefs": ["SPU-0005"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-fa-03",
+      "category": "filter_by_attr",
+      "intent": "FILTER_BY_ATTR",
+      "query": "5000 到 7000 元价位的轻薄笔记本",
+      "expectedSpuRefs": ["SPU-0007"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-fa-04",
+      "category": "filter_by_attr",
+      "intent": "FILTER_BY_ATTR",
+      "query": "Sony 品牌的蓝牙耳机",
+      "expectedSpuRefs": ["SPU-0005"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-fa-05",
+      "category": "filter_by_attr",
+      "intent": "FILTER_BY_ATTR",
+      "query": "预算 3000 的拍照旗舰",
+      "expectedSpuRefs": ["SPU-0006"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-fa-06",
+      "category": "filter_by_attr",
+      "intent": "FILTER_BY_ATTR",
+      "query": "300 元以下的纯棉 T 恤",
+      "expectedSpuRefs": ["SPU-0002"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-fa-07",
+      "category": "filter_by_attr",
+      "intent": "FILTER_BY_ATTR",
+      "query": "Columbia 品牌的冲锋衣",
+      "expectedSpuRefs": ["SPU-0003"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-fa-08",
+      "category": "filter_by_attr",
+      "intent": "FILTER_BY_ATTR",
+      "query": "100 到 200 元价位的洁面",
+      "expectedSpuRefs": ["SPU-0008"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-fa-09",
+      "category": "filter_by_attr",
+      "intent": "FILTER_BY_ATTR",
+      "query": "1000 元以下的羊毛西装",
+      "expectedSpuRefs": ["SPU-0004"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-fa-10",
+      "category": "filter_by_attr",
+      "intent": "FILTER_BY_ATTR",
+      "query": "150 元以内的玻尿酸精华",
+      "expectedSpuRefs": ["SPU-0010"],
+      "mustNotTags": []
+    },
+
+    {
+      "id": "r-cmp-01",
+      "category": "compare",
+      "intent": "COMPARE",
+      "query": "对比一下 SPU-0008 和 SPU-0010 哪款更补水",
+      "expectedSpuRefs": ["SPU-0008", "SPU-0010"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-cmp-02",
+      "category": "compare",
+      "intent": "COMPARE",
+      "query": "SPU-0005 和 SPU-0006 哪个更适合学生党",
+      "expectedSpuRefs": ["SPU-0005", "SPU-0006"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-cmp-03",
+      "category": "compare",
+      "intent": "COMPARE",
+      "query": "Sony 蓝牙耳机和小米手机性价比对比",
+      "expectedSpuRefs": ["SPU-0005", "SPU-0006"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-cmp-04",
+      "category": "compare",
+      "intent": "COMPARE",
+      "query": "对比 SPU-0001 和 SPU-0003 谁更适合通勤",
+      "expectedSpuRefs": ["SPU-0001", "SPU-0003"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-cmp-05",
+      "category": "compare",
+      "intent": "COMPARE",
+      "query": "对比 SPU-0009 和 SPU-0010 谁更适合敏感肌",
+      "expectedSpuRefs": ["SPU-0009", "SPU-0010"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-cmp-06",
+      "category": "compare",
+      "intent": "COMPARE",
+      "query": "对比一下 SPU-0002 和 SPU-0004 哪件更正式",
+      "expectedSpuRefs": ["SPU-0002", "SPU-0004"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-cmp-07",
+      "category": "compare",
+      "intent": "COMPARE",
+      "query": "对比 SPU-0007 和 SPU-0006 哪个更适合视频剪辑",
+      "expectedSpuRefs": ["SPU-0007", "SPU-0006"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-cmp-08",
+      "category": "compare",
+      "intent": "COMPARE",
+      "query": "SPU-0008 和 SPU-0009 谁更温和",
+      "expectedSpuRefs": ["SPU-0008", "SPU-0009"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-cmp-09",
+      "category": "compare",
+      "intent": "COMPARE",
+      "query": "对比 SPU-0001 双肩包和 SPU-0007 笔记本",
+      "expectedSpuRefs": ["SPU-0001", "SPU-0007"],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-cmp-10",
+      "category": "compare",
+      "intent": "COMPARE",
+      "query": "SPU-0003 冲锋衣和 SPU-0004 西装外套对比",
+      "expectedSpuRefs": ["SPU-0003", "SPU-0004"],
+      "mustNotTags": []
+    },
+
+    {
+      "id": "r-neg-01",
+      "category": "negation",
+      "intent": "FILTER_BY_ATTR",
+      "query": "推荐防晒霜不含酒精",
+      "expectedSpuRefs": ["SPU-0009"],
+      "mustNotTags": ["酒精"]
+    },
+    {
+      "id": "r-neg-02",
+      "category": "negation",
+      "intent": "FILTER_BY_ATTR",
+      "query": "买款主动降噪蓝牙耳机，非苹果品牌",
+      "expectedSpuRefs": ["SPU-0005"],
+      "mustNotTags": ["苹果"]
+    },
+    {
+      "id": "r-neg-03",
+      "category": "negation",
+      "intent": "FILTER_BY_ATTR",
+      "query": "敏感肌面霜，不要香精和酒精",
+      "expectedSpuRefs": ["SPU-0009", "SPU-0010"],
+      "mustNotTags": ["香精", "酒精"]
+    },
+    {
+      "id": "r-neg-04",
+      "category": "negation",
+      "intent": "FILTER_BY_ATTR",
+      "query": "双肩包不要黑色",
+      "expectedSpuRefs": ["SPU-0001"],
+      "mustNotTags": ["黑色"]
+    },
+    {
+      "id": "r-neg-05",
+      "category": "negation",
+      "intent": "FILTER_BY_ATTR",
+      "query": "买轻薄笔记本，不要 ARM 芯片",
+      "expectedSpuRefs": ["SPU-0007"],
+      "mustNotTags": ["ARM"]
+    },
+    {
+      "id": "r-neg-06",
+      "category": "negation",
+      "intent": "FILTER_BY_ATTR",
+      "query": "想买拍照手机，不要苹果",
+      "expectedSpuRefs": ["SPU-0006"],
+      "mustNotTags": ["苹果"]
+    },
+    {
+      "id": "r-neg-07",
+      "category": "negation",
+      "intent": "FILTER_BY_ATTR",
+      "query": "找件 T 恤，不要化纤",
+      "expectedSpuRefs": ["SPU-0002"],
+      "mustNotTags": ["化纤"]
+    },
+    {
+      "id": "r-neg-08",
+      "category": "negation",
+      "intent": "FILTER_BY_ATTR",
+      "query": "推荐洁面，不要皂基",
+      "expectedSpuRefs": ["SPU-0008"],
+      "mustNotTags": ["皂基"]
+    },
+    {
+      "id": "r-neg-09",
+      "category": "negation",
+      "intent": "FILTER_BY_ATTR",
+      "query": "羊毛西装，非 Hugo Boss 品牌",
+      "expectedSpuRefs": [],
+      "mustNotTags": ["Hugo Boss"]
+    },
+    {
+      "id": "r-neg-10",
+      "category": "negation",
+      "intent": "FILTER_BY_ATTR",
+      "query": "玻尿酸精华，不要防腐剂",
+      "expectedSpuRefs": ["SPU-0010"],
+      "mustNotTags": ["防腐剂"]
+    },
+
+    {
+      "id": "r-oos-01",
+      "category": "out_of_scope",
+      "intent": "OUT_OF_SCOPE",
+      "query": "帮我写一段快排代码",
+      "expectedSpuRefs": [],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-oos-02",
+      "category": "out_of_scope",
+      "intent": "OUT_OF_SCOPE",
+      "query": "讲个笑话",
+      "expectedSpuRefs": [],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-oos-03",
+      "category": "out_of_scope",
+      "intent": "OUT_OF_SCOPE",
+      "query": "今天股票走势怎么样",
+      "expectedSpuRefs": [],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-oos-04",
+      "category": "out_of_scope",
+      "intent": "OUT_OF_SCOPE",
+      "query": "明天上海天气",
+      "expectedSpuRefs": [],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-oos-05",
+      "category": "out_of_scope",
+      "intent": "OUT_OF_SCOPE",
+      "query": "翻译这段英文给我",
+      "expectedSpuRefs": [],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-oos-06",
+      "category": "out_of_scope",
+      "intent": "OUT_OF_SCOPE",
+      "query": "最近的新闻头条有什么",
+      "expectedSpuRefs": [],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-oos-07",
+      "category": "out_of_scope",
+      "intent": "OUT_OF_SCOPE",
+      "query": "写一篇关于 RAG 的论文摘要",
+      "expectedSpuRefs": [],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-oos-08",
+      "category": "out_of_scope",
+      "intent": "OUT_OF_SCOPE",
+      "query": "讲个程序员笑话",
+      "expectedSpuRefs": [],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-oos-09",
+      "category": "out_of_scope",
+      "intent": "OUT_OF_SCOPE",
+      "query": "今天哪只基金涨得最好",
+      "expectedSpuRefs": [],
+      "mustNotTags": []
+    },
+    {
+      "id": "r-oos-10",
+      "category": "out_of_scope",
+      "intent": "OUT_OF_SCOPE",
+      "query": "帮我写代码实现快排",
+      "expectedSpuRefs": [],
+      "mustNotTags": []
+    }
+  ],
+  "metricTargets": {
+    "hitRateAt5Target": 0.85,
+    "precisionAt5Target": 0.60,
+    "negationViolationRateTarget": 0.10,
+    "intentAccuracyTarget": 0.90,
+    "notes": "HR@5：top-5 命中 ≥1 个 expectedSpuRefs 的题目占比；P@5：(top-5 ∩ expected) / 5 求平均；否定违反率：top-5 中包含 mustNotTags 的题目占比（仅 negation 类目）；OOS 题目 HR@5 视为 expectedSpuRefs=[] 的 trivially-true 命中。"
+  }
+}
