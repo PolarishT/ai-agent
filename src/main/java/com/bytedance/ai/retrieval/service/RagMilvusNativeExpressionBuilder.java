@@ -28,6 +28,12 @@ public class RagMilvusNativeExpressionBuilder {
         this.jsonCodec = jsonCodec;
     }
 
+    /**
+     * 构造 Milvus 原生过滤表达式。
+     *
+     * <p>返回 {@code null} 表示"无过滤条件"，调用方在 {@code SearchRequest} 上不应设置该参数；
+     * 返回非空时各表达式以 {@code AND} 串联，保证"全部正向条件命中 AND 全部反向条件未命中"。
+     */
     public String build(RagSearchFilter filter) {
         if (filter == null || filter.isEmpty()) {
             return null;

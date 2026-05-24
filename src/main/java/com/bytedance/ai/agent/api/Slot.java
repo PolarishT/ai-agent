@@ -53,6 +53,9 @@ public record Slot(
 
     /**
      * 给一份保留所有字段、只替换 {@code mustNot} 的副本，供 {@code NegationSlotExtractor} 合并使用。
+     *
+     * <p>典型用法：{@code slot = slot.withMustNot(slot.mustNot().merge(negationExtracted))}，
+     * 把独立抽到的反选并入主 slot，避免在 {@code Slot} 上加 setter 而破坏 record 不可变性。
      */
     public Slot withMustNot(MustNot newMustNot) {
         return new Slot(must, newMustNot, priceRange, categoryHint, brands, scenario);
@@ -119,7 +122,8 @@ public record Slot(
         }
 
         /**
-         * 摊平为字符串列表，方便老调用方（answer 模板、metrics）直接列出"已排除"项。
+         * 摊平为字符串列表（保持插入顺序），方便老调用方（answer 模板、回归指标）直接列出"已排除"项；
+         * 不区分桶来源——客户端展示「已为您排除：酒精、苹果、黑色」时不需要桶名。
          */
         public List<String> flatten() {
             if (isEmpty()) {

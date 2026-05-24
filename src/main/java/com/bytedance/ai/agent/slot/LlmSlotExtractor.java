@@ -93,8 +93,16 @@ public class LlmSlotExtractor implements SlotExtractor {
     }
 
     /**
-     * REFINE 合并策略：以 baseline 为底，delta 中非空的字段覆盖之；
-     * priceRange 取交集（更紧的边界胜出），brands / must 直接以 delta 替换（用户明确说"换品牌"时不带前缀）。
+     * REFINE 合并策略：以上一轮 slot 为 baseline，把本轮 delta 中明确给出的字段叠加上去。
+     *
+     * <p>各字段的合并语义：
+     * <ul>
+     *   <li>{@code must}/{@code brands}：delta 非空 → 整体替换；用户说"换成 X 品牌"时不会带上轮关键词。</li>
+     *   <li>{@code categoryHint}/{@code scenario}：delta 非空 → 覆盖；否则保留 baseline。</li>
+     *   <li>{@code priceRange}：取交集（更紧的边界胜出），实现"再便宜一点"语义。</li>
+     *   <li>{@code mustNot}：这里不处理；反选由 {@code NegationSlotExtractor} 独立抽，
+     *       并在 {@code AgentTurnService} 里通过 {@code slot.mustNot().merge(...)} 合并进来。</li>
+     * </ul>
      */
     Slot mergeForRefine(Slot baseline, Slot delta) {
         if (baseline == null) {
@@ -111,6 +119,10 @@ public class LlmSlotExtractor implements SlotExtractor {
         return new Slot(must, List.of(), priceRange, categoryHint, brands, scenario);
     }
 
+    /**
+     * 区间取交：min 取两者较大值（下限抬高），max 取两者较小值（上限压低）。
+     * 任一端为 null 时表示无约束，由对侧填充。
+     */
     private Slot.PriceRange tightenPriceRange(Slot.PriceRange baseline, Slot.PriceRange delta) {
         if (baseline == null || baseline.isEmpty()) {
             return delta;
@@ -135,6 +147,10 @@ public class LlmSlotExtractor implements SlotExtractor {
         return a.compareTo(b) <= 0 ? a : b;
     }
 
+    /**
+     * 降级路径：无 ChatModel 或 LLM 异常时只用正则抽 priceRange，其它字段全空。
+     * 保证基础"价格区间过滤"在离线 demo 环境里仍然能工作。
+     */
     Slot fallback(String message) {
         return new Slot(List.of(), List.of(), extractPriceRange(message), null, List.of(), null);
     }

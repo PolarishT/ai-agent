@@ -39,6 +39,10 @@ public final class EvalRunner {
         this.facade = facade;
     }
 
+    /**
+     * 跑完整个 dataset；逐题串行调 facade，最后聚合指标。
+     * 不并发：避免 LLM 速率限制和不可控的相互干扰；50 题×几秒一般在分钟级可完成。
+     */
     public Report run(Dataset dataset) {
         List<CaseResult> results = new ArrayList<>(dataset.cases().size());
         for (Case aCase : dataset.cases()) {
@@ -47,6 +51,11 @@ public final class EvalRunner {
         return summarize(dataset, results);
     }
 
+    /**
+     * 单题执行：构造确定性 turnId（{@code eval-turn-<caseId>}）以便 stub facade 反查 case，
+     * 用一个独立的 conversationId 隔离每题（避免上一题的 ConversationMemory 影响下一题的 REFINE 判定）。
+     * 异常被 swallow 进 {@link CaseResult#error}，让回归集即使 LLM 偶发抖动也能跑完。
+     */
     private CaseResult runOne(Case aCase) {
         String conversationId = "eval-conv-" + UUID.randomUUID();
         String turnId = "eval-turn-" + aCase.id();
@@ -88,6 +97,14 @@ public final class EvalRunner {
         return new CaseResult(aCase, detectedIntent, cards, excludedFacets, latencyMs, error);
     }
 
+    /**
+     * 把每题结果聚合成最终 {@link Report}：
+     * <ul>
+     *   <li>{@code overall.*} 是全集求平均；</li>
+     *   <li>{@code byCategory} 按 dataset 声明的 intents 顺序输出，方便 EVAL_RESULTS.md 渲染表格；</li>
+     *   <li>{@code negationViolationRate} 只在 {@code negation} 类目内计算，其它类目为 null。</li>
+     * </ul>
+     */
     Report summarize(Dataset dataset, List<CaseResult> results) {
         // 全局聚合
         int total = results.size();
@@ -180,14 +197,25 @@ public final class EvalRunner {
         return hit;
     }
 
+    /**
+     * HR@5 命中规则：
+     * <ul>
+     *   <li>有期望 SPU 时：top-5 中至少出现一个期望 SPU 即算命中；</li>
+     *   <li>无期望 SPU 时（OOS / 完全反选）：trivially-true ⇔ 完全没召回任何 SPU。
+     *       这一支用来惩罚 OOS 漏判为业务 query 而错召回的情况。</li>
+     * </ul>
+     */
     private boolean hitOrTrivial(CaseResult r, int hit) {
-        // OOS / 反选无期望 SPU 时 trivially-true：只要没召回到任何 SPU 就算通过。
         if (r.aCase().expectedSpuRefs().isEmpty()) {
             return r.cards().isEmpty();
         }
         return hit > 0;
     }
 
+    /**
+     * 否定违反检测：top-5 任一卡片的 title / brand 字段（小写化）包含任何一个 {@code mustNotTags}
+     * 即算违反。这里只用 title + brand，避免对 reasons 中的"无 X"反向语义误报。
+     */
     private boolean negationViolated(CaseResult r) {
         List<String> forbidden = r.aCase().mustNotTags();
         if (forbidden.isEmpty() || r.cards().isEmpty()) {

@@ -23,10 +23,27 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+/**
+ * 商品检索工具：实现 Spring AI 的 {@link org.springframework.ai.tool.ToolCallback}，
+ * W1/W2 由 {@code AgentTurnService} 程序确定性调用（不让 LLM 选）。
+ *
+ * <p>关键链路：
+ * <pre>
+ * Slot + memory.lastTurnSpuRefs
+ *   → ProductSearchSpi 召回（反选场景多召回到 50 条）
+ *   → NegationRerankFilter LLM 二分类剔除假阳
+ *   → 截到 topK
+ *   → CatalogQueryFacade 回填实时 price/stock 拼成 SpuCardView
+ * </pre>
+ *
+ * <p>对外契约（{@link SearchProductsOutput}）：cards + facetsApplied + excludedFacets，
+ * 上游 {@link com.bytedance.ai.agent.application.AgentTurnService} 据此构造 tool.result 事件。
+ */
 @Component
 public class SearchProductsToolCallback implements AgentToolCallback {
 
     public static final String TOOL_NAME = "search_products";
+    /** 客户端可见 topK 上限；超过该值卡片屏幕渲染压力大且 LLM 引用 [#N] 容易混乱。 */
     private static final int DEFAULT_TOP_K = 10;
     /** 反选场景先多召回，再 rerank 剔假阳；避免 mustNot 把候选集压得太薄。 */
     private static final int RECALL_TOP_K_FOR_NEGATION = 50;
@@ -76,6 +93,16 @@ public class SearchProductsToolCallback implements AgentToolCallback {
         return jsonCodec.write(search(input));
     }
 
+    /**
+     * 类型化入口：调用方拼装 {@link SearchProductsInput}（含 Slot），返回结构化 output。
+     *
+     * <p>反选路径与正向路径的差异在 {@link #toRequest} 与 rerank 阶段：
+     * <ul>
+     *   <li>正向：直接召回 topK，无 rerank；</li>
+     *   <li>反向：召回 50 条（{@link #RECALL_TOP_K_FOR_NEGATION}）→ LLM 二分类剔假阳 → 截到 topK，
+     *       同时产出 {@code excludedFacets} 给客户端展示「已为您排除…」。</li>
+     * </ul>
+     */
     public SearchProductsOutput search(SearchProductsInput input) {
         if (input == null || !StringUtils.hasText(input.query())) {
             throw new IllegalArgumentException("search_products.query 不能为空");
@@ -84,6 +111,7 @@ public class SearchProductsToolCallback implements AgentToolCallback {
         List<ProductSearchHit> hits = productSearchSpi.search(toRequest(input, mustNot));
         List<String> excludedFacets = List.of();
         if (!mustNot.isEmpty() && !hits.isEmpty()) {
+            // top-50 召回再交给 LLM 精过滤，弥补 Milvus 表达式无法理解语义否定（如"无酒精"也含"酒精"字串）。
             NegationRerankFilter.Result reranked = negationRerankFilter.apply(hits, mustNot);
             hits = reranked.keepHits();
             excludedFacets = reranked.excludedFacets();
@@ -102,6 +130,11 @@ public class SearchProductsToolCallback implements AgentToolCallback {
         return Set.of(IntentType.RECOMMEND_VAGUE, IntentType.FILTER_BY_ATTR, IntentType.REFINE);
     }
 
+    /**
+     * 把 agent 侧的 {@link SearchProductsInput} 翻译成 retrieval 的 {@link ProductSearchRequest}：
+     * sourceUriPrefix 固定写死成 {@code catalog://spu/}（agent 只检索商品索引，不与其它知识库混淆）；
+     * categoryHint 复用 headingPathContains 做轻量类目过滤；mustNot 拆三桶推到 retrieval。
+     */
     private ProductSearchRequest toRequest(SearchProductsInput input, Slot.MustNot mustNot) {
         return new ProductSearchRequest(
                 buildQuery(input),
@@ -141,6 +174,10 @@ public class SearchProductsToolCallback implements AgentToolCallback {
         return Math.min(topK, DEFAULT_TOP_K);
     }
 
+    /**
+     * 用 {@link CatalogQueryFacade} 回填 SPU 的实时 price/stock，避免给 LLM 喂索引快照的陈旧数据。
+     * spuId 缺失时降级到 externalRef 再查；都查不到就构造 fallback 卡（refId 仍按位置编号）。
+     */
     private List<SpuCardView> enrichWithCatalog(List<ProductSearchHit> hits) {
         if (hits == null || hits.isEmpty()) {
             return List.of();
@@ -215,6 +252,11 @@ public class SearchProductsToolCallback implements AgentToolCallback {
         return images == null || images.isEmpty() ? null : images.getFirst();
     }
 
+    /**
+     * 构造 {@code tool.result.facetsApplied}：把 slot 中真正参与过滤的字段输出给客户端，
+     * 用于"已为您应用：价格≤300 / 品牌=Sony / 排除=酒精" 这类徽章渲染。
+     * 空字段省略，保持客户端 UI 简洁。
+     */
     private Map<String, Object> facetsApplied(Slot slot) {
         Map<String, Object> facets = new LinkedHashMap<>();
         if (slot == null || slot.isEmpty()) {

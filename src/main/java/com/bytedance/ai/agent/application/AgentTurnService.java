@@ -47,10 +47,26 @@ import java.util.UUID;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * Agent 主流程编排，串起一次会话 turn 的完整链路：
+ * <pre>
+ * 幂等检查 → 写 agent_turn(RUNNING) → 写会话消息对(beginTurn) → 加载 ConversationMemory
+ *   → 触发 ConversationSummarizer（每 N 轮）→ 规则意图分类 + 主 slot 抽取
+ *   → NegationSlotExtractor 并入反选 mustNot → 工具执行（search / compare）
+ *   → LLM 流式生成答案 + [#N] 引用抽取 → markSucceeded
+ * </pre>
+ *
+ * <p>异常路径：任意阶段抛出未捕获异常都会进 {@link #failTurn}，落 agent_turn(FAILED) +
+ * 发 {@code turn.error} 事件；上游 SSE 客户端凭此切换降级文案。
+ *
+ * <p>幂等：通过 {@code (userId, conversationId, requestId)} OR {@code turnId} 命中既有行时，
+ * 直接回放 {@code turn.completed} / {@code turn.error}，不会重复触发 LLM 与检索。
+ */
 @Service
 public class AgentTurnService implements AgentTurnFacade {
 
     private static final Logger log = LoggerFactory.getLogger(AgentTurnService.class);
+    /** SSE {@code turn.started.model} 字段使用的版本号；prompt 改版时一并升版便于客户端识别行为差异。 */
     private static final String MODEL_NAME = "agent-answer-v1";
 
     private final AgentTurnPersistenceService persistenceService;
@@ -199,6 +215,10 @@ public class AgentTurnService implements AgentTurnFacade {
         }
     }
 
+    /**
+     * 幂等查找：客户端可能用同一个 turnId 重试，也可能换 turnId 但带相同 requestId。
+     * 两条都查命中即视为既有 turn，跳过整条主流程直接回放。
+     */
     private Optional<AgentTurnRecord> findExistingTurn(TurnExecutionState state) {
         Optional<AgentTurnRecord> byTurnId = persistenceService.findByTurnId(state.turnId);
         if (byTurnId.isPresent()) {
@@ -226,6 +246,13 @@ public class AgentTurnService implements AgentTurnFacade {
         ));
     }
 
+    /**
+     * W1 阶段不让 LLM 选 tool，按 intent → toolRegistry 程序确定性调用。
+     *
+     * <p>REFINE intent 时把上一轮命中的 SPU externalRef 透传给 search_products，
+     * 让检索把召回范围收敛到子集；其它 intent 保持全库检索。
+     * 反选 mustNot 不在这里关心，已经在 main slot 阶段并入 {@code slots.mustNot()}。
+     */
     private void executeTools(
             TurnExecutionState state,
             IntentType intent,
@@ -235,6 +262,7 @@ public class AgentTurnService implements AgentTurnFacade {
             List<SpuCardView> cards,
             List<ToolCallView> toolCalls
     ) {
+        // REFINE：把候选锁到上一轮 SPU 列表，相当于"在这几个里再筛"。
         List<String> restrictToSpuRefs = intent == IntentType.REFINE && memory != null
                 ? memory.lastTurnSpuRefs()
                 : List.of();
@@ -303,6 +331,10 @@ public class AgentTurnService implements AgentTurnFacade {
         return args;
     }
 
+    /**
+     * COMPARE 工具的"对比维度"提示，W1 用最朴素的关键词命中；
+     * W3 接入对比矩阵 LLM-driven 选维度后会被替换。
+     */
     private List<String> compareAspects(String message) {
         List<String> aspects = new ArrayList<>();
         if (message != null && message.contains("保湿")) {
