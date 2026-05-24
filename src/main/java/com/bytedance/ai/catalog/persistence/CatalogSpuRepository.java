@@ -38,6 +38,8 @@ public interface CatalogSpuRepository {
 
     Optional<CatalogSpuRecord> findByExternalRef(String externalRef);
 
+    boolean decreaseStock(Long spuId, int quantity);
+
     /**
      * 标记一次属性抽取尝试开始：PENDING/FAILED -> RUNNING，并累加 attempt_count。
      * 若当前状态非 PENDING/FAILED，则返回 false（避免并发覆盖）。

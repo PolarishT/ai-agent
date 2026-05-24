@@ -13,5 +13,4 @@ public record AgentConversationTurn(
         @NotBlank(message = "content 不能为空")
         @Size(max = 2000, message = "content 最长 2000")
         String content
-) {
-}
+) {}

@@ -2,14 +2,7 @@ package com.bytedance.ai.agent.application;
 
 import com.bytedance.ai.agent.answer.AgentAnswerGenerator;
 import com.bytedance.ai.agent.answer.CitationExtractor;
-import com.bytedance.ai.agent.api.AgentStreamEvent;
-import com.bytedance.ai.agent.api.AgentTurnFacade;
-import com.bytedance.ai.agent.api.AgentTurnRequest;
-import com.bytedance.ai.agent.api.CompareMatrixView;
-import com.bytedance.ai.agent.api.IntentType;
-import com.bytedance.ai.agent.api.Slot;
-import com.bytedance.ai.agent.api.SpuCardView;
-import com.bytedance.ai.agent.api.ToolCallView;
+import com.bytedance.ai.agent.api.*;
 import com.bytedance.ai.agent.intent.IntentClassification;
 import com.bytedance.ai.agent.intent.IntentClassifier;
 import com.bytedance.ai.agent.memory.ConversationMemory;
@@ -18,13 +11,19 @@ import com.bytedance.ai.agent.memory.ConversationSummarizer;
 import com.bytedance.ai.agent.memory.ConversationSummary;
 import com.bytedance.ai.agent.persistence.AgentTurnPersistenceService;
 import com.bytedance.ai.agent.persistence.AgentTurnRecord;
+import com.bytedance.ai.agent.slot.MessageActionExtractor;
+import com.bytedance.ai.agent.slot.MessageActionExtractor.MessageAction;
 import com.bytedance.ai.agent.slot.NegationSlotExtractor;
 import com.bytedance.ai.agent.slot.SlotExtractor;
 import com.bytedance.ai.agent.tool.AgentToolCallback;
 import com.bytedance.ai.agent.tool.ToolRegistry;
-import com.bytedance.ai.agent.tool.impl.CompareProductsToolCallback;
-import com.bytedance.ai.agent.tool.impl.SearchProductsToolCallback;
+import com.bytedance.ai.agent.tool.impl.*;
+import com.bytedance.ai.cart.api.CartItemView;
+import com.bytedance.ai.cart.api.CartView;
 import com.bytedance.ai.infrastructure.config.RagConcurrencyConfiguration;
+import com.bytedance.ai.order.api.OrderItemView;
+import com.bytedance.ai.order.api.PlaceOrderResult;
+import com.bytedance.ai.order.api.PriceChangeView;
 import com.bytedance.ai.retrieval.spi.AgentTurnConversationState;
 import com.bytedance.ai.shared.support.RagJsonCodec;
 import com.bytedance.ai.shared.support.RagLogHelper;
@@ -38,20 +37,14 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.UUID;
-
+import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Agent 主流程编排，串起一次会话 turn 的完整链路：
  * <pre>
  * 幂等检查 → 写 agent_turn(RUNNING) → 写会话消息对(beginTurn) → 加载 ConversationMemory
- *   → 触发 ConversationSummarizer（每 N 轮）→ 规则意图分类 + 主 slot 抽取
+ *   → 触发 ConversationSummarizer（每 N 轮）→ LLM 意图分类 + 主 slot 抽取
  *   → NegationSlotExtractor 并入反选 mustNot → 工具执行（search / compare）
  *   → LLM 流式生成答案 + [#N] 引用抽取 → markSucceeded
  * </pre>
@@ -66,7 +59,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class AgentTurnService implements AgentTurnFacade {
 
     private static final Logger log = LoggerFactory.getLogger(AgentTurnService.class);
-    /** SSE {@code turn.started.model} 字段使用的版本号；prompt 改版时一并升版便于客户端识别行为差异。 */
+    /**
+     * SSE {@code turn.started.model} 字段使用的版本号；prompt 改版时一并升版便于客户端识别行为差异。
+     */
     private static final String MODEL_NAME = "agent-answer-v1";
 
     private final AgentTurnPersistenceService persistenceService;
@@ -76,6 +71,7 @@ public class AgentTurnService implements AgentTurnFacade {
     private final IntentClassifier intentClassifier;
     private final SlotExtractor slotExtractor;
     private final NegationSlotExtractor negationSlotExtractor;
+    private final MessageActionExtractor messageActionExtractor;
     private final ToolRegistry toolRegistry;
     private final AgentAnswerGenerator answerGenerator;
     private final CitationExtractor citationExtractor;
@@ -91,6 +87,7 @@ public class AgentTurnService implements AgentTurnFacade {
             IntentClassifier intentClassifier,
             SlotExtractor slotExtractor,
             NegationSlotExtractor negationSlotExtractor,
+            MessageActionExtractor messageActionExtractor,
             ToolRegistry toolRegistry,
             AgentAnswerGenerator answerGenerator,
             CitationExtractor citationExtractor,
@@ -105,6 +102,7 @@ public class AgentTurnService implements AgentTurnFacade {
         this.intentClassifier = intentClassifier;
         this.slotExtractor = slotExtractor;
         this.negationSlotExtractor = negationSlotExtractor;
+        this.messageActionExtractor = messageActionExtractor;
         this.toolRegistry = toolRegistry;
         this.answerGenerator = answerGenerator;
         this.citationExtractor = citationExtractor;
@@ -115,18 +113,19 @@ public class AgentTurnService implements AgentTurnFacade {
 
     @Override
     public Flux<AgentStreamEvent> turnStream(AgentTurnRequest request) {
-        return Flux.defer(() -> execute(request))
-                .subscribeOn(ragBlockingScheduler);
+        return Mono.fromCallable(() -> prepareTurn(request))
+                .subscribeOn(ragBlockingScheduler)
+                .flatMapMany(this::streamPreparedTurn);
     }
 
-    private Flux<AgentStreamEvent> execute(AgentTurnRequest request) {
+    private PreparedTurn prepareTurn(AgentTurnRequest request) {
         TurnExecutionState state = new TurnExecutionState(request);
-        Optional<AgentTurnRecord> existing = findExistingTurn(state);
-        if (existing.isPresent()) {
-            return replayExisting(existing.get());
-        }
-
         try {
+            Optional<AgentTurnRecord> existing = findExistingTurn(state);
+            if (existing.isPresent()) {
+                return PreparedTurn.replay(replayExisting(existing.get()));
+            }
+
             persistenceService.createRunning(
                     state.turnId,
                     state.correlationId,
@@ -188,7 +187,11 @@ public class AgentTurnService implements AgentTurnFacade {
             if (classification.intent() == IntentType.OUT_OF_SCOPE) {
                 persistenceService.recordToolState(state.turnId, toolCalls, cards);
             } else {
-                executeTools(state, classification.intent(), slots, memory, prefixEvents, cards, toolCalls);
+                // 只对真正消费动作槽的 intent 调 LLM，纯检索类（RECOMMEND/FILTER/REFINE）走默认值省一次 round-trip。
+                MessageAction action = needsActionExtraction(classification.intent())
+                        ? messageActionExtractor.extract(request.message())
+                        : MessageAction.defaults();
+                executeTools(state, classification.intent(), slots, memory, action, prefixEvents, cards, toolCalls);
                 persistenceService.recordToolState(state.turnId, toolCalls, cards);
                 if (cards.isEmpty()) {
                     prefixEvents.add(eventFactory.notice(
@@ -200,19 +203,44 @@ public class AgentTurnService implements AgentTurnFacade {
                 }
             }
 
-            Flux<String> answerStream = answerStream(request, classification.intent(), cards, state.compareMatrix, memory, state.generatedByModel);
-            Flux<AgentStreamEvent> answerEvents = citationExtractor.toAnswerEvents(
-                    answerStream.doOnNext(state.answerText::append),
-                    cards,
-                    state.correlationId,
-                    eventFactory
+            return PreparedTurn.active(
+                    state,
+                    prefixEvents,
+                    answerStream(
+                            request,
+                            classification.intent(),
+                            cards,
+                            state.compareMatrix,
+                            state.cartAnswerText,
+                            memory,
+                            state.generatedByModel
+                    ),
+                    cards
             );
-            Mono<AgentStreamEvent> completed = Mono.fromSupplier(() -> completeTurn(state));
-            return Flux.concat(Flux.fromIterable(prefixEvents), answerEvents, completed)
-                    .onErrorResume(exception -> failTurn(state, exception));
         } catch (Exception exception) {
-            return failTurn(state, exception);
+            return PreparedTurn.failed(state, exception);
         }
+    }
+
+    private Flux<AgentStreamEvent> streamPreparedTurn(PreparedTurn prepared) {
+        if (prepared.replayEvents != null) {
+            return Flux.fromIterable(prepared.replayEvents);
+        }
+        if (prepared.failure != null) {
+            return failTurn(prepared.state, prepared.failure);
+        }
+
+        TurnExecutionState state = prepared.state;
+        Flux<AgentStreamEvent> answerEvents = citationExtractor.toAnswerEvents(
+                prepared.answerStream.doOnNext(state.answerText::append),
+                prepared.cards,
+                state.correlationId,
+                eventFactory
+        );
+        Mono<AgentStreamEvent> completed = Mono.fromCallable(() -> completeTurn(state))
+                .subscribeOn(ragBlockingScheduler);
+        return Flux.concat(Flux.fromIterable(prepared.prefixEvents), answerEvents, completed)
+                .onErrorResume(exception -> failTurn(state, exception));
     }
 
     /**
@@ -227,16 +255,16 @@ public class AgentTurnService implements AgentTurnFacade {
         return persistenceService.findByRequestId(state.request.userId(), state.request.conversationId(), state.requestId);
     }
 
-    private Flux<AgentStreamEvent> replayExisting(AgentTurnRecord record) {
+    private List<AgentStreamEvent> replayExisting(AgentTurnRecord record) {
         if ("FAILED".equals(record.status())) {
-            return Flux.just(eventFactory.turnError(
+            return List.of(eventFactory.turnError(
                     record.correlationId(),
                     record.errorCode() == null ? "AGENT_TURN_FAILED" : record.errorCode(),
                     record.errorMessage() == null ? "历史 turn 已失败" : record.errorMessage(),
                     false
             ));
         }
-        return Flux.just(eventFactory.turnCompleted(
+        return List.of(eventFactory.turnCompleted(
                 record.correlationId(),
                 record.turnId(),
                 record.latencyMs(),
@@ -247,17 +275,20 @@ public class AgentTurnService implements AgentTurnFacade {
     }
 
     /**
-     * W1 阶段不让 LLM 选 tool，按 intent → toolRegistry 程序确定性调用。
-     *
-     * <p>REFINE intent 时把上一轮命中的 SPU externalRef 透传给 search_products，
-     * 让检索把召回范围收敛到子集；其它 intent 保持全库检索。
-     * 反选 mustNot 不在这里关心，已经在 main slot 阶段并入 {@code slots.mustNot()}。
+     * 哪些 intent 需要调 {@link MessageActionExtractor}：
+     * 只有"购物车操作"和"商品对比"会消费 cartAction / quantity / priceConfirm / compareAspects；
+     * 纯检索意图直接用默认值，节省一次 LLM round-trip。
      */
+    private boolean needsActionExtraction(IntentType intent) {
+        return intent == IntentType.CART_OP || intent == IntentType.COMPARE;
+    }
+
     private void executeTools(
             TurnExecutionState state,
             IntentType intent,
             Slot slots,
             ConversationMemory memory,
+            MessageAction action,
             List<AgentStreamEvent> prefixEvents,
             List<SpuCardView> cards,
             List<ToolCallView> toolCalls
@@ -266,84 +297,250 @@ public class AgentTurnService implements AgentTurnFacade {
         List<String> restrictToSpuRefs = intent == IntentType.REFINE && memory != null
                 ? memory.lastTurnSpuRefs()
                 : List.of();
+        List<String> lastTurnSpuRefs = memory == null ? List.of() : memory.lastTurnSpuRefs();
         for (AgentToolCallback callback : toolRegistry.plan(intent)) {
-            Map<String, Object> args = toolArgs(state.request.message(), slots, restrictToSpuRefs);
             String toolName = callback.getToolDefinition().name();
+            if (intent == IntentType.CART_OP && !action.cartAction().toolName().equals(toolName)) {
+                continue;
+            }
+            Map<String, Object> args = toolArgs(state.request, slots, restrictToSpuRefs, lastTurnSpuRefs, action);
             prefixEvents.add(eventFactory.toolCalling(state.correlationId, toolName, args));
             long started = System.nanoTime();
-            if (callback instanceof SearchProductsToolCallback searchProductsTool) {
-                SearchProductsToolCallback.SearchProductsOutput output = searchProductsTool.search(
-                        new SearchProductsToolCallback.SearchProductsInput(
-                                state.request.message(),
-                                slots,
-                                10,
-                                List.of(),
-                                restrictToSpuRefs
-                        )
-                );
-                cards.addAll(output.cards());
-                long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
-                toolCalls.add(new ToolCallView(intent, toolName, args, latencyMs));
-                prefixEvents.add(eventFactory.toolResult(
-                        state.correlationId,
-                        output.toolName(),
-                        output.cards(),
-                        output.facetsApplied(),
-                        output.excludedFacets()
-                ));
-            } else if (callback instanceof CompareProductsToolCallback compareProductsTool) {
-                CompareProductsToolCallback.CompareProductsOutput output = compareProductsTool.compare(
-                        new CompareProductsToolCallback.CompareProductsInput(
-                                state.request.message(),
-                                List.of(),
-                                List.of(),
-                                3,
-                                compareAspects(state.request.message())
-                        )
-                );
-                cards.addAll(output.cards());
-                state.compareMatrix = output.compareMatrix();
-                long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
-                toolCalls.add(new ToolCallView(intent, toolName, args, latencyMs));
-                prefixEvents.add(eventFactory.toolResult(
-                        state.correlationId,
-                        output.toolName(),
-                        output.cards(),
-                        Map.of(),
-                        output.compareMatrix()
-                ));
-            } else {
-                callback.call(jsonCodec.write(args));
-                long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
-                toolCalls.add(new ToolCallView(intent, toolName, args, latencyMs));
+            switch (callback) {
+                case SearchProductsToolCallback searchProductsTool -> {
+                    SearchProductsToolCallback.SearchProductsOutput output = searchProductsTool.search(
+                            new SearchProductsToolCallback.SearchProductsInput(
+                                    state.request.message(),
+                                    slots,
+                                    10,
+                                    List.of(),
+                                    restrictToSpuRefs
+                            )
+                    );
+                    cards.addAll(output.cards());
+                    long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+                    toolCalls.add(new ToolCallView(intent, toolName, args, latencyMs));
+                    prefixEvents.add(eventFactory.toolResult(
+                            state.correlationId,
+                            output.toolName(),
+                            output.cards(),
+                            output.facetsApplied(),
+                            output.excludedFacets()
+                    ));
+                }
+                case CompareProductsToolCallback compareProductsTool -> {
+                    CompareProductsToolCallback.CompareProductsOutput output = compareProductsTool.compare(
+                            new CompareProductsToolCallback.CompareProductsInput(
+                                    state.request.message(),
+                                    List.of(),
+                                    List.of(),
+                                    3,
+                                    action.compareAspects()
+                            )
+                    );
+                    cards.addAll(output.cards());
+                    state.compareMatrix = output.compareMatrix();
+                    long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+                    toolCalls.add(new ToolCallView(intent, toolName, args, latencyMs));
+                    prefixEvents.add(eventFactory.toolResult(
+                            state.correlationId,
+                            output.toolName(),
+                            output.cards(),
+                            Map.of(),
+                            output.compareMatrix()
+                    ));
+                }
+                case AddToCartToolCallback addToCartTool -> {
+                    AddToCartToolCallback.CartToolOutput output = addToCartTool.add(new AddToCartToolCallback.CartToolInput(
+                            state.request.userId(),
+                            state.request.conversationId(),
+                            null,
+                            null,
+                            lastTurnSpuRefs,
+                            action.quantity(),
+                            null
+                    ));
+                    state.cartAnswerText = cartAnswer("已加入购物车", output.cart());
+                    long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+                    toolCalls.add(new ToolCallView(intent, toolName, args, latencyMs));
+                    prefixEvents.add(eventFactory.toolResult(
+                            state.correlationId,
+                            output.toolName(),
+                            List.of(),
+                            cartFacets(output.facetsApplied(), output.cart())
+                    ));
+                }
+                case ListCartToolCallback listCartTool -> {
+                    ListCartToolCallback.CartToolOutput output = listCartTool.list(new ListCartToolCallback.CartToolInput(
+                            state.request.userId(),
+                            state.request.conversationId()
+                    ));
+                    state.cartAnswerText = cartAnswer("当前购物车", output.cart());
+                    long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+                    toolCalls.add(new ToolCallView(intent, toolName, args, latencyMs));
+                    prefixEvents.add(eventFactory.toolResult(state.correlationId, output.toolName(), List.of(), cartFacets(output.facetsApplied(), output.cart())));
+                }
+                case RemoveFromCartToolCallback removeFromCartTool -> {
+                    RemoveFromCartToolCallback.CartToolOutput output = removeFromCartTool.remove(new RemoveFromCartToolCallback.CartToolInput(
+                            state.request.userId(),
+                            state.request.conversationId(),
+                            null,
+                            null,
+                            null,
+                            lastTurnSpuRefs
+                    ));
+                    state.cartAnswerText = cartAnswer("已从购物车移除", output.cart());
+                    long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+                    toolCalls.add(new ToolCallView(intent, toolName, args, latencyMs));
+                    prefixEvents.add(eventFactory.toolResult(state.correlationId, output.toolName(), List.of(), cartFacets(output.facetsApplied(), output.cart())));
+                }
+                case UpdateCartQtyToolCallback updateCartQtyTool -> {
+                    UpdateCartQtyToolCallback.CartToolOutput output = updateCartQtyTool.update(new UpdateCartQtyToolCallback.CartToolInput(
+                            state.request.userId(),
+                            state.request.conversationId(),
+                            null,
+                            null,
+                            null,
+                            lastTurnSpuRefs,
+                            action.quantity()
+                    ));
+                    state.cartAnswerText = cartAnswer("已更新购物车数量", output.cart());
+                    long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+                    toolCalls.add(new ToolCallView(intent, toolName, args, latencyMs));
+                    prefixEvents.add(eventFactory.toolResult(state.correlationId, output.toolName(), List.of(), cartFacets(output.facetsApplied(), output.cart())));
+                }
+                case PlaceOrderToolCallback placeOrderTool -> {
+                    PlaceOrderToolCallback.PlaceOrderOutput output = placeOrderTool.place(new PlaceOrderToolCallback.PlaceOrderInput(
+                            state.request.userId(),
+                            state.request.conversationId(),
+                            Map.of(),
+                            action.priceChangeConfirmed()
+                    ));
+                    state.cartAnswerText = orderAnswer(output.result());
+                    long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+                    toolCalls.add(new ToolCallView(intent, toolName, args, latencyMs));
+                    prefixEvents.add(eventFactory.toolResult(
+                            state.correlationId,
+                            output.toolName(),
+                            List.of(),
+                            orderFacets(output.facetsApplied(), output.result())
+                    ));
+                }
+                default -> {
+                    callback.call(jsonCodec.write(args));
+                    long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+                    toolCalls.add(new ToolCallView(intent, toolName, args, latencyMs));
+                }
             }
         }
     }
 
-    private Map<String, Object> toolArgs(String message, Slot slots, List<String> restrictToSpuRefs) {
+    private Map<String, Object> toolArgs(
+            AgentTurnRequest request,
+            Slot slots,
+            List<String> restrictToSpuRefs,
+            List<String> lastTurnSpuRefs,
+            MessageAction action
+    ) {
         Map<String, Object> args = new LinkedHashMap<>();
-        args.put("query", message);
+        args.put("query", request.message());
+        args.put("userId", request.userId());
+        args.put("conversationId", request.conversationId());
         args.put("slots", slots);
         args.put("topK", 10);
         args.put("includeChunkTypes", List.of());
         args.put("restrictToSpuRefs", restrictToSpuRefs == null ? List.of() : restrictToSpuRefs);
-        args.put("compareAspects", compareAspects(message));
+        args.put("lastTurnSpuRefs", lastTurnSpuRefs == null ? List.of() : lastTurnSpuRefs);
+        args.put("cartAction", action.cartAction().name());
+        args.put("quantity", action.quantity());
+        args.put("priceChangeConfirmed", action.priceChangeConfirmed());
+        args.put("compareAspects", action.compareAspects());
         return args;
     }
 
-    /**
-     * COMPARE 工具的"对比维度"提示，W1 用最朴素的关键词命中；
-     * W3 接入对比矩阵 LLM-driven 选维度后会被替换。
-     */
-    private List<String> compareAspects(String message) {
-        List<String> aspects = new ArrayList<>();
-        if (message != null && message.contains("保湿")) {
-            aspects.add("保湿");
+    private Map<String, Object> cartFacets(Map<String, Object> base, CartView cart) {
+        Map<String, Object> facets = new LinkedHashMap<>(base == null ? Map.of() : base);
+        facets.put("cart", cart);
+        return facets;
+    }
+
+    private Map<String, Object> orderFacets(Map<String, Object> base, PlaceOrderResult result) {
+        Map<String, Object> facets = new LinkedHashMap<>(base == null ? Map.of() : base);
+        facets.put("placed", result.placed());
+        facets.put("confirmationRequired", result.confirmationRequired());
+        facets.put("code", result.code());
+        if (result.order() != null) {
+            facets.put("order", result.order());
         }
-        if (message != null && message.contains("性价比")) {
-            aspects.add("性价比");
+        if (!result.priceChanges().isEmpty()) {
+            facets.put("priceChanges", result.priceChanges());
         }
-        return aspects;
+        return facets;
+    }
+
+    private String orderAnswer(PlaceOrderResult result) {
+        if (result.confirmationRequired()) {
+            StringBuilder builder = new StringBuilder("商品价格已变化，请确认后再下单：");
+            for (PriceChangeView change : result.priceChanges()) {
+                builder.append("\n- ")
+                        .append(change.title())
+                        .append("：购物车价 ")
+                        .append(change.cartUnitPrice())
+                        .append("，当前价 ")
+                        .append(change.currentUnitPrice());
+            }
+            builder.append("\n如果接受新价格，请回复“确认下单”。");
+            return builder.toString();
+        }
+        if (result.order() == null) {
+            return result.message();
+        }
+        StringBuilder builder = new StringBuilder("订单已提交，订单号 ")
+                .append(result.order().orderId())
+                .append("。共 ")
+                .append(result.order().itemCount())
+                .append(" 件，合计 ")
+                .append(result.order().subtotalAmount())
+                .append(" ")
+                .append(result.order().currency())
+                .append("。");
+        int index = 1;
+        for (OrderItemView item : result.order().items()) {
+            builder.append("\n")
+                    .append(index++)
+                    .append(". ")
+                    .append(item.title())
+                    .append(" x ")
+                    .append(item.quantity());
+        }
+        return builder.toString();
+    }
+
+    private String cartAnswer(String prefix, CartView cart) {
+        if (cart == null || cart.items().isEmpty()) {
+            return prefix + "。当前购物车为空。";
+        }
+        StringBuilder builder = new StringBuilder(prefix)
+                .append("。当前购物车共 ")
+                .append(cart.itemCount())
+                .append(" 件，合计 ")
+                .append(cart.subtotalAmount())
+                .append(" ")
+                .append(cart.currency())
+                .append("。");
+        int index = 1;
+        for (CartItemView item : cart.items()) {
+            builder.append("\n")
+                    .append(index++)
+                    .append(". ")
+                    .append(item.title())
+                    .append(" x ")
+                    .append(item.quantity());
+            if (item.lineAmount() != null) {
+                builder.append("，小计 ").append(item.lineAmount());
+            }
+        }
+        return builder.toString();
     }
 
     private Flux<String> answerStream(
@@ -351,12 +548,17 @@ public class AgentTurnService implements AgentTurnFacade {
             IntentType intent,
             List<SpuCardView> cards,
             CompareMatrixView compareMatrix,
+            String cartAnswerText,
             ConversationMemory memory,
             AtomicBoolean generatedByModel
     ) {
         if (intent == IntentType.OUT_OF_SCOPE) {
             generatedByModel.set(false);
             return Flux.just("我只能帮助你挑选和比较商品，暂时不能处理这个请求。你可以告诉我预算、品类或使用场景。");
+        }
+        if (intent == IntentType.CART_OP && StringUtils.hasText(cartAnswerText)) {
+            generatedByModel.set(false);
+            return Flux.just(cartAnswerText);
         }
         return answerGenerator.generateStream(request.message(), cards, compareMatrix, memory, generatedByModel::set);
     }
@@ -382,6 +584,12 @@ public class AgentTurnService implements AgentTurnFacade {
     }
 
     private Flux<AgentStreamEvent> failTurn(TurnExecutionState state, Throwable exception) {
+        return Mono.fromCallable(() -> failTurnBlocking(state, exception))
+                .subscribeOn(ragBlockingScheduler)
+                .flux();
+    }
+
+    private AgentStreamEvent failTurnBlocking(TurnExecutionState state, Throwable exception) {
         String message = RagLogHelper.errorSummary(exception);
         log.warn("agent turn failed: turnId={}, error={}", state.turnId, message, exception);
         if (StringUtils.hasText(state.assistantMessageId)) {
@@ -397,8 +605,45 @@ public class AgentTurnService implements AgentTurnFacade {
         } catch (Exception failException) {
             log.warn("failed to mark agent turn failed: error={}", RagLogHelper.errorSummary(failException));
         }
-        return Flux.just(eventFactory.turnError(state.correlationId, "AGENT_TURN_ERROR", message, false));
+        return eventFactory.turnError(state.correlationId, "AGENT_TURN_ERROR", message, false);
     }
+
+    private record PreparedTurn(TurnExecutionState state, List<AgentStreamEvent> prefixEvents,
+                                Flux<String> answerStream, List<SpuCardView> cards, List<AgentStreamEvent> replayEvents,
+                                Throwable failure) {
+            private PreparedTurn(
+                    TurnExecutionState state,
+                    List<AgentStreamEvent> prefixEvents,
+                    Flux<String> answerStream,
+                    List<SpuCardView> cards,
+                    List<AgentStreamEvent> replayEvents,
+                    Throwable failure
+            ) {
+                this.state = state;
+                this.prefixEvents = prefixEvents == null ? List.of() : List.copyOf(prefixEvents);
+                this.answerStream = answerStream;
+                this.cards = cards == null ? List.of() : List.copyOf(cards);
+                this.replayEvents = replayEvents == null ? null : List.copyOf(replayEvents);
+                this.failure = failure;
+            }
+
+            private static PreparedTurn active(
+                    TurnExecutionState state,
+                    List<AgentStreamEvent> prefixEvents,
+                    Flux<String> answerStream,
+                    List<SpuCardView> cards
+            ) {
+                return new PreparedTurn(state, prefixEvents, answerStream, cards, null, null);
+            }
+
+            private static PreparedTurn replay(List<AgentStreamEvent> replayEvents) {
+                return new PreparedTurn(null, List.of(), Flux.empty(), List.of(), replayEvents, null);
+            }
+
+            private static PreparedTurn failed(TurnExecutionState state, Throwable failure) {
+                return new PreparedTurn(state, List.of(), Flux.empty(), List.of(), null, failure);
+            }
+        }
 
     private static class TurnExecutionState {
         private final AgentTurnRequest request;
@@ -410,6 +655,7 @@ public class AgentTurnService implements AgentTurnFacade {
         private final AtomicBoolean generatedByModel = new AtomicBoolean(false);
         private ConversationSummary memorySummary = ConversationSummary.empty();
         private CompareMatrixView compareMatrix;
+        private String cartAnswerText;
         private String assistantMessageId;
 
         private TurnExecutionState(AgentTurnRequest request) {

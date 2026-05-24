@@ -26,6 +26,12 @@ final class IntentRules {
             Pattern.CASE_INSENSITIVE
     );
 
+    static final Pattern CART = Pattern.compile(
+            ".*(购物车|加购|加入|加到|放到|放进|添加|删掉|删除|移除|拿掉|改成\\s*\\d+|" +
+                    "数量|几件|查看车|看下车|结算|下单|取消).*",
+            Pattern.CASE_INSENSITIVE
+    );
+
     /**
      * REFINE 命中词：用户在已有候选基础上"微调"。
      * 仅当 {@code ConversationMemory.lastTurnSpuRefs()} 非空时才升级为 REFINE，

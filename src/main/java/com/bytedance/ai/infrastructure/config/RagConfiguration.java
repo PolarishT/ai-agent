@@ -3,7 +3,6 @@ package com.bytedance.ai.infrastructure.config;
 import com.bytedance.ai.shared.properties.RagProperties;
 import io.milvus.client.MilvusServiceClient;
 import io.milvus.param.ConnectParam;
-import io.milvus.param.IndexType;
 import io.milvus.param.MetricType;
 import jakarta.annotation.PostConstruct;
 import org.springframework.ai.chat.client.ChatClient;
@@ -24,6 +23,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.util.StringUtils;
 
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -92,7 +92,7 @@ public class RagConfiguration {
                 ragProperties.embeddingModel(),
                 embeddingModel == null ? "<none>" : embeddingModel.getClass().getSimpleName(),
                 configuredDimension,
-                "切换 Doubao-embedding-vision 请同步覆盖 SPRING_AI_OPENAI_BASE_URL / EMBEDDING_MODEL / EMBEDDING_DIMENSIONS 与 RAG_MILVUS_EMBEDDING_DIMENSION"
+                "chat 使用 spring.ai.openai.chat.*，embedding 使用 spring.ai.openai.embedding.*；embedding dimensions 需与 rag.milvus.embedding-dimension 一致"
         );
         if (ragProperties.milvus().enabled() && embeddingModel == null) {
             log.warn("rag.milvus.enabled=true 但没有 EmbeddingModel Bean，向量索引写入会立刻失败");
@@ -149,7 +149,7 @@ public class RagConfiguration {
      * 1. 将 embedding 结果写入 Milvus。
      * 2. 在检索阶段承接 Spring AI 的向量检索调用。
      *
-     * <p>这里固定使用当前项目约定的索引类型、距离度量和 batching 策略。
+     * <p>这里不会初始化或修改 Milvus schema/index，只声明检索时使用的距离度量和 batching 策略。
      *
      * @param milvusClient Milvus gRPC 客户端
      * @param embeddingModel embedding 模型
@@ -165,8 +165,8 @@ public class RagConfiguration {
     ) {
         MilvusVectorStore.Builder builder = MilvusVectorStore.builder(milvusClient, embeddingModel)
                 .collectionName(ragProperties.milvus().collectionName())
-                .indexType(IndexType.IVF_FLAT)
-                .metricType(MetricType.COSINE)
+                // initializeSchema=false means the existing rag_chunks collection and indexes are authoritative.
+                .metricType(resolveMetricType(ragProperties.milvus().metricType()))
                 .batchingStrategy(new TokenCountBatchingStrategy())
                 .initializeSchema(false);
 
@@ -177,8 +177,22 @@ public class RagConfiguration {
         return builder.build();
     }
 
+    private MetricType resolveMetricType(String configuredMetricType) {
+        String metricType = StringUtils.hasText(configuredMetricType)
+                ? configuredMetricType.trim().toUpperCase(Locale.ROOT)
+                : MetricType.COSINE.name();
+        try {
+            return MetricType.valueOf(metricType);
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalStateException(
+                    "rag.milvus.metric-type must match the Milvus vector index metric: COSINE, IP, or L2",
+                    exception
+            );
+        }
+    }
+
     @Bean
-    @ConditionalOnProperty(prefix = "rag.query-expansion", name = {"enabled", "use-model"}, havingValue = "true")
+    @ConditionalOnProperty(prefix = "rag.query-expansion", name = {"enabled", "use-chat-model"}, havingValue = "true")
     @ConditionalOnBean(ChatModel.class)
     public MultiQueryExpander multiQueryExpander(ChatModel chatModel, RagProperties ragProperties) {
         MultiQueryExpander.Builder builder = MultiQueryExpander.builder()
@@ -193,7 +207,7 @@ public class RagConfiguration {
     }
 
     @Bean
-    @ConditionalOnProperty(prefix = "rag.query-transformation", name = {"enabled", "use-model"}, havingValue = "true")
+    @ConditionalOnProperty(prefix = "rag.query-transformation", name = {"enabled", "use-chat-model"}, havingValue = "true")
     @ConditionalOnBean(ChatModel.class)
     public CompressionQueryTransformer compressionQueryTransformer(ChatModel chatModel, RagProperties ragProperties) {
         CompressionQueryTransformer.Builder builder = CompressionQueryTransformer.builder()
@@ -206,7 +220,7 @@ public class RagConfiguration {
     }
 
     @Bean
-    @ConditionalOnProperty(prefix = "rag.query-transformation", name = {"rewrite-enabled", "rewrite-use-model"}, havingValue = "true")
+    @ConditionalOnProperty(prefix = "rag.query-transformation", name = {"rewrite-enabled", "rewrite-use-chat-model"}, havingValue = "true")
     @ConditionalOnBean(ChatModel.class)
     public RewriteQueryTransformer rewriteQueryTransformer(ChatModel chatModel, RagProperties ragProperties) {
         RewriteQueryTransformer.Builder builder = RewriteQueryTransformer.builder()

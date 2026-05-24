@@ -2,16 +2,14 @@ package com.bytedance.ai.agent.intent;
 
 import com.bytedance.ai.agent.api.IntentType;
 import com.bytedance.ai.agent.memory.ConversationMemory;
-import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 /**
- * W1 规则路由：OOS / 价格过滤 / 推荐动词 / RECOMMEND_VAGUE 兜底。
+ * Intent 离线兜底分类器。
  *
- * <p>W2 起接收 {@link ConversationMemory}：当上一轮已经返回过商品卡片且本轮命中
- * REFINE 关键词（"再贵一点 / 便宜些 / 只要 X 品牌"等），改判为 REFINE。
+ * <p>不注册为 Spring Bean；线上主路径使用 {@link LlmIntentClassifier}。
+ * 这里的正则只在 ChatModel 缺席或 LLM 输出异常时兜底，避免 demo 环境完全不可用。
  */
-@Component
 public class RuleBasedIntentClassifier implements IntentClassifier {
 
     @Override
@@ -21,20 +19,23 @@ public class RuleBasedIntentClassifier implements IntentClassifier {
             return fallback();
         }
         if (IntentRules.OUT_OF_SCOPE.matcher(normalized).matches()) {
-            return new IntentClassification(IntentType.OUT_OF_SCOPE, 0.95d, "rule_l1");
+            return new IntentClassification(IntentType.OUT_OF_SCOPE, 0.7d, "fallback");
         }
         if (IntentRules.COMPARE.matcher(normalized).matches()) {
-            return new IntentClassification(IntentType.COMPARE, 0.9d, "rule_l1");
+            return new IntentClassification(IntentType.COMPARE, 0.7d, "fallback");
+        }
+        if (IntentRules.CART.matcher(normalized).matches()) {
+            return new IntentClassification(IntentType.CART_OP, 0.7d, "fallback");
         }
         boolean hasPriorCandidates = memory != null && !memory.lastTurnSpuRefs().isEmpty();
         if (hasPriorCandidates && IntentRules.REFINE.matcher(normalized).matches()) {
-            return new IntentClassification(IntentType.REFINE, 0.9d, "rule_l1");
+            return new IntentClassification(IntentType.REFINE, 0.7d, "fallback");
         }
         if (IntentRules.PRICE.matcher(normalized).matches()) {
-            return new IntentClassification(IntentType.FILTER_BY_ATTR, 0.9d, "rule_l1");
+            return new IntentClassification(IntentType.FILTER_BY_ATTR, 0.7d, "fallback");
         }
         if (IntentRules.RECOMMEND.matcher(normalized).matches()) {
-            return new IntentClassification(IntentType.RECOMMEND_VAGUE, 0.85d, "rule_l2");
+            return new IntentClassification(IntentType.RECOMMEND_VAGUE, 0.65d, "fallback");
         }
         return fallback();
     }

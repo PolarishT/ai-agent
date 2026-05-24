@@ -6,11 +6,9 @@ import com.bytedance.ai.indexing.persistence.RagIndexJobRecord;
 import com.bytedance.ai.indexing.persistence.RagIndexJobRepository;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.statemachine.StateMachine;
-import org.springframework.statemachine.StateMachineEventResult;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import reactor.core.publisher.Mono;
 
 /**
  * 索引工作流统一入口。
@@ -113,13 +111,8 @@ public class IndexWorkflowService {
 
         StateMachine<IndexWorkflowState, IndexWorkflowEvent> stateMachine = stateMachineFactory.create(fromState);
         try {
-            stateMachine.startReactively().block();
-            // 3.x 版本的 sendEvent 需要包装成 Mono<Message>，并返回 Flux<StateMachineEventResult>
-            StateMachineEventResult<IndexWorkflowState, IndexWorkflowEvent> result = stateMachine
-                    .sendEvent(Mono.just(MessageBuilder.withPayload(event).build()))
-                    .blockLast(); // 阻塞等待状态机处理完成
-
-            boolean accepted = result != null && result.getResultType() == StateMachineEventResult.ResultType.ACCEPTED;
+            stateMachine.start();
+            boolean accepted = stateMachine.sendEvent(MessageBuilder.withPayload(event).build());
 
             if (!accepted) {
                 throw new IndexWorkflowTransitionException(
@@ -137,7 +130,7 @@ public class IndexWorkflowService {
                     exception
             );
         } finally {
-            stateMachine.stopReactively().block();
+            stateMachine.stop();
         }
     }
 }

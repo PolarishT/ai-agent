@@ -118,6 +118,25 @@ public class JdbcCatalogSpuRepository implements CatalogSpuRepository {
     }
 
     @Override
+    public boolean decreaseStock(Long spuId, int quantity) {
+        int updated = jdbc.update(
+                """
+                UPDATE catalog_spu
+                   SET stock = stock - ?,
+                       version = version + 1,
+                       updated_at = now()
+                 WHERE id = ?
+                   AND status = 'ACTIVE'
+                   AND stock >= ?
+                """,
+                quantity,
+                spuId,
+                quantity
+        );
+        return updated > 0;
+    }
+
+    @Override
     public boolean markAttributeExtractionRunning(Long spuId) {
         int updated = jdbc.update(
                 """

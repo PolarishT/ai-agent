@@ -20,6 +20,10 @@ import static org.mockito.ArgumentMatchers.anyLong;
 @SpringBootTest(properties = {
         "rag.notification.final-failure-email.enabled=true",
         "rag.notification.message-parse-failure-email.enabled=true",
+        "spring.ai.model.audio.speech=none",
+        "spring.ai.model.audio.transcription=none",
+        "spring.ai.model.image=none",
+        "spring.ai.model.moderation=none",
         // 强制指定发件配置，防止 @Value 注入失败
         "rag.notification.final-failure-email.from=zhangzhenting.lay@gmail.com",
         "rag.notification.final-failure-email.base-url=http://localhost:8080"

@@ -172,6 +172,7 @@ class AgentTurnServiceTests {
                 new com.bytedance.ai.agent.intent.RuleBasedIntentClassifier(),
                 slotExtractor,
                 negationSlotExtractor,
+                ignored -> com.bytedance.ai.agent.slot.MessageActionExtractor.MessageAction.defaults(),
                 new ToolRegistry(List.of(searchProductsTool, compareProductsTool)),
                 new AgentAnswerGenerator(noChatModel(), new ClassPathResource("prompts/agent-answer-v1.txt")),
                 new CitationExtractor(),

@@ -331,6 +331,130 @@ CREATE INDEX IF NOT EXISTS idx_agent_turn_conv_started
 CREATE INDEX IF NOT EXISTS idx_agent_turn_user_started
     ON agent_turn(user_id, started_at DESC);
 
+-- ============== Cart 模块 ==============
+CREATE TABLE IF NOT EXISTS shopping_cart (
+                                             id                    BIGSERIAL PRIMARY KEY,
+                                             cart_id               VARCHAR(64)    NOT NULL UNIQUE,
+                                             user_id               VARCHAR(64)    NOT NULL,
+                                             conversation_id       VARCHAR(64)    NOT NULL,
+                                             state                 VARCHAR(32)    NOT NULL DEFAULT 'IDLE',
+                                             currency              VARCHAR(8)     NOT NULL DEFAULT 'CNY',
+                                             subtotal_amount       NUMERIC(12, 2) NOT NULL DEFAULT 0,
+                                             item_count            INTEGER        NOT NULL DEFAULT 0,
+                                             shipping_address_json JSONB          NOT NULL DEFAULT '{}'::jsonb,
+                                             version               BIGINT         NOT NULL DEFAULT 0,
+                                             created_at            TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
+                                             updated_at            TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
+                                             CONSTRAINT shopping_cart_state_chk
+                                                 CHECK (state IN ('IDLE', 'ITEM_PROPOSED', 'IN_CART', 'CHECKING_OUT', 'PLACED', 'CANCELLED'))
+);
+CREATE INDEX IF NOT EXISTS idx_shopping_cart_user_conversation
+    ON shopping_cart(user_id, conversation_id);
+CREATE INDEX IF NOT EXISTS idx_shopping_cart_state
+    ON shopping_cart(state);
+
+CREATE TABLE IF NOT EXISTS cart_item (
+                                         id             BIGSERIAL PRIMARY KEY,
+                                         cart_id        BIGINT         NOT NULL,
+                                         spu_id         BIGINT         NOT NULL,
+                                         external_ref   VARCHAR(64),
+                                         title          VARCHAR(255)   NOT NULL,
+                                         brand          VARCHAR(64),
+                                         image_url      VARCHAR(512),
+                                         quantity       INTEGER        NOT NULL DEFAULT 1,
+                                         unit_price     NUMERIC(10, 2),
+                                         stock_snapshot INTEGER,
+                                         status         VARCHAR(16)    NOT NULL DEFAULT 'ACTIVE',
+                                         created_at     TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
+                                         updated_at     TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
+                                         CONSTRAINT cart_item_status_chk CHECK (status IN ('ACTIVE', 'REMOVED')),
+                                         CONSTRAINT cart_item_quantity_chk CHECK (quantity > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_cart_item_cart_status
+    ON cart_item(cart_id, status);
+CREATE INDEX IF NOT EXISTS idx_cart_item_spu
+    ON cart_item(spu_id);
+
+CREATE TABLE IF NOT EXISTS cart_transition_audit (
+                                                     id             BIGSERIAL PRIMARY KEY,
+                                                     cart_id        BIGINT,
+                                                     business_cart_id VARCHAR(64),
+                                                     from_state     VARCHAR(32),
+                                                     to_state       VARCHAR(32)    NOT NULL,
+                                                     event          VARCHAR(32)    NOT NULL,
+                                                     triggered_by   VARCHAR(64),
+                                                     success        BOOLEAN        NOT NULL DEFAULT TRUE,
+                                                     failure_reason VARCHAR(64),
+                                                     error_message  TEXT,
+                                                     metadata       JSONB          NOT NULL DEFAULT '{}'::jsonb,
+                                                     created_at     TIMESTAMPTZ(6) NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cart_transition_audit_cart_created
+    ON cart_transition_audit(cart_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_cart_transition_audit_business_cart_created
+    ON cart_transition_audit(business_cart_id, created_at);
+
+-- ============== Order 模块 ==============
+CREATE TABLE IF NOT EXISTS delivery_address (
+                                                id              BIGSERIAL PRIMARY KEY,
+                                                user_id         VARCHAR(64)    NOT NULL,
+                                                receiver_name   VARCHAR(128)   NOT NULL,
+                                                phone           VARCHAR(64)    NOT NULL,
+                                                province        VARCHAR(128),
+                                                city            VARCHAR(128),
+                                                district        VARCHAR(128),
+                                                detail          VARCHAR(512)   NOT NULL,
+                                                postal_code     VARCHAR(32),
+                                                is_default      BOOLEAN        NOT NULL DEFAULT FALSE,
+                                                created_at      TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
+                                                updated_at      TIMESTAMPTZ(6) NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_delivery_address_user_default
+    ON delivery_address(user_id, is_default);
+
+CREATE TABLE IF NOT EXISTS customer_order (
+                                              id                    BIGSERIAL PRIMARY KEY,
+                                              order_id              VARCHAR(64)    NOT NULL UNIQUE,
+                                              cart_id               VARCHAR(64),
+                                              user_id               VARCHAR(64)    NOT NULL,
+                                              conversation_id       VARCHAR(64)    NOT NULL,
+                                              status                VARCHAR(32)    NOT NULL DEFAULT 'PLACED',
+                                              currency              VARCHAR(8)     NOT NULL DEFAULT 'CNY',
+                                              subtotal_amount       NUMERIC(12, 2) NOT NULL DEFAULT 0,
+                                              item_count            INTEGER        NOT NULL DEFAULT 0,
+                                              delivery_address_id   BIGINT,
+                                              delivery_address_json JSONB          NOT NULL DEFAULT '{}'::jsonb,
+                                              price_change_json     JSONB          NOT NULL DEFAULT '[]'::jsonb,
+                                              placed_at             TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
+                                              created_at            TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
+                                              updated_at            TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
+                                              CONSTRAINT customer_order_status_chk
+                                                  CHECK (status IN ('PLACED', 'CANCELLED'))
+);
+CREATE INDEX IF NOT EXISTS idx_customer_order_user_created
+    ON customer_order(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_customer_order_cart_id
+    ON customer_order(cart_id);
+
+CREATE TABLE IF NOT EXISTS order_item (
+                                          id             BIGSERIAL PRIMARY KEY,
+                                          order_id       BIGINT         NOT NULL,
+                                          spu_id         BIGINT         NOT NULL,
+                                          external_ref   VARCHAR(64),
+                                          title          VARCHAR(255)   NOT NULL,
+                                          brand          VARCHAR(64),
+                                          image_url      VARCHAR(512),
+                                          quantity       INTEGER        NOT NULL,
+                                          unit_price     NUMERIC(10, 2),
+                                          line_amount    NUMERIC(12, 2),
+                                          created_at     TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
+                                          CONSTRAINT order_item_quantity_chk CHECK (quantity > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_order_item_order_id
+    ON order_item(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_item_spu
+    ON order_item(spu_id);
+
 -- 数据库层禁止使用外键约束；兼容已初始化过的环境，显式移除历史外键。
 ALTER TABLE rag_conversations
     DROP CONSTRAINT IF EXISTS fk_rag_conversations_user;

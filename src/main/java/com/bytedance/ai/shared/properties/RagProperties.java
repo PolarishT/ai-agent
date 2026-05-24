@@ -227,6 +227,7 @@ public record RagProperties(
      * @param databaseName 目标数据库名
      * @param collectionName 目标集合名
      * @param embeddingDimension 向量维度
+     * @param metricType 目标集合向量索引使用的距离度量；检索请求必须与 Milvus index 保持一致
      * @param similarityThreshold 相似度过滤阈值
      */
     public record Milvus(
@@ -238,11 +239,13 @@ public record RagProperties(
             String collectionName,
             @DefaultValue("1536")
             int embeddingDimension,
+            @DefaultValue("COSINE")
+            String metricType,
             @DefaultValue("0.2")
             double similarityThreshold
     ) {
         public static Milvus defaults() {
-            return new Milvus(false, null, null, null, null, 1536, 0.2d);
+            return new Milvus(false, null, null, null, null, 1536, "COSINE", 0.2d);
         }
     }
 
