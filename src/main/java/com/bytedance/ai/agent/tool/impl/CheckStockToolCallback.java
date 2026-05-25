@@ -6,6 +6,7 @@ import com.bytedance.ai.catalog.api.CatalogQueryFacade;
 import com.bytedance.ai.catalog.api.CatalogSkuView;
 import com.bytedance.ai.catalog.api.CatalogSpuView;
 import com.bytedance.ai.shared.support.RagJsonCodec;
+import org.jspecify.annotations.NonNull;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -23,10 +24,25 @@ public class CheckStockToolCallback implements AgentToolCallback {
             {
               "type":"object",
               "properties":{
-                "spuId":{"type":"integer"},
-                "externalRef":{"type":"string"},
-                "lastTurnSpuRefs":{"type":"array","items":{"type":"string"}}
-              }
+                "spuId":{
+                  "type":"integer",
+                  "description":"商品 SPU ID。只有当用户明确提到商品 ID 时填写，不要猜测"
+                },
+                "externalRef":{
+                  "type":"string",
+                  "description":"商品外部编号，例如 SPU-10001。只有当用户明确提到时填写，不要猜测"
+                },
+                "lastTurnSpuRefs":{
+                  "type":"array",
+                  "items":{"type":"string"},
+                  "description":"上一轮工具返回的商品 externalRef 列表，用于用户说'这个/刚才那个/第一个'时兜底"
+                }
+              },
+              "anyOf":[
+                {"required":["spuId"]},
+                {"required":["externalRef"]},
+                {"required":["lastTurnSpuRefs"]}
+              ]
             }
             """;
 
@@ -39,7 +55,7 @@ public class CheckStockToolCallback implements AgentToolCallback {
     }
 
     @Override
-    public ToolDefinition getToolDefinition() {
+    public @NonNull ToolDefinition getToolDefinition() {
         return ToolDefinition.builder()
                 .name(TOOL_NAME)
                 .description("查询商品 SPU 和 SKU 库存")
@@ -48,21 +64,39 @@ public class CheckStockToolCallback implements AgentToolCallback {
     }
 
     @Override
-    public String call(String toolInput) {
+    public @NonNull String call(@NonNull String toolInput) {
         return jsonCodec.write(check(jsonCodec.read(toolInput, CheckStockInput.class)));
     }
 
     public CheckStockOutput check(CheckStockInput input) {
         CatalogSpuView spu = resolveSpu(input);
+
+        List<SkuStock> skuStocks = spu.skus() == null
+                ? List.of()
+                : spu.skus().stream().map(this::toSkuStock).toList();
+
         return new CheckStockOutput(
                 TOOL_NAME,
                 spu.id(),
                 spu.externalRef(),
                 spu.title(),
                 spu.stock(),
-                spu.stock() != null && spu.stock() > 0,
-                spu.skus().stream().map(this::toSkuStock).toList()
+                available(spu),
+                skuStocks
         );
+    }
+
+    private boolean available(CatalogSpuView spu) {
+        if (spu.stock() != null && spu.stock() > 0) {
+            return true;
+        }
+
+        if (spu.skus() == null || spu.skus().isEmpty()) {
+            return false;
+        }
+
+        return spu.skus().stream()
+                .anyMatch(sku -> sku.stock() != null && sku.stock() > 0);
     }
 
     @Override
@@ -70,10 +104,7 @@ public class CheckStockToolCallback implements AgentToolCallback {
         return Set.of(IntentType.CART_OP, IntentType.REFINE, IntentType.FILTER_BY_ATTR);
     }
 
-    private CatalogSpuView resolveSpu(CheckStockInput input) {
-        if (input != null && input.spuId() != null) {
-            return catalogQueryFacade.getSpu(input.spuId());
-        }
+    private CatalogSpuView resolveSpu(@NonNull CheckStockInput input) {
         String externalRef = resolveExternalRef(input);
         if (StringUtils.hasText(externalRef)) {
             Optional<CatalogSpuView> spu = catalogQueryFacade.findSpuByExternalRef(externalRef);
@@ -84,10 +115,7 @@ public class CheckStockToolCallback implements AgentToolCallback {
         throw new IllegalArgumentException("无法解析要查询库存的商品");
     }
 
-    private String resolveExternalRef(CheckStockInput input) {
-        if (input == null) {
-            return null;
-        }
+    private String resolveExternalRef(@NonNull CheckStockInput input) {
         if (StringUtils.hasText(input.externalRef())) {
             return input.externalRef().trim();
         }

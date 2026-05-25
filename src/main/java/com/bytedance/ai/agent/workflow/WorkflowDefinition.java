@@ -46,8 +46,11 @@ public record WorkflowDefinition(
             String to,
             String whenStatus,
             String whenTargetNode,
-            boolean defaultEdge
+            Boolean defaultEdge
     ) {
+        public boolean isDefaultEdge() {
+            return Boolean.TRUE.equals(defaultEdge);
+        }
     }
 
     public record ToolBinding(

@@ -217,7 +217,9 @@ CREATE TABLE IF NOT EXISTS agent_turn (
     error_code VARCHAR(64),
     error_message CLOB,
     started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    completed_at TIMESTAMP
+    completed_at TIMESTAMP,
+    CONSTRAINT agent_turn_intent_source_chk
+        CHECK (intent_source IN ('rule_l1', 'rule_l2', 'llm', 'fallback', 'workflow'))
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_turn_idempotency

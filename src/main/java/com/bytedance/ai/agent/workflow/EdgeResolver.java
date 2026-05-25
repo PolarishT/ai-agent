@@ -25,7 +25,7 @@ public class EdgeResolver {
             if (StringUtils.hasText(edge.whenTargetNode()) && !edge.whenTargetNode().equals(state.targetNode())) {
                 continue;
             }
-            if (!edge.defaultEdge() || !StringUtils.hasText(state.targetNode())) {
+            if (!edge.isDefaultEdge() || !StringUtils.hasText(state.targetNode())) {
                 return edge.to();
             }
         }

@@ -18,44 +18,71 @@ import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
 /**
- * 商品检索工具：实现 Spring AI 的 {@link org.springframework.ai.tool.ToolCallback}，
- * W1/W2 由 {@code AgentTurnService} 程序确定性调用（不让 LLM 选）。
+ * 商品检索工具。
  *
- * <p>关键链路：
- * <pre>
- * Slot + memory.lastTurnSpuRefs
- *   → ProductSearchSpi 召回（反选场景多召回到 50 条）
- *   → NegationRerankFilter LLM 二分类剔除假阳
- *   → 截到 topK
- *   → CatalogQueryFacade 回填实时 price/stock 拼成 SpuCardView
- * </pre>
- *
- * <p>对外契约（{@link SearchProductsOutput}）：cards + facetsApplied + excludedFacets，
- * 上游 {@link com.bytedance.ai.agent.application.AgentTurnService} 据此构造 tool.result 事件。
+ * <p>职责边界：
+ * <ul>
+ *   <li>只检索商品索引，不检索其它知识库；</li>
+ *   <li>用 ProductSearchSpi 做召回；</li>
+ *   <li>用 NegationRerankFilter 处理反选语义；</li>
+ *   <li>用 CatalogQueryFacade 回填实时商品信息；</li>
+ *   <li>返回 cards、facetsApplied、excludedFacets 给 AgentTurnService 构造 tool.result。</li>
+ * </ul>
  */
 @Component
 public class SearchProductsToolCallback implements AgentToolCallback {
 
     public static final String TOOL_NAME = "search_products";
-    /** 客户端可见 topK 上限；超过该值卡片屏幕渲染压力大且 LLM 引用 [#N] 容易混乱。 */
+
+    private static final String CATALOG_SPU_SOURCE_PREFIX = "catalog://spu/";
+
+    /** 客户端可见 topK 上限；超过该值卡片屏幕渲染压力大，LLM 引用 #N 也容易混乱。 */
     private static final int DEFAULT_TOP_K = 10;
-    /** 反选场景先多召回，再 rerank 剔假阳；避免 mustNot 把候选集压得太薄。 */
+    private static final int MAX_TOP_K = 10;
+    private static final int MIN_TOP_K = 1;
+
+    /** 反选场景先多召回，再 rerank 剔假阳。 */
     private static final int RECALL_TOP_K_FOR_NEGATION = 50;
+
+    private static final int MAX_INCLUDE_CHUNK_TYPES = 8;
+    private static final int MAX_RESTRICT_TO_SPU_REFS = 50;
+    private static final int MAX_REASON_LENGTH = 160;
+
     private static final String INPUT_SCHEMA = """
             {
               "type":"object",
               "properties":{
-                "query":{"type":"string","description":"用户商品检索查询"},
-                "slots":{"type":"object","description":"Agent 已抽取的结构化槽位（含 mustNot）"},
-                "topK":{"type":"integer","minimum":1,"maximum":10},
-                "includeChunkTypes":{"type":"array","items":{"type":"string"}},
-                "restrictToSpuRefs":{"type":"array","items":{"type":"string"}}
+                "query":{
+                  "type":"string",
+                  "description":"用户商品检索查询原文或改写后的检索词，不能为空"
+                },
+                "slots":{
+                  "type":"object",
+                  "description":"Agent 已抽取的结构化槽位，例如价格区间、类目、品牌、must、mustNot 等"
+                },
+                "topK":{
+                  "type":"integer",
+                  "minimum":1,
+                  "maximum":10,
+                  "description":"希望返回的商品卡片数量，默认 10，最大 10"
+                },
+                "includeChunkTypes":{
+                  "type":"array",
+                  "items":{"type":"string"},
+                  "description":"限定检索的 chunk 类型。通常由系统设置，模型不要随意编造"
+                },
+                "restrictToSpuRefs":{
+                  "type":"array",
+                  "items":{"type":"string"},
+                  "description":"限定只在指定 SPU externalRef 范围内检索，用于上一轮商品集合内继续筛选"
+                }
               },
               "required":["query"]
             }
@@ -82,7 +109,12 @@ public class SearchProductsToolCallback implements AgentToolCallback {
     public ToolDefinition getToolDefinition() {
         return ToolDefinition.builder()
                 .name(TOOL_NAME)
-                .description("基于关键词、价格区间、类目、反选属性等在电商商品库内检索")
+                .description("""
+                        基于关键词、价格区间、类目、品牌、正向属性和反选属性在电商商品库内检索商品。
+                        这是只读检索工具，不会修改购物车或订单。
+                        商品卡片中的价格、库存、标题、品牌应以 CatalogQueryFacade 回填的实时信息为准。
+                        当用户要求推荐商品、按条件筛选商品、在上一轮结果里继续细化时调用。
+                        """)
                 .inputSchema(INPUT_SCHEMA)
                 .build();
     }
@@ -90,66 +122,82 @@ public class SearchProductsToolCallback implements AgentToolCallback {
     @Override
     public String call(String toolInput) {
         SearchProductsInput input = jsonCodec.read(toolInput, SearchProductsInput.class);
-        return jsonCodec.write(search(input));
+        SearchProductsOutput output = search(input);
+        return jsonCodec.write(output);
     }
 
-    /**
-     * 类型化入口：调用方拼装 {@link SearchProductsInput}（含 Slot），返回结构化 output。
-     *
-     * <p>反选路径与正向路径的差异在 {@link #toRequest} 与 rerank 阶段：
-     * <ul>
-     *   <li>正向：直接召回 topK，无 rerank；</li>
-     *   <li>反向：召回 50 条（{@link #RECALL_TOP_K_FOR_NEGATION}）→ LLM 二分类剔假阳 → 截到 topK，
-     *       同时产出 {@code excludedFacets} 给客户端展示「已为您排除…」。</li>
-     * </ul>
-     */
     public SearchProductsOutput search(SearchProductsInput input) {
-        if (input == null || !StringUtils.hasText(input.query())) {
-            throw new IllegalArgumentException("search_products.query 不能为空");
-        }
+        validate(input);
+
         Slot.MustNot mustNot = mustNotOf(input.slots());
-        List<ProductSearchHit> hits = productSearchSpi.search(toRequest(input, mustNot));
-        List<String> excludedFacets = List.of();
-        if (!mustNot.isEmpty() && !hits.isEmpty()) {
-            // top-50 召回再交给 LLM 精过滤，弥补 Milvus 表达式无法理解语义否定（如"无酒精"也含"酒精"字串）。
-            NegationRerankFilter.Result reranked = negationRerankFilter.apply(hits, mustNot);
-            hits = reranked.keepHits();
-            excludedFacets = reranked.excludedFacets();
-        }
-        // 截到对外的 topK；rerank 之前用 recall 大池子。
         int finalTopK = effectiveTopK(input.topK());
+
+        ProductSearchRequest request = toRequest(input, mustNot, finalTopK);
+        List<ProductSearchHit> hits = safeHits(productSearchSpi.search(request));
+
+        List<String> excludedFacets = List.of();
+
+        if (!mustNot.isEmpty() && !hits.isEmpty()) {
+            NegationRerankFilter.Result reranked = negationRerankFilter.apply(hits, mustNot);
+            hits = safeHits(reranked == null ? null : reranked.keepHits());
+            excludedFacets = safeStringList(reranked == null ? null : reranked.excludedFacets());
+        }
+
+        hits = deduplicateHits(hits);
+
         if (hits.size() > finalTopK) {
             hits = hits.subList(0, finalTopK);
         }
+
         List<SpuCardView> cards = enrichWithCatalog(hits);
-        return new SearchProductsOutput(TOOL_NAME, cards, facetsApplied(input.slots()), excludedFacets);
+
+        return new SearchProductsOutput(
+                TOOL_NAME,
+                cards,
+                facetsApplied(input.slots(), input, finalTopK, !mustNot.isEmpty()),
+                excludedFacets
+        );
     }
 
     @Override
     public Set<IntentType> handles() {
-        return Set.of(IntentType.RECOMMEND_VAGUE, IntentType.FILTER_BY_ATTR, IntentType.REFINE);
+        return Set.of(
+                IntentType.RECOMMEND_VAGUE,
+                IntentType.FILTER_BY_ATTR,
+                IntentType.REFINE
+        );
     }
 
-    /**
-     * 把 agent 侧的 {@link SearchProductsInput} 翻译成 retrieval 的 {@link ProductSearchRequest}：
-     * sourceUriPrefix 固定写死成 {@code catalog://spu/}（agent 只检索商品索引，不与其它知识库混淆）；
-     * categoryHint 复用 headingPathContains 做轻量类目过滤；mustNot 拆三桶推到 retrieval。
-     */
-    private ProductSearchRequest toRequest(SearchProductsInput input, Slot.MustNot mustNot) {
+    private void validate(SearchProductsInput input) {
+        if (input == null) {
+            throw new IllegalArgumentException("search_products 输入不能为空");
+        }
+
+        if (!StringUtils.hasText(input.query())) {
+            throw new IllegalArgumentException("search_products.query 不能为空");
+        }
+    }
+
+    private ProductSearchRequest toRequest(
+            SearchProductsInput input,
+            Slot.MustNot mustNot,
+            int finalTopK
+    ) {
+        boolean hasNegation = mustNot != null && !mustNot.isEmpty();
+
         return new ProductSearchRequest(
                 buildQuery(input),
                 RagSearchFilter.of(
-                        "catalog://spu/",
+                        CATALOG_SPU_SOURCE_PREFIX,
                         null,
-                        input.slots() == null ? null : input.slots().categoryHint(),
-                        mustNot.tags(),
-                        mustNot.brands(),
-                        mustNot.ingredients()
+                        categoryHintOf(input.slots()),
+                        mustNot == null ? List.of() : safeStringList(mustNot.tags()),
+                        mustNot == null ? List.of() : safeStringList(mustNot.brands()),
+                        mustNot == null ? List.of() : safeStringList(mustNot.ingredients())
                 ),
-                // 反选场景多召回一些，给 rerank 留余量。
-                mustNot.isEmpty() ? effectiveTopK(input.topK()) : RECALL_TOP_K_FOR_NEGATION,
-                input.includeChunkTypes() == null ? List.of() : input.includeChunkTypes(),
-                input.restrictToSpuRefs() == null ? List.of() : input.restrictToSpuRefs()
+                hasNegation ? RECALL_TOP_K_FOR_NEGATION : finalTopK,
+                input.includeChunkTypes(),
+                input.restrictToSpuRefs()
         );
     }
 
@@ -160,36 +208,97 @@ public class SearchProductsToolCallback implements AgentToolCallback {
         return slot.mustNot();
     }
 
+    private String categoryHintOf(Slot slot) {
+        return slot == null ? null : blankToNull(slot.categoryHint());
+    }
+
     private String buildQuery(SearchProductsInput input) {
-        if (input.slots() == null || input.slots().must().isEmpty()) {
-            return input.query().trim();
+        String query = input.query().trim();
+
+        List<String> must = input.slots() == null
+                ? List.of()
+                : safeStringList(input.slots().must());
+
+        if (must.isEmpty()) {
+            return query;
         }
-        return input.query().trim() + " " + String.join(" ", input.slots().must());
+
+        return query + " " + String.join(" ", must);
     }
 
     private int effectiveTopK(Integer topK) {
-        if (topK == null || topK <= 0) {
+        if (topK == null) {
             return DEFAULT_TOP_K;
         }
-        return Math.min(topK, DEFAULT_TOP_K);
+
+        if (topK < MIN_TOP_K) {
+            return DEFAULT_TOP_K;
+        }
+
+        return Math.min(topK, MAX_TOP_K);
+    }
+
+    private List<ProductSearchHit> safeHits(List<ProductSearchHit> hits) {
+        return hits == null ? List.of() : hits;
     }
 
     /**
-     * 用 {@link CatalogQueryFacade} 回填 SPU 的实时 price/stock，避免给 LLM 喂索引快照的陈旧数据。
-     * spuId 缺失时降级到 externalRef 再查；都查不到就构造 fallback 卡（refId 仍按位置编号）。
+     * 检索索引可能因为 chunk 粒度导致同一个 SPU 多次命中。
+     * 对外卡片应按 SPU 去重，否则 LLM 引用 #1/#2 时容易混乱。
+     */
+    private List<ProductSearchHit> deduplicateHits(List<ProductSearchHit> hits) {
+        if (hits == null || hits.isEmpty()) {
+            return List.of();
+        }
+
+        Map<String, ProductSearchHit> deduped = new LinkedHashMap<>();
+
+        for (ProductSearchHit hit : hits) {
+            if (hit == null) {
+                continue;
+            }
+
+            String key = hitKey(hit);
+            if (!StringUtils.hasText(key)) {
+                continue;
+            }
+
+            deduped.putIfAbsent(key, hit);
+        }
+
+        return new ArrayList<>(deduped.values());
+    }
+
+    private String hitKey(ProductSearchHit hit) {
+        if (hit.spuId() != null) {
+            return "spu:" + hit.spuId();
+        }
+
+        if (StringUtils.hasText(hit.externalRef())) {
+            return "ref:" + hit.externalRef().trim();
+        }
+
+        return null;
+    }
+
+    /**
+     * 用 CatalogQueryFacade 回填 SPU 实时 price/stock，避免使用索引快照里的陈旧数据。
      */
     private List<SpuCardView> enrichWithCatalog(List<ProductSearchHit> hits) {
         if (hits == null || hits.isEmpty()) {
             return List.of();
         }
+
         List<SpuCardView> cards = new ArrayList<>(hits.size());
-        for (int i = 0; i < hits.size(); i++) {
-            ProductSearchHit hit = hits.get(i);
+
+        for (ProductSearchHit hit : hits) {
             Optional<CatalogSpuView> spu = resolveSpu(hit);
-            String refId = "#" + (i + 1);
+            String refId = "#" + (cards.size() + 1);
+
             cards.add(spu.map(view -> toCard(view, hit, refId))
                     .orElseGet(() -> fallbackCard(hit, refId)));
         }
+
         return cards;
     }
 
@@ -197,6 +306,7 @@ public class SearchProductsToolCallback implements AgentToolCallback {
         if (hit == null) {
             return Optional.empty();
         }
+
         if (hit.spuId() != null) {
             try {
                 return Optional.of(catalogQueryFacade.getSpu(hit.spuId()));
@@ -204,9 +314,15 @@ public class SearchProductsToolCallback implements AgentToolCallback {
                 // 检索索引可能落后于 catalog，继续尝试 externalRef。
             }
         }
+
         if (StringUtils.hasText(hit.externalRef())) {
-            return catalogQueryFacade.findSpuByExternalRef(hit.externalRef());
+            try {
+                return catalogQueryFacade.findSpuByExternalRef(hit.externalRef().trim());
+            } catch (IllegalArgumentException ignored) {
+                return Optional.empty();
+            }
         }
+
         return Optional.empty();
     }
 
@@ -220,7 +336,7 @@ public class SearchProductsToolCallback implements AgentToolCallback {
                 spu.priceMin(),
                 spu.priceMax(),
                 spu.stock(),
-                hit.score(),
+                safeScore(hit == null ? null : hit.score()),
                 List.of(),
                 reasons(hit),
                 refId
@@ -229,59 +345,160 @@ public class SearchProductsToolCallback implements AgentToolCallback {
 
     private SpuCardView fallbackCard(ProductSearchHit hit, String refId) {
         return new SpuCardView(
-                hit.spuId(),
-                hit.externalRef(),
-                hit.externalRef(),
+                hit == null ? null : hit.spuId(),
+                hit == null ? null : hit.externalRef(),
+                hit == null ? null : fallbackTitle(hit),
                 null,
                 null,
                 null,
                 null,
                 null,
-                hit.score(),
+                safeScore(hit == null ? null : hit.score()),
                 List.of(),
                 reasons(hit),
                 refId
         );
     }
 
+    private String fallbackTitle(ProductSearchHit hit) {
+        if (hit == null) {
+            return null;
+        }
+
+        if (StringUtils.hasText(hit.externalRef())) {
+            return hit.externalRef().trim();
+        }
+
+        return hit.spuId() == null ? "未知商品" : "SPU-" + hit.spuId();
+    }
+
     private List<String> reasons(ProductSearchHit hit) {
-        return StringUtils.hasText(hit.snippet()) ? List.of(hit.snippet()) : List.of();
+        if (hit == null || !StringUtils.hasText(hit.snippet())) {
+            return List.of();
+        }
+
+        return List.of(truncate(hit.snippet().trim(), MAX_REASON_LENGTH));
     }
 
     private String firstImage(List<String> images) {
-        return images == null || images.isEmpty() ? null : images.getFirst();
+        return images == null || images.isEmpty() ? null : images.get(0);
     }
 
     /**
-     * 构造 {@code tool.result.facetsApplied}：把 slot 中真正参与过滤的字段输出给客户端，
-     * 用于"已为您应用：价格≤300 / 品牌=Sony / 排除=酒精" 这类徽章渲染。
-     * 空字段省略，保持客户端 UI 简洁。
+     * 构造 tool.result.facetsApplied。
+     * 只输出真正参与过滤或上下文限制的字段，方便客户端渲染“已应用条件”徽章。
      */
-    private Map<String, Object> facetsApplied(Slot slot) {
+    private Map<String, Object> facetsApplied(
+            Slot slot,
+            SearchProductsInput input,
+            int finalTopK,
+            boolean usedNegationRerank
+    ) {
         Map<String, Object> facets = new LinkedHashMap<>();
+        facets.put("action", "search");
+        facets.put("topK", finalTopK);
+
+        if (usedNegationRerank) {
+            facets.put("negationRerank", true);
+        }
+
+        if (input != null && !input.restrictToSpuRefs().isEmpty()) {
+            facets.put("restrictToSpuRefs", input.restrictToSpuRefs());
+        }
+
         if (slot == null || slot.isEmpty()) {
             return facets;
         }
+
         if (slot.priceRange() != null && !slot.priceRange().isEmpty()) {
             facets.put("priceRange", slot.priceRange());
         }
+
         if (StringUtils.hasText(slot.categoryHint())) {
-            facets.put("categoryHint", slot.categoryHint());
+            facets.put("categoryHint", slot.categoryHint().trim());
         }
-        if (!slot.brands().isEmpty()) {
-            facets.put("brands", slot.brands());
+
+        List<String> brands = safeStringList(slot.brands());
+        if (!brands.isEmpty()) {
+            facets.put("brands", brands);
         }
-        if (!slot.must().isEmpty()) {
-            facets.put("must", slot.must());
+
+        List<String> must = safeStringList(slot.must());
+        if (!must.isEmpty()) {
+            facets.put("must", must);
         }
-        if (!slot.mustNot().isEmpty()) {
+
+        Slot.MustNot mustNot = mustNotOf(slot);
+        if (!mustNot.isEmpty()) {
             Map<String, Object> mn = new LinkedHashMap<>();
-            if (!slot.mustNot().tags().isEmpty()) mn.put("tags", slot.mustNot().tags());
-            if (!slot.mustNot().brands().isEmpty()) mn.put("brands", slot.mustNot().brands());
-            if (!slot.mustNot().ingredients().isEmpty()) mn.put("ingredients", slot.mustNot().ingredients());
-            facets.put("mustNot", mn);
+
+            List<String> tags = safeStringList(mustNot.tags());
+            if (!tags.isEmpty()) {
+                mn.put("tags", tags);
+            }
+
+            List<String> brandsNot = safeStringList(mustNot.brands());
+            if (!brandsNot.isEmpty()) {
+                mn.put("brands", brandsNot);
+            }
+
+            List<String> ingredients = safeStringList(mustNot.ingredients());
+            if (!ingredients.isEmpty()) {
+                mn.put("ingredients", ingredients);
+            }
+
+            if (!mn.isEmpty()) {
+                facets.put("mustNot", mn);
+            }
         }
+
         return facets;
+    }
+
+    private double safeScore(Double score) {
+        if (score == null || score.isNaN() || score.isInfinite()) {
+            return 0.0d;
+        }
+
+        return Math.max(0.0d, score);
+    }
+
+    private String blankToNull(String value) {
+        return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+
+        return value.length() > maxLength ? value.substring(0, maxLength) : value;
+    }
+
+    private static List<String> safeStringList(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+
+        LinkedHashSet<String> result = new LinkedHashSet<>();
+
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                result.add(value.trim());
+            }
+        }
+
+        return List.copyOf(result);
+    }
+
+    private static List<String> normalizeStringList(List<String> values, int maxSize) {
+        List<String> normalized = safeStringList(values);
+
+        if (normalized.size() <= maxSize) {
+            return normalized;
+        }
+
+        return normalized.subList(0, maxSize);
     }
 
     public record SearchProductsInput(
@@ -291,7 +508,18 @@ public class SearchProductsToolCallback implements AgentToolCallback {
             List<String> includeChunkTypes,
             List<String> restrictToSpuRefs
     ) {
-        public SearchProductsInput(String query, Slot slots, Integer topK, List<String> includeChunkTypes) {
+        public SearchProductsInput {
+            query = query == null ? null : query.trim();
+            includeChunkTypes = normalizeStringList(includeChunkTypes, MAX_INCLUDE_CHUNK_TYPES);
+            restrictToSpuRefs = normalizeStringList(restrictToSpuRefs, MAX_RESTRICT_TO_SPU_REFS);
+        }
+
+        public SearchProductsInput(
+                String query,
+                Slot slots,
+                Integer topK,
+                List<String> includeChunkTypes
+        ) {
             this(query, slots, topK, includeChunkTypes, List.of());
         }
     }
@@ -308,7 +536,11 @@ public class SearchProductsToolCallback implements AgentToolCallback {
             excludedFacets = excludedFacets == null ? List.of() : List.copyOf(excludedFacets);
         }
 
-        public SearchProductsOutput(String toolName, List<SpuCardView> cards, Map<String, Object> facetsApplied) {
+        public SearchProductsOutput(
+                String toolName,
+                List<SpuCardView> cards,
+                Map<String, Object> facetsApplied
+        ) {
             this(toolName, cards, facetsApplied, List.of());
         }
     }

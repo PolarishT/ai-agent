@@ -6,7 +6,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -35,11 +35,13 @@ class AgentTurnPersistenceServiceTests {
     }
 
     private DataSource dataSource() {
-        DriverManagerDataSource dataSource = new DriverManagerDataSource();
+        SingleConnectionDataSource dataSource = new SingleConnectionDataSource(
+                "jdbc:h2:mem:agentturn-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE",
+                "sa",
+                "",
+                true
+        );
         dataSource.setDriverClassName("org.h2.Driver");
-        dataSource.setUrl("jdbc:h2:mem:agentturn;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE");
-        dataSource.setUsername("sa");
-        dataSource.setPassword("");
         return dataSource;
     }
 
@@ -127,6 +129,33 @@ class AgentTurnPersistenceServiceTests {
         assertThat(record.errorCode()).isEqualTo("OUT_OF_SCOPE");
         assertThat(record.errorMessage()).isEqualTo("暂不支持该请求");
         assertThat(record.answerText()).isNull();
+    }
+
+    @Test
+    void recordIntentAcceptsWorkflowSourceAndRejectsUnknown() {
+        persistenceService.createRunning("turn-wf", "corr-wf", "u1", "c-wf", null, "推荐洗面奶");
+
+        // workflow turn 走 EcommerceWorkflowEngine 后 intentSource = "workflow"，必须能持久化。
+        persistenceService.recordIntent(
+                "turn-wf",
+                "RECOMMEND_VAGUE",
+                "workflow",
+                null,
+                Map.of("categoryHint", "洗面奶")
+        );
+        assertThat(persistenceService.findByTurnId("turn-wf").orElseThrow().intentSource())
+                .isEqualTo("workflow");
+
+        // 任何不在白名单内的 source 仍必须被 DB CHECK 拒绝，防止退化为空字符串等坏值。
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                persistenceService.recordIntent(
+                        "turn-wf",
+                        "RECOMMEND_VAGUE",
+                        "magic_unknown",
+                        null,
+                        Map.of()
+                )
+        ).hasMessageContaining("intent_source");
     }
 
     @Test

@@ -32,7 +32,7 @@ public class AgentTurnController {
             @RequestParam @NotBlank @Size(max = 64) String userId,
             @RequestParam @NotBlank @Size(max = 64) String conversationId,
             @RequestParam @NotBlank @Size(max = 2000) String message,
-            @RequestParam(required = false) @Size(max = 64) String turnId,
+            @RequestParam @Size(max = 64) String turnId,
             @RequestParam(required = false) @Size(max = 64) String requestId,
             @RequestParam(required = false) @Size(max = 64) String imageRef
     ) {

@@ -167,6 +167,72 @@ class AgentTurnServiceTests {
         assertThat(record.errorMessage()).contains("库存");
     }
 
+    @Test
+    void waitingSlotWorkflowTurnPersistsWorkflowIntentSource() {
+        InMemoryAgentTurnRepository repository = new InMemoryAgentTurnRepository();
+        AgentTurnPersistenceService persistenceService = new AgentTurnPersistenceService(repository, jsonCodec);
+        ConversationTurnAdapter conversationTurnAdapter = new ConversationTurnAdapter(new StubConversationSpi());
+        AgentSseEventFactory eventFactory = new AgentSseEventFactory();
+        AgentWorkflowService workflowService = new AgentWorkflowService(null) {
+            @Override
+            public reactor.core.publisher.Flux<WorkflowSignal> run(WorkflowRequest request) {
+                AgentStreamEvent waitingAnswer = eventFactory.answerDelta(
+                        request.correlationId(),
+                        "请问你预期的洗面奶预算范围是多少呢？"
+                );
+                WorkflowResult result = new WorkflowResult(
+                        IntentType.RECOMMEND_VAGUE,
+                        new com.bytedance.ai.agent.api.Slot(
+                                List.of("中性皮肤", "油性皮肤", "国产", "洗面奶"),
+                                com.bytedance.ai.agent.api.Slot.MustNot.empty(),
+                                null,
+                                "洗面奶",
+                                List.of("国产"),
+                                null
+                        ),
+                        List.of(),
+                        List.of(),
+                        null,
+                        "",
+                        false,
+                        ConversationSummary.empty(),
+                        WorkflowStatus.WAITING_SLOT
+                );
+                return reactor.core.publisher.Flux.just(
+                        new WorkflowSignal(waitingAnswer, null),
+                        new WorkflowSignal(null, result)
+                );
+            }
+        };
+        AgentTurnService service = new AgentTurnService(
+                persistenceService,
+                conversationTurnAdapter,
+                new CitationExtractor(),
+                eventFactory,
+                workflowService,
+                Schedulers.immediate()
+        );
+
+        List<AgentStreamEvent> events = service.turnStream(new AgentTurnRequest(
+                "u-slot",
+                "c-slot",
+                "我是一个男生，请你给我推荐一个适合中或者是油性皮肤的洗面奶，最好是国产的",
+                "turn-slot",
+                null,
+                null,
+                null
+        )).collectList().block();
+
+        assertThat(events).isNotNull();
+        assertThat(events).extracting(AgentStreamEvent::event)
+                .contains("turn.started", "answer.delta", "turn.completed");
+        AgentTurnRecord record = repository.findByTurnId("turn-slot").orElseThrow();
+        assertThat(record.status()).isEqualTo("SUCCEEDED");
+        assertThat(record.intent()).isEqualTo("RECOMMEND_VAGUE");
+        assertThat(record.intentSource()).isEqualTo("workflow");
+        assertThat(record.slotsJson()).contains("洗面奶", "国产");
+    }
+
     private TestWiring wire(InMemoryAgentTurnRepository repository, List<AgentToolCallback> tools) {
         AgentTurnPersistenceService persistenceService = new AgentTurnPersistenceService(repository, jsonCodec);
         ConversationTurnAdapter conversationTurnAdapter = new ConversationTurnAdapter(new StubConversationSpi());

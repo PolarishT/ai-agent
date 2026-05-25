@@ -321,8 +321,13 @@ CREATE TABLE IF NOT EXISTS agent_turn (
                                           CONSTRAINT agent_turn_status_chk
                                               CHECK (status IN ('RUNNING', 'SUCCEEDED', 'FAILED')),
                                           CONSTRAINT agent_turn_intent_source_chk
-                                              CHECK (intent_source IN ('rule_l1', 'rule_l2', 'llm', 'fallback'))
+                                              CHECK (intent_source IN ('rule_l1', 'rule_l2', 'llm', 'fallback', 'workflow'))
 );
+-- 老库迁移：CREATE TABLE IF NOT EXISTS 不会更新已存在表的 CHECK，
+-- 这里幂等地放宽 intent_source 白名单以接纳 workflow turn。
+ALTER TABLE agent_turn DROP CONSTRAINT IF EXISTS agent_turn_intent_source_chk;
+ALTER TABLE agent_turn ADD CONSTRAINT agent_turn_intent_source_chk
+    CHECK (intent_source IN ('rule_l1', 'rule_l2', 'llm', 'fallback', 'workflow'));
 CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_turn_idempotency
     ON agent_turn(user_id, conversation_id, request_id)
     WHERE request_id IS NOT NULL;
