@@ -120,6 +120,10 @@ public class RagChunkMetadataHelper {
             }
             return new LinkedHashMap<>(raw);
         } catch (Exception exception) {
+            Map<String, Object> raw = parseJavaMapString(metadataJson);
+            if (!raw.isEmpty()) {
+                return raw;
+            }
             log.warn(
                     "RAG chunk metadata 解析失败，将按空 metadata 处理。error={}, payload={}",
                     exception.getMessage(),
@@ -127,6 +131,66 @@ public class RagChunkMetadataHelper {
             );
             return Map.of();
         }
+    }
+
+    private Map<String, Object> parseJavaMapString(String metadata) {
+        String text = metadata == null ? "" : metadata.trim();
+        if (!text.startsWith("{") || !text.endsWith("}") || !text.contains("=")) {
+            return Map.of();
+        }
+
+        Map<String, Object> parsed = new LinkedHashMap<>();
+        for (String entry : splitTopLevel(text.substring(1, text.length() - 1))) {
+            int separator = entry.indexOf('=');
+            if (separator <= 0) {
+                continue;
+            }
+            String key = entry.substring(0, separator).trim();
+            String value = entry.substring(separator + 1).trim();
+            if (StringUtils.hasText(key)) {
+                parsed.put(key, parseJavaMapValue(value));
+            }
+        }
+        return parsed;
+    }
+
+    private Object parseJavaMapValue(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        String trimmed = value.trim();
+        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+            return splitTopLevel(trimmed.substring(1, trimmed.length() - 1)).stream()
+                    .map(String::trim)
+                    .filter(StringUtils::hasText)
+                    .toList();
+        }
+        if ("null".equalsIgnoreCase(trimmed)) {
+            return null;
+        }
+        return trimmed;
+    }
+
+    private List<String> splitTopLevel(String text) {
+        if (!StringUtils.hasText(text)) {
+            return List.of();
+        }
+        List<String> parts = new java.util.ArrayList<>();
+        int bracketDepth = 0;
+        int start = 0;
+        for (int index = 0; index < text.length(); index++) {
+            char current = text.charAt(index);
+            if (current == '[') {
+                bracketDepth++;
+            } else if (current == ']' && bracketDepth > 0) {
+                bracketDepth--;
+            } else if (current == ',' && bracketDepth == 0) {
+                parts.add(text.substring(start, index));
+                start = index + 1;
+            }
+        }
+        parts.add(text.substring(start));
+        return parts;
     }
 
     private boolean startsWithIgnoreCase(String value, String prefix) {

@@ -36,9 +36,11 @@ public class CompareProductsToolCallback implements AgentToolCallback {
 
     public static final String TOOL_NAME = "compare_products";
     private static final int DEFAULT_TOP_K = 3;
+    private static final int MIN_COMPARE_PRODUCTS = 2;
     private static final int MAX_COMPARE_PRODUCTS = 5;
     private static final Pattern EXTERNAL_REF = Pattern.compile("\\bSPU[-_A-Za-z0-9]+\\b", Pattern.CASE_INSENSITIVE);
     private static final Pattern NUMERIC_ID = Pattern.compile("(?<![A-Za-z0-9_-])\\d{1,12}(?![A-Za-z0-9_-])");
+    private static final Pattern TWO_PRODUCTS = Pattern.compile("(两款|两个|两件|两种|2款|2个|2件|2种)");
     private static final String INPUT_SCHEMA = """
             {
               "type":"object",
@@ -103,6 +105,7 @@ public class CompareProductsToolCallback implements AgentToolCallback {
 
     private List<ResolvedCandidate> resolveCandidates(CompareProductsInput input) {
         LinkedHashMap<String, ResolvedCandidate> resolved = new LinkedHashMap<>();
+        int targetCount = targetCount(input);
         for (Long spuId : safeList(input.spuIds())) {
             resolveBySpuId(spuId).ifPresent(candidate -> putCandidate(resolved, candidate));
         }
@@ -116,19 +119,27 @@ public class CompareProductsToolCallback implements AgentToolCallback {
                 resolveByExternalRef(reference.externalRef()).ifPresent(candidate -> putCandidate(resolved, candidate));
             }
         }
-        if (resolved.size() < targetCount(input)) {
+        if (resolved.size() < targetCount) {
             List<String> tokens = parseTextCandidates(input.query());
             List<ResolvedCandidate> textResolved = Flux.fromIterable(tokens)
                     .filter(StringUtils::hasText)
                     .filter(token -> !looksLikeIgnoredToken(token))
-                    .flatMap(token -> Flux.defer(() -> Flux.fromIterable(resolveByText(token)))
+                    .flatMap(token -> Flux.defer(() -> Flux.fromIterable(resolveByText(token, 1)))
                             .subscribeOn(ragBlockingScheduler))
                     .collectList()
                     .blockOptional()
                     .orElse(List.of());
             for (ResolvedCandidate candidate : textResolved) {
                 putCandidate(resolved, candidate);
-                if (resolved.size() >= targetCount(input)) {
+                if (resolved.size() >= targetCount) {
+                    break;
+                }
+            }
+        }
+        if (resolved.size() < MIN_COMPARE_PRODUCTS) {
+            for (ResolvedCandidate candidate : resolveByText(normalizeBroadSearchQuery(input.query()), targetCount)) {
+                putCandidate(resolved, candidate);
+                if (resolved.size() >= targetCount) {
                     break;
                 }
             }
@@ -158,7 +169,7 @@ public class CompareProductsToolCallback implements AgentToolCallback {
         normalized = EXTERNAL_REF.matcher(normalized).replaceAll(" ");
         normalized = NUMERIC_ID.matcher(normalized).replaceAll(" ");
         normalized = normalized.replaceAll("(?i)\\bvs\\b", " ");
-        normalized = normalized.replaceAll("(对比|比较|哪个好|哪个更|哪款|性价比|保湿|更|哪个|哪一个)", " ");
+        normalized = normalized.replaceAll("(对比|比较|哪个好|哪个更|哪款|这两款|这两个|这件|这个|性价比|保湿|更|哪个|哪一个)", " ");
         normalized = normalized.replaceAll("[,，、/和与]|\\s+", " ");
         List<String> tokens = new ArrayList<>();
         for (String token : normalized.trim().split(" ")) {
@@ -167,6 +178,17 @@ public class CompareProductsToolCallback implements AgentToolCallback {
             }
         }
         return tokens;
+    }
+
+    private String normalizeBroadSearchQuery(String query) {
+        String normalized = query == null ? "" : query;
+        normalized = EXTERNAL_REF.matcher(normalized).replaceAll(" ");
+        normalized = NUMERIC_ID.matcher(normalized).replaceAll(" ");
+        normalized = normalized.replaceAll("(?i)\\bvs\\b", " ");
+        normalized = normalized.replaceAll("(对比|比较|哪个好|哪个更|哪款|这两款|这两个|这件|这个|哪个|哪一个|的)", " ");
+        normalized = normalized.replaceAll("(保湿|性价比|价格|功效|成分|肤感|适合|推荐)", " ");
+        normalized = normalized.replaceAll("[,，、/和与]|\\s+", " ").trim();
+        return StringUtils.hasText(normalized) ? normalized : query;
     }
 
     private Optional<ResolvedCandidate> resolveBySpuId(Long spuId) {
@@ -188,11 +210,14 @@ public class CompareProductsToolCallback implements AgentToolCallback {
                 .map(spu -> new ResolvedCandidate(spu, 1.0d, "用户指定商品"));
     }
 
-    private List<ResolvedCandidate> resolveByText(String token) {
+    private List<ResolvedCandidate> resolveByText(String token, int topK) {
+        if (!StringUtils.hasText(token)) {
+            return List.of();
+        }
         List<ProductSearchHit> hits = productSearchSpi.search(new ProductSearchRequest(
                 token,
                 RagSearchFilter.of("catalog://spu/", null, null),
-                1,
+                Math.max(1, Math.min(topK, MAX_COMPARE_PRODUCTS)),
                 List.of()
         ));
         if (hits == null || hits.isEmpty()) {
@@ -340,15 +365,31 @@ public class CompareProductsToolCallback implements AgentToolCallback {
     }
 
     private int targetCount(CompareProductsInput input) {
-        if (input.topK() == null || input.topK() <= 0) {
+        if (input == null) {
+            return DEFAULT_TOP_K;
+        }
+        if (mentionsTwoProducts(input.query())) {
+            return MIN_COMPARE_PRODUCTS;
+        }
+        if (input.topK() == null || input.topK() <= 0 || input.topK() > MAX_COMPARE_PRODUCTS) {
             return DEFAULT_TOP_K;
         }
         return Math.min(input.topK(), MAX_COMPARE_PRODUCTS);
     }
 
+    private boolean mentionsTwoProducts(String query) {
+        return query != null && TWO_PRODUCTS.matcher(query).find();
+    }
+
     private boolean looksLikeIgnoredToken(String token) {
         String lower = token.toLowerCase(Locale.ROOT);
-        return lower.length() <= 1 || lower.equals("a") || lower.equals("b") || lower.equals("c");
+        return lower.length() <= 1
+                || lower.equals("a")
+                || lower.equals("b")
+                || lower.equals("c")
+                || lower.contains("这两款")
+                || lower.contains("这两个")
+                || lower.endsWith("的");
     }
 
     private String priceText(SpuCardView card) {

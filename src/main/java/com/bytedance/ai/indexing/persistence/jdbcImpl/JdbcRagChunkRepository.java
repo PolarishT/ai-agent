@@ -203,8 +203,12 @@ public class JdbcRagChunkRepository implements RagChunkRepository {
         List<Object> args = new ArrayList<>();
         args.add(searchText);
 
+        // 用子查询包一层：PostgreSQL 允许 ORDER BY 单独引用 SELECT 别名，
+        // 但禁止把别名嵌进表达式（如 ORDER BY (fts_score * 10.0 + ...)）。
+        // 包一层后外层 ORDER BY 直接拿别名做算术，避免 "column fts_score does not exist"。
         StringBuilder sql = new StringBuilder();
-        sql.append(searchableSelectSql())
+        sql.append("SELECT * FROM (")
+                .append(searchableSelectSql())
                 .append(", ts_rank_cd(")
                 .append(ftsVector)
                 .append(", ")
@@ -250,9 +254,10 @@ public class JdbcRagChunkRepository implements RagChunkRepository {
                 OR LOWER(COALESCE(d.title, '')) LIKE ? ESCAPE '\\'
                 OR LOWER(COALESCE(c.chunk_text, '')) LIKE ? ESCAPE '\\'
                 )
+                ) ranked
                 ORDER BY (fts_score * 10.0 + trigram_score * 3.0) DESC,
-                         c.document_id,
-                         c.chunk_index
+                         document_id,
+                         chunk_index
                 LIMIT ?
                 """);
         args.add(likePattern);

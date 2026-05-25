@@ -20,18 +20,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AgentTurnControllerTests {
 
     @Test
-    void turnEndpointStreamsServerSentEvents() {
+    void getTurnEndpointStreamsServerSentEventsForSseClients() {
         WebTestClient client = WebTestClient
                 .bindToController(new AgentTurnController(new FixedAgentTurnFacade()))
                 .build();
 
-        List<ServerSentEvent<String>> events = client.post()
-                .uri("/public/agent/turn")
-                .contentType(MediaType.APPLICATION_JSON)
+        List<ServerSentEvent<String>> events = client.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/public/agent/turn")
+                        .queryParam("userId", "u1")
+                        .queryParam("conversationId", "c1")
+                        .queryParam("message", "推荐防晒霜")
+                        .queryParam("turnId", "t-get-1")
+                        .build())
                 .accept(MediaType.TEXT_EVENT_STREAM)
-                .bodyValue("""
-                        {"userId":"u1","conversationId":"c1","message":"推荐 300 元以下的双肩包","turnId":"t1"}
-                        """)
                 .exchange()
                 .expectStatus().isOk()
                 .expectHeader().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM)
@@ -44,7 +46,7 @@ class AgentTurnControllerTests {
         assertThat(events).isNotNull();
         assertThat(events).extracting(ServerSentEvent::event)
                 .containsExactly("turn.started", "answer.delta", "turn.completed");
-        assertThat(events).extracting(ServerSentEvent::comment).containsOnly("corr-1");
+        assertThat(events.getFirst().data()).contains("t-get-1");
     }
 
     @Test
@@ -53,13 +55,14 @@ class AgentTurnControllerTests {
                 .bindToController(new AgentTurnController(new FixedAgentTurnFacade()))
                 .build();
 
-        client.post()
-                .uri("/public/agent/turn")
-                .contentType(MediaType.APPLICATION_JSON)
+        // Controller 现在是 GET + @RequestParam，缺失必填参数 message 时必须以 400 拒绝。
+        client.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/public/agent/turn")
+                        .queryParam("userId", "u1")
+                        .queryParam("conversationId", "c1")
+                        .build())
                 .accept(MediaType.TEXT_EVENT_STREAM)
-                .bodyValue("""
-                        {"userId":"u1","conversationId":"c1","message":""}
-                        """)
                 .exchange()
                 .expectStatus().isBadRequest();
     }

@@ -37,6 +37,9 @@ class ProductSearchSpiAdapter implements ProductSearchSpi {
 
     private static final Logger log = LoggerFactory.getLogger(ProductSearchSpiAdapter.class);
     private static final String CATALOG_SPU_URI_PREFIX = "catalog://spu/";
+    private static final int PRODUCT_CHUNK_RECALL_MULTIPLIER = 5;
+    private static final int MIN_PRODUCT_CHUNK_RECALL_TOP_K = 10;
+    private static final int MAX_PRODUCT_CHUNK_RECALL_TOP_K = 50;
 
     private final ObjectProvider<HybridRagRetriever> hybridRetrieverProvider;
     private final ObjectProvider<KeywordRagRetriever> keywordRetrieverProvider;
@@ -61,7 +64,8 @@ class ProductSearchSpiAdapter implements ProductSearchSpi {
             throw new IllegalArgumentException("ProductSearchRequest.query 不能为空");
         }
         int topK = effectiveTopK(request.topK());
-        RagRetrievalBudget budget = RagRetrievalBudget.legacy(topK);
+        int recallTopK = productChunkRecallTopK(topK);
+        RagRetrievalBudget budget = RagRetrievalBudget.legacy(recallTopK);
         RagRetrievalRequest retrievalRequest = new RagRetrievalRequest(
                 request.query(),
                 request.filter(),
@@ -80,7 +84,13 @@ class ProductSearchSpiAdapter implements ProductSearchSpi {
         if (hits.size() > topK) {
             hits = hits.subList(0, topK);
         }
-        log.debug("product search done: query='{}', topK={}, hits={}", abbreviate(request.query()), topK, hits.size());
+        log.debug(
+                "product search done: query='{}', topK={}, recallTopK={}, hits={}",
+                abbreviate(request.query()),
+                topK,
+                recallTopK,
+                hits.size()
+        );
         return hits;
     }
 
@@ -156,6 +166,11 @@ class ProductSearchSpiAdapter implements ProductSearchSpi {
             return topK;
         }
         return ragProperties.defaultTopK();
+    }
+
+    private int productChunkRecallTopK(int productTopK) {
+        int expanded = Math.max(MIN_PRODUCT_CHUNK_RECALL_TOP_K, productTopK * PRODUCT_CHUNK_RECALL_MULTIPLIER);
+        return Math.min(expanded, MAX_PRODUCT_CHUNK_RECALL_TOP_K);
     }
 
     private RagRetriever selectRetriever() {

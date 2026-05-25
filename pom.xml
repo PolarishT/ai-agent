@@ -115,6 +115,49 @@
             <artifactId>spring-ai-rag</artifactId>
         </dependency>
 
+        <!-- Required by Spring AI Alibaba Graph Core's default Spring AI message serializer. -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-deepseek</artifactId>
+        </dependency>
+
+        <!-- Spring AI Alibaba StateGraph workflow core; keep Spring AI versions from the project BOM. -->
+        <dependency>
+            <groupId>com.alibaba.cloud.ai</groupId>
+            <artifactId>spring-ai-alibaba-graph-core</artifactId>
+            <version>1.1.2.2</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.springframework.ai</groupId>
+                    <artifactId>spring-ai-autoconfigure-retry</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.springframework.ai</groupId>
+                    <artifactId>spring-ai-client-chat</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.springframework.ai</groupId>
+                    <artifactId>spring-ai-commons</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.springframework.ai</groupId>
+                    <artifactId>spring-ai-deepseek</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.springframework.ai</groupId>
+                    <artifactId>spring-ai-rag</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.springframework.ai</groupId>
+                    <artifactId>spring-ai-retry</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.springframework.ai</groupId>
+                    <artifactId>spring-ai-zhipuai</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
         <!-- jdbc -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

@@ -331,6 +331,26 @@ CREATE INDEX IF NOT EXISTS idx_agent_turn_conv_started
 CREATE INDEX IF NOT EXISTS idx_agent_turn_user_started
     ON agent_turn(user_id, started_at DESC);
 
+-- workflow runtime state for resume across processes (WAITING_SELECTION / WAITING_CONFIRMATION / WAITING_SLOT)
+CREATE TABLE IF NOT EXISTS agent_workflow_state (
+                                          id              BIGSERIAL PRIMARY KEY,
+                                          conversation_id VARCHAR(64)    NOT NULL UNIQUE,
+                                          user_id         VARCHAR(64)    NOT NULL DEFAULT '',
+                                          workflow_key    VARCHAR(64)    NOT NULL,
+                                          version         INTEGER        NOT NULL DEFAULT 1,
+                                          current_node    VARCHAR(64),
+                                          status          VARCHAR(32)    NOT NULL,
+                                          state_json      JSONB          NOT NULL DEFAULT '{}'::jsonb,
+                                          created_at      TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
+                                          updated_at      TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
+                                          CONSTRAINT agent_workflow_state_status_chk
+                                              CHECK (status IN ('RUNNING', 'END', 'WAITING_CONFIRMATION', 'WAITING_SELECTION', 'WAITING_SLOT', 'FAILED'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_workflow_state_user
+    ON agent_workflow_state(user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_workflow_state_status
+    ON agent_workflow_state(status);
+
 -- ============== Cart 模块 ==============
 CREATE TABLE IF NOT EXISTS shopping_cart (
                                              id                    BIGSERIAL PRIMARY KEY,

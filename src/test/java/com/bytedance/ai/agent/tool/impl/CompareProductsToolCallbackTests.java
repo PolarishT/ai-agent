@@ -85,6 +85,32 @@ class CompareProductsToolCallbackTests {
     }
 
     @Test
+    void fallsBackToBroadQueryForVagueTwoProductCompare() {
+        catalogQueryFacade.put(spu(1L, "SPU-A", "A 防晒霜", "Alpha", "保湿强", "保湿", "强"));
+        catalogQueryFacade.put(spu(2L, "SPU-B", "B 防晒霜", "Beta", "价格友好", "保湿", "中"));
+        productSearchSpi.hitsByQuery.put("防晒霜", List.of(
+                hit(1L, "SPU-A", 0.91d, "保湿强"),
+                hit(2L, "SPU-B", 0.86d, "价格友好")
+        ));
+
+        CompareProductsToolCallback.CompareProductsOutput output = callback.compare(
+                new CompareProductsToolCallback.CompareProductsInput(
+                        "对比这两款防晒霜的保湿和性价比",
+                        List.of(),
+                        List.of(),
+                        10,
+                        List.of("保湿", "性价比")
+                )
+        );
+
+        assertThat(productSearchSpi.queries).contains("防晒霜");
+        assertThat(productSearchSpi.topKsByQuery).containsEntry("防晒霜", 2);
+        assertThat(output.cards()).extracting("externalRef").containsExactly("SPU-A", "SPU-B");
+        assertThat(output.compareMatrix()).isNotNull();
+        assertThat(output.compareMatrix().rows()).extracting("attribute").contains("保湿", "性价比");
+    }
+
+    @Test
     void returnsCardsWithoutMatrixWhenOnlyOneProductResolved() {
         catalogQueryFacade.put(spu(1L, "SPU-A", "A 面霜", "Alpha", "保湿强", "保湿", "强"));
 
@@ -131,11 +157,13 @@ class CompareProductsToolCallbackTests {
 
     private static class CapturingProductSearchSpi implements ProductSearchSpi {
         private final Map<String, List<ProductSearchHit>> hitsByQuery = new LinkedHashMap<>();
+        private final Map<String, Integer> topKsByQuery = new LinkedHashMap<>();
         private final List<String> queries = new ArrayList<>();
 
         @Override
         public List<ProductSearchHit> search(ProductSearchRequest request) {
             queries.add(request.query());
+            topKsByQuery.put(request.query(), request.topK());
             return hitsByQuery.getOrDefault(request.query(), List.of());
         }
     }

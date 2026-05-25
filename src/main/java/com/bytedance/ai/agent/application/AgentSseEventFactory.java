@@ -14,6 +14,8 @@ import com.bytedance.ai.agent.api.events.ToolResultPayload;
 import com.bytedance.ai.agent.api.events.TurnCompletedPayload;
 import com.bytedance.ai.agent.api.events.TurnErrorPayload;
 import com.bytedance.ai.agent.api.events.TurnStartedPayload;
+import com.bytedance.ai.agent.api.events.WorkflowNodeCompletedPayload;
+import com.bytedance.ai.agent.api.events.WorkflowNodeStartedPayload;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -35,6 +37,20 @@ public class AgentSseEventFactory {
             Slot slots
     ) {
         return event("intent.detected", correlationId, new IntentDetectedPayload(intent, confidence, source, slots));
+    }
+
+    public AgentStreamEvent workflowNodeStarted(String correlationId, String nodeName) {
+        return event("workflow.node.started", correlationId, new WorkflowNodeStartedPayload(nodeName));
+    }
+
+    public AgentStreamEvent workflowNodeCompleted(
+            String correlationId,
+            String nodeName,
+            long latencyMs,
+            Map<String, Object> summary
+    ) {
+        return event("workflow.node.completed", correlationId,
+                new WorkflowNodeCompletedPayload(nodeName, latencyMs, summary));
     }
 
     public AgentStreamEvent toolCalling(String correlationId, String toolName, Object args) {

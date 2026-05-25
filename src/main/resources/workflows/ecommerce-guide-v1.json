@@ -1,0 +1,223 @@
+{
+  "id": "ecommerce-guide-v1",
+  "startNode": "intent_router",
+  "nodes": [
+    {
+      "id": "intent_router",
+      "type": "intent_router",
+      "promptKey": "workflow-intent-router-v1"
+    },
+    {
+      "id": "slot_filling",
+      "type": "slot_filling",
+      "promptKey": "workflow-slot-filling-v1",
+      "interruptPolicy": "WAITING_SLOT",
+      "resumeNode": "product_search"
+    },
+    {
+      "id": "rag_qa",
+      "type": "rag_qa"
+    },
+    {
+      "id": "product_search",
+      "type": "product_search",
+      "tool": {
+        "toolName": "search_products",
+        "inputSchema": {
+          "type": "object",
+          "required": ["query"],
+          "properties": {
+            "query": {"type": "string"},
+            "slots": {"type": "object"},
+            "topK": {"type": "integer"},
+            "includeChunkTypes": {"type": "array"},
+            "restrictToSpuRefs": {"type": "array"}
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": ["toolName", "cards"],
+          "properties": {
+            "toolName": {"type": "string"},
+            "cards": {"type": "array"},
+            "facetsApplied": {"type": "object"},
+            "excludedFacets": {"type": "array"}
+          }
+        },
+        "inputMapping": {
+          "query": "$.request.message",
+          "slots": "$.state.slots",
+          "topK": 10,
+          "includeChunkTypes": [],
+          "restrictToSpuRefs": []
+        },
+        "outputMapping": {
+          "cards": "$.cards"
+        }
+      }
+    },
+    {
+      "id": "product_filter",
+      "type": "product_filter",
+      "filterDsl": {
+        "source": "slots",
+        "operators": ["priceRange", "brand", "must", "mustNot"]
+      }
+    },
+    {
+      "id": "product_rank",
+      "type": "product_rank",
+      "rankDsl": {
+        "score": ["retrievalScore", "stockAvailable", "priceMatch"]
+      }
+    },
+    {
+      "id": "product_compare",
+      "type": "product_compare",
+      "tool": {
+        "toolName": "compare_products",
+        "inputSchema": {
+          "type": "object",
+          "required": ["query"],
+          "properties": {
+            "query": {"type": "string"},
+            "spuIds": {"type": "array"},
+            "externalRefs": {"type": "array"},
+            "topK": {"type": "integer"},
+            "compareAspects": {"type": "array"}
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": ["toolName", "cards"],
+          "properties": {
+            "toolName": {"type": "string"},
+            "cards": {"type": "array"},
+            "compareMatrix": {"type": "object"}
+          }
+        },
+        "inputMapping": {
+          "query": "$.request.message",
+          "spuIds": [],
+          "externalRefs": [],
+          "topK": 3,
+          "compareAspects": []
+        },
+        "outputMapping": {
+          "cards": "$.cards",
+          "compareMatrix": "$.compareMatrix"
+        }
+      }
+    },
+    {
+      "id": "inventory_check",
+      "type": "inventory_check",
+      "interruptPolicy": "WAITING_SELECTION",
+      "resumeNode": "inventory_check",
+      "tool": {
+        "toolName": "check_stock",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "spuId": {"type": "integer"},
+            "externalRef": {"type": "string"},
+            "lastTurnSpuRefs": {"type": "array"}
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": ["toolName", "stock", "available"],
+          "properties": {
+            "toolName": {"type": "string"},
+            "spuId": {"type": "integer"},
+            "externalRef": {"type": "string"},
+            "title": {"type": "string"},
+            "stock": {"type": "integer"},
+            "available": {"type": "boolean"},
+            "skus": {"type": "array"}
+          }
+        },
+        "inputMapping": {
+          "externalRef": "$.pending.selection.selectedExternalRef",
+          "spuId": "$.pending.selection.selectedSkuId",
+          "lastTurnSpuRefs": []
+        },
+        "outputMapping": {
+          "stock": "$.inventory"
+        }
+      }
+    },
+    {
+      "id": "human_confirm",
+      "type": "human_confirm",
+      "interruptPolicy": "WAITING_CONFIRMATION",
+      "resumeNode": "order_create"
+    },
+    {
+      "id": "order_create",
+      "type": "order_create",
+      "interruptPolicy": "WAITING_CONFIRMATION",
+      "resumeNode": "order_create",
+      "tool": {
+        "toolName": "place_order",
+        "inputSchema": {
+          "type": "object",
+          "required": ["userId", "conversationId"],
+          "properties": {
+            "userId": {"type": "string"},
+            "conversationId": {"type": "string"},
+            "externalRef": {"type": "string"},
+            "skuId": {"type": "integer"},
+            "address": {"type": "object"},
+            "confirmPriceChange": {"type": "boolean"}
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": ["toolName", "result"],
+          "properties": {
+            "toolName": {"type": "string"},
+            "result": {"type": "object"},
+            "facetsApplied": {"type": "object"}
+          }
+        },
+        "inputMapping": {
+          "userId": "$.request.userId",
+          "conversationId": "$.request.conversationId",
+          "externalRef": "$.pending.selection.selectedExternalRef",
+          "skuId": "$.pending.selection.selectedSkuId",
+          "address": {},
+          "confirmPriceChange": false
+        },
+        "outputMapping": {
+          "order": "$.order"
+        }
+      }
+    },
+    {
+      "id": "final_answer",
+      "type": "final_answer",
+      "promptKey": "workflow-final-answer-v1"
+    },
+    {
+      "id": "end",
+      "type": "end"
+    }
+  ],
+  "edges": [
+    {"from": "slot_filling", "to": "product_search", "defaultEdge": true},
+    {"from": "slot_filling", "to": "final_answer", "whenStatus": "WAITING_SLOT"},
+    {"from": "product_search", "to": "product_filter", "defaultEdge": true},
+    {"from": "product_filter", "to": "product_rank", "defaultEdge": true},
+    {"from": "product_rank", "to": "final_answer", "defaultEdge": true},
+    {"from": "product_compare", "to": "final_answer", "defaultEdge": true},
+    {"from": "inventory_check", "to": "final_answer", "defaultEdge": true},
+    {"from": "inventory_check", "to": "final_answer", "whenStatus": "WAITING_SELECTION"},
+    {"from": "human_confirm", "to": "order_create", "defaultEdge": true},
+    {"from": "human_confirm", "to": "final_answer", "whenStatus": "WAITING_CONFIRMATION"},
+    {"from": "order_create", "to": "final_answer", "defaultEdge": true},
+    {"from": "order_create", "to": "final_answer", "whenStatus": "WAITING_CONFIRMATION"},
+    {"from": "rag_qa", "to": "final_answer", "defaultEdge": true},
+    {"from": "final_answer", "to": "end", "defaultEdge": true}
+  ]
+}

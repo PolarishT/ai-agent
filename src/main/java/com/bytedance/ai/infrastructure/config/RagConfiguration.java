@@ -165,7 +165,6 @@ public class RagConfiguration {
     ) {
         MilvusVectorStore.Builder builder = MilvusVectorStore.builder(milvusClient, embeddingModel)
                 .collectionName(ragProperties.milvus().collectionName())
-                // initializeSchema=false means the existing rag_chunks collection and indexes are authoritative.
                 .metricType(resolveMetricType(ragProperties.milvus().metricType()))
                 .batchingStrategy(new TokenCountBatchingStrategy())
                 .initializeSchema(false);
@@ -248,11 +247,16 @@ public class RagConfiguration {
     @Bean
     @ConditionalOnProperty(prefix = "rag.milvus", name = "enabled", havingValue = "true")
     public MilvusServiceClient milvusClient(RagProperties ragProperties) {
-        return new MilvusServiceClient(ConnectParam.newBuilder()
+        ConnectParam.Builder connect = ConnectParam.newBuilder()
                 .withToken(ragProperties.milvus().token())
                 .withUri(ragProperties.milvus().uri())
                 .withConnectTimeout(10, TimeUnit.SECONDS)
-                .withKeepAliveTime(100, TimeUnit.SECONDS)
-                .build());
+                .withKeepAliveTime(100, TimeUnit.SECONDS);
+        // Zilliz Cloud / Serverless 在 gRPC 路径要求显式 databaseName，
+        // 否则 search/describe 会路由到空 database 报 "collection not found"。
+        // 未配置时默认 "default"，与 Zilliz 控制台一致。
+        String databaseName = ragProperties.milvus().databaseName();
+        connect.withDatabaseName(StringUtils.hasText(databaseName) ? databaseName : "default");
+        return new MilvusServiceClient(connect.build());
     }
 }

@@ -4,6 +4,7 @@ import com.bytedance.ai.agent.api.IntentType;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Optional;
 
 @Component
 public class ToolRegistry {
@@ -20,6 +21,21 @@ public class ToolRegistry {
         }
         return callbacks.stream()
                 .filter(callback -> callback.handles().contains(intent))
+                .toList();
+    }
+
+    public Optional<AgentToolCallback> findByName(String toolName) {
+        if (toolName == null || toolName.isBlank()) {
+            return Optional.empty();
+        }
+        return callbacks.stream()
+                .filter(callback -> toolName.equals(callback.getToolDefinition().name()))
+                .findFirst();
+    }
+
+    public List<org.springframework.ai.tool.definition.ToolDefinition> toolDefinitions() {
+        return callbacks.stream()
+                .map(AgentToolCallback::getToolDefinition)
                 .toList();
     }
 }

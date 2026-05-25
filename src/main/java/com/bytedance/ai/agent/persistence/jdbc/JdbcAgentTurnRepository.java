@@ -56,6 +56,22 @@ public class JdbcAgentTurnRepository implements AgentTurnRepository {
         this.jdbc = jdbc;
     }
 
+    private static String defaultObjectJson(String json) {
+        return json == null || json.isBlank() ? "{}" : json;
+    }
+
+    private static String defaultArrayJson(String json) {
+        return json == null || json.isBlank() ? "[]" : json;
+    }
+
+    private static Double toDouble(BigDecimal value) {
+        return value == null ? null : value.doubleValue();
+    }
+
+    private static OffsetDateTime toOffsetDateTime(Timestamp timestamp) {
+        return timestamp == null ? null : timestamp.toInstant().atOffset(ZoneOffset.UTC);
+    }
+
     @Override
     public void createRunning(
             String turnId,
@@ -67,10 +83,10 @@ public class JdbcAgentTurnRepository implements AgentTurnRepository {
     ) {
         jdbc.update(
                 """
-                INSERT INTO agent_turn (
-                    turn_id, correlation_id, user_id, conversation_id, request_id, user_message, status
-                ) VALUES (?, ?, ?, ?, ?, ?, 'RUNNING')
-                """,
+                        INSERT INTO agent_turn (
+                            turn_id, correlation_id, user_id, conversation_id, request_id, user_message, status
+                        ) VALUES (?, ?, ?, ?, ?, ?, 'RUNNING')
+                        """,
                 turnId,
                 correlationId,
                 userId,
@@ -93,12 +109,12 @@ public class JdbcAgentTurnRepository implements AgentTurnRepository {
     public Optional<AgentTurnRecord> findByRequestId(String userId, String conversationId, String requestId) {
         return jdbc.query(
                 """
-                SELECT *
-                  FROM agent_turn
-                 WHERE user_id = ?
-                   AND conversation_id = ?
-                   AND request_id = ?
-                """,
+                        SELECT *
+                          FROM agent_turn
+                         WHERE user_id = ?
+                           AND conversation_id = ?
+                           AND request_id = ?
+                        """,
                 ROW_MAPPER,
                 userId,
                 conversationId,
@@ -110,12 +126,12 @@ public class JdbcAgentTurnRepository implements AgentTurnRepository {
     public List<AgentTurnRecord> findRecentByConversationId(String conversationId, int limit) {
         return jdbc.query(
                 """
-                SELECT *
-                  FROM agent_turn
-                 WHERE conversation_id = ?
-                 ORDER BY started_at DESC, id DESC
-                 LIMIT ?
-                """,
+                        SELECT *
+                          FROM agent_turn
+                         WHERE conversation_id = ?
+                         ORDER BY started_at DESC, id DESC
+                         LIMIT ?
+                        """,
                 ROW_MAPPER,
                 conversationId,
                 limit
@@ -126,15 +142,15 @@ public class JdbcAgentTurnRepository implements AgentTurnRepository {
     public Optional<AgentTurnRecord> findLatestMemorySummary(String conversationId) {
         return jdbc.query(
                 """
-                SELECT *
-                  FROM agent_turn
-                 WHERE conversation_id = ?
-                   AND status = 'SUCCEEDED'
-                   AND memory_summary IS NOT NULL
-                   AND memory_summary <> ''
-                 ORDER BY completed_at DESC NULLS LAST, started_at DESC, id DESC
-                 LIMIT 1
-                """,
+                        SELECT *
+                          FROM agent_turn
+                         WHERE conversation_id = ?
+                           AND status = 'SUCCEEDED'
+                           AND memory_summary IS NOT NULL
+                           AND memory_summary <> ''
+                         ORDER BY completed_at DESC NULLS LAST, started_at DESC, id DESC
+                         LIMIT 1
+                        """,
                 ROW_MAPPER,
                 conversationId
         ).stream().findFirst();
@@ -144,11 +160,11 @@ public class JdbcAgentTurnRepository implements AgentTurnRepository {
     public void attachConversationMessages(String turnId, String userMessageId, String assistantMessageId) {
         jdbc.update(
                 """
-                UPDATE agent_turn
-                   SET user_message_id = ?,
-                       assistant_message_id = ?
-                 WHERE turn_id = ?
-                """,
+                        UPDATE agent_turn
+                           SET user_message_id = ?,
+                               assistant_message_id = ?
+                         WHERE turn_id = ?
+                        """,
                 userMessageId,
                 assistantMessageId,
                 turnId
@@ -197,22 +213,22 @@ public class JdbcAgentTurnRepository implements AgentTurnRepository {
     ) {
         jdbc.update(
                 """
-                UPDATE agent_turn
-                   SET answer_text = ?,
-                       generated_by_model = ?,
-                       memory_summary = ?,
-                       memory_summary_message_count = ?,
-                       memory_summary_model = ?,
-                       tokens_in = ?,
-                       tokens_out = ?,
-                       latency_ms = ?,
-                       status = 'SUCCEEDED',
-                       error_code = NULL,
-                       error_message = NULL,
-                       completed_at = now()
-                 WHERE turn_id = ?
-                   AND status = 'RUNNING'
-                """,
+                        UPDATE agent_turn
+                           SET answer_text = ?,
+                               generated_by_model = ?,
+                               memory_summary = ?,
+                               memory_summary_message_count = ?,
+                               memory_summary_model = ?,
+                               tokens_in = ?,
+                               tokens_out = ?,
+                               latency_ms = ?,
+                               status = 'SUCCEEDED',
+                               error_code = NULL,
+                               error_message = NULL,
+                               completed_at = now()
+                         WHERE turn_id = ?
+                           AND status = 'RUNNING'
+                        """,
                 answerText,
                 generatedByModel,
                 memorySummary,
@@ -229,15 +245,15 @@ public class JdbcAgentTurnRepository implements AgentTurnRepository {
     public void markFailed(String turnId, String errorCode, String errorMessage, Integer latencyMs) {
         jdbc.update(
                 """
-                UPDATE agent_turn
-                   SET status = 'FAILED',
-                       error_code = ?,
-                       error_message = ?,
-                       latency_ms = ?,
-                       completed_at = now()
-                 WHERE turn_id = ?
-                   AND status = 'RUNNING'
-                """,
+                        UPDATE agent_turn
+                           SET status = 'FAILED',
+                               error_code = ?,
+                               error_message = ?,
+                               latency_ms = ?,
+                               completed_at = now()
+                         WHERE turn_id = ?
+                           AND status = 'RUNNING'
+                        """,
                 errorCode,
                 errorMessage,
                 latencyMs,
@@ -281,22 +297,6 @@ public class JdbcAgentTurnRepository implements AgentTurnRepository {
                        cards_emitted = ?
                  WHERE turn_id = ?
                 """;
-    }
-
-    private static String defaultObjectJson(String json) {
-        return json == null || json.isBlank() ? "{}" : json;
-    }
-
-    private static String defaultArrayJson(String json) {
-        return json == null || json.isBlank() ? "[]" : json;
-    }
-
-    private static Double toDouble(BigDecimal value) {
-        return value == null ? null : value.doubleValue();
-    }
-
-    private static OffsetDateTime toOffsetDateTime(Timestamp timestamp) {
-        return timestamp == null ? null : timestamp.toInstant().atOffset(ZoneOffset.UTC);
     }
 
     private boolean isPostgreSql(Connection connection) throws SQLException {
