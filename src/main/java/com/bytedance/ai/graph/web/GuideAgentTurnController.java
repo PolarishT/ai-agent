@@ -5,6 +5,7 @@ import com.bytedance.ai.graph.api.AgentTurnRequest;
 import com.bytedance.ai.graph.api.events.AnswerCompletedPayload;
 import com.bytedance.ai.graph.api.events.AnswerDeltaPayload;
 import com.bytedance.ai.graph.api.events.TurnErrorPayload;
+import com.bytedance.ai.graph.api.events.WorkflowStartedPayload;
 import com.bytedance.ai.graph.api.AgentStreamEventType;
 import com.bytedance.ai.graph.api.GuideGraphFinalSummary;
 import com.bytedance.ai.graph.api.GuideGraphRequest;
@@ -86,6 +87,10 @@ public class GuideAgentTurnController {
                     request.requestId(),
                     request.conversationId()
             )));
+        }
+        if (AgentStreamEventType.WORKFLOW_STARTED.eventName().equals(eventName)
+                && event.data() instanceof WorkflowStartedPayload payload) {
+            return Optional.of(rawSse(eventName, event, payload));
         }
         if (AgentStreamEventType.ANSWER_DELTA.eventName().equals(eventName)) {
             return Optional.of(rawSse(eventName, event, new ProdAnswerDeltaPayload(answerText(event.data()))));

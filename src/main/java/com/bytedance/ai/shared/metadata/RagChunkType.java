@@ -5,41 +5,43 @@ import org.springframework.util.StringUtils;
 import java.util.Locale;
 
 /**
- * Chunk 在 RAG 检索语义下的"角色分类"。
+ * Chunk 在 RAG 检索语义下的「角色分类」，作为 evidence 层的过滤维度。
  *
- * <p>独立于 markdown block type（text/code/table 等）：block type 描述"长什么样"，
- * chunk type 描述"代表什么"。检索阶段可按 chunkType 做权重加成或反选过滤，
- * 例如 {@link #ATTR} 命中通常意味着用户在询问参数 / 属性。
+ * <p>这五个枚举值与 {@code rag_chunks.chunk_type} 列、Milvus metadata {@code chunkType} 字段
+ * 一一对应，是 chunker / indexing / retrieval 链路上唯一允许出现的取值。任何写入 chunk_type
+ * 的位置都必须使用 {@link #name()}，不要散落字符串字面量。
  *
- * <p>对于非电商语义的通用文档（markdown 上传等），分类为 {@link #BODY}；
- * 对于 catalog-spu 文档由 {@code RagChunkTypeClassifier} 按 heading 自动归类。
+ * <p>规约（与原始业务表的分工）：
+ * <ul>
+ *   <li>chunk 是 evidence，只承载相对稳定的可检索文本；</li>
+ *   <li>库存、实时价格、SKU 状态、上下架状态等动态业务事实必须来自 {@code catalog_product} /
+ *       {@code catalog_sku} 等原始表，不允许从 {@code chunk_text} 解析；</li>
+ *   <li>{@link #PRODUCT_PROFILE} chunk 可携带商品标题、品牌、类目、卖点、规格说明等稳定字段。</li>
+ * </ul>
  */
 public enum RagChunkType {
-    /** 商品标题切片：通常对应 H1 段位，权重最高的关键命中。 */
-    TITLE,
-    /** 结构化属性切片：参数、规格、成分，整体不切分；反选语义主要看这一类。 */
-    ATTR,
-    /** 商品长描述切片：故事化卖点、使用说明，召回最常命中。 */
-    DESC,
-    /** 用户评论切片：辅助参考，权重低于 ATTR/DESC。 */
+    /** FAQ 问题切片，主要用于按"问题语义"召回相似 FAQ。 */
+    FAQ_QUERY,
+    /** FAQ 答案切片，主要在召回 FAQ_QUERY 后再 hydrate 原始 {@code catalog_product_faq.answer}。 */
+    FAQ_ANSWER,
+    /** 营销文案 / 卖点 / 商品知识 / 推荐理由 / 评价总结。 */
+    MARKETING,
+    /** 用户评论原文切片；最终展示仍以 {@code catalog_product_review} 原始记录为准。 */
     REVIEW,
-    /** 图像 chunk：由 Doubao-embedding-vision 多模态向量化，与文本共存同一 collection。 */
-    IMAGE,
-    /** 默认 / 通用 markdown 正文切片：未匹配到具体业务角色时使用。 */
-    BODY;
+    /** 商品基础资料切片（标题 / 品牌 / 类目 / 描述 / 规格 / 适用场景等稳定字段）。 */
+    PRODUCT_PROFILE;
 
     /**
-     * 大小写 + 空白容错的解析，遇到非法值时退回 {@link #BODY} 而不是抛错，
-     * 让检索链路对脏 metadata 保持健壮。
+     * 大小写 + 空白容错的解析；遇到非法值或空值返回 {@code null}，让 caller 显式决定兜底。
      */
-    public static RagChunkType parseOrBody(String value) {
+    public static RagChunkType parseOrNull(String value) {
         if (!StringUtils.hasText(value)) {
-            return BODY;
+            return null;
         }
         try {
             return RagChunkType.valueOf(value.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException ignored) {
-            return BODY;
+            return null;
         }
     }
 }

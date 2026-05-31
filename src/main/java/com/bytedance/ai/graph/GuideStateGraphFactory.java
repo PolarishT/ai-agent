@@ -26,6 +26,8 @@ import com.bytedance.ai.graph.ordermanage.OrderManageSubgraphFactory;
 import com.bytedance.ai.graph.ordermanage.OrderManageStateKeys;
 import com.bytedance.ai.graph.ordermanage.OrderManageStatus;
 import com.bytedance.ai.graph.ordermanage.PendingOrderActionRepository;
+import com.bytedance.ai.graph.product.query.ProductQueryGraphStateKeys;
+import com.bytedance.ai.graph.product.query.subgraph.ProductQuerySubgraphFactory;
 import com.bytedance.ai.shared.support.RagLogFields;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -66,16 +68,17 @@ public class GuideStateGraphFactory {
     private final CartManageSubgraphFactory cartManageSubgraphFactory;
     private final OrderManageSubgraphFactory orderManageSubgraphFactory;
     private final PendingOrderActionRepository pendingOrderActionRepository;
+    private final ProductQuerySubgraphFactory productQuerySubgraphFactory;
 
     public GuideStateGraphFactory(AgentConversationRepository conversationRepository) {
-        this(conversationRepository, (MainIntentRouterService) null, (CartManageWorkflowNode) null, null, null, null);
+        this(conversationRepository, (MainIntentRouterService) null, (CartManageWorkflowNode) null, null, null, null, null);
     }
 
     public GuideStateGraphFactory(
             AgentConversationRepository conversationRepository,
             CartManageWorkflowNode cartManageWorkflowNode
     ) {
-        this(conversationRepository, (MainIntentRouterService) null, cartManageWorkflowNode, null, null, null);
+        this(conversationRepository, (MainIntentRouterService) null, cartManageWorkflowNode, null, null, null, null);
     }
 
     @Autowired
@@ -85,7 +88,8 @@ public class GuideStateGraphFactory {
             ObjectProvider<CartManageWorkflowNode> cartManageWorkflowNodeProvider,
             ObjectProvider<CartManageSubgraphFactory> cartManageSubgraphFactoryProvider,
             OrderManageSubgraphFactory orderManageSubgraphFactory,
-            ObjectProvider<PendingOrderActionRepository> pendingOrderActionRepositoryProvider
+            ObjectProvider<PendingOrderActionRepository> pendingOrderActionRepositoryProvider,
+            ObjectProvider<ProductQuerySubgraphFactory> productQuerySubgraphFactoryProvider
     ) {
         this(
                 conversationRepository,
@@ -93,7 +97,8 @@ public class GuideStateGraphFactory {
                 cartManageWorkflowNodeProvider.getIfAvailable(),
                 cartManageSubgraphFactoryProvider.getIfAvailable(),
                 orderManageSubgraphFactory,
-                pendingOrderActionRepositoryProvider.getIfAvailable()
+                pendingOrderActionRepositoryProvider.getIfAvailable(),
+                productQuerySubgraphFactoryProvider.getIfAvailable()
         );
     }
 
@@ -103,7 +108,8 @@ public class GuideStateGraphFactory {
             CartManageWorkflowNode cartManageWorkflowNode,
             CartManageSubgraphFactory cartManageSubgraphFactory,
             OrderManageSubgraphFactory orderManageSubgraphFactory,
-            PendingOrderActionRepository pendingOrderActionRepository
+            PendingOrderActionRepository pendingOrderActionRepository,
+            ProductQuerySubgraphFactory productQuerySubgraphFactory
     ) {
         this.conversationRepository = conversationRepository;
         this.mainIntentRouterService = mainIntentRouterService;
@@ -111,6 +117,7 @@ public class GuideStateGraphFactory {
         this.cartManageSubgraphFactory = cartManageSubgraphFactory;
         this.orderManageSubgraphFactory = orderManageSubgraphFactory;
         this.pendingOrderActionRepository = pendingOrderActionRepository;
+        this.productQuerySubgraphFactory = productQuerySubgraphFactory;
     }
 
     public CompiledGraph compile(Consumer<AgentStreamEvent> eventSink) {
@@ -140,14 +147,21 @@ public class GuideStateGraphFactory {
                             GuideGraphNodeNames.SAVE_USER_MESSAGE, state,
                             actionOverrides.getOrDefault(GuideGraphNodeNames.SAVE_USER_MESSAGE, this::saveUserMessage))));
             graph.addNode(GuideGraphNodeNames.MAIN_INTENT_ROUTER,
-                    AsyncNodeAction.node_async(state -> nodeTemplate.execute(
-                            GuideGraphNodeNames.MAIN_INTENT_ROUTER, state,
-                            actionOverrides.getOrDefault(GuideGraphNodeNames.MAIN_INTENT_ROUTER, this::mainIntentRouter))));
+                    AsyncNodeAction.node_async(state -> {
+                        Map<String, Object> result = nodeTemplate.execute(
+                                GuideGraphNodeNames.MAIN_INTENT_ROUTER, state,
+                                actionOverrides.getOrDefault(GuideGraphNodeNames.MAIN_INTENT_ROUTER,
+                                        this::mainIntentRouter));
+                        emitWorkflowStarted(eventSink, state, result);
+                        return result;
+                    }));
             Map<String, GuideGraphNodeAction> defaultWorkflowActions = defaultWorkflowActions();
             boolean cartSubgraphWired = cartManageSubgraphFactory != null
                     && !actionOverrides.containsKey(GuideGraphNodeNames.CART_MANAGE_WORKFLOW);
             boolean orderSubgraphWired = orderManageSubgraphFactory != null
                     && !actionOverrides.containsKey(GuideGraphNodeNames.ORDER_MANAGE_WORKFLOW);
+            boolean productQuerySubgraphWired = productQuerySubgraphFactory != null
+                    && !actionOverrides.containsKey(GuideGraphNodeNames.PRODUCT_QUERY_WORKFLOW);
             for (String workflowNode : new LinkedHashSet<>(GuideGraphWorkflows.targets().values())) {
                 if (cartSubgraphWired && GuideGraphNodeNames.CART_MANAGE_WORKFLOW.equals(workflowNode)) {
                     // CART_MANAGE is implemented as a sub-state-graph rather than a single node
@@ -159,6 +173,11 @@ public class GuideStateGraphFactory {
                 if (orderSubgraphWired && GuideGraphNodeNames.ORDER_MANAGE_WORKFLOW.equals(workflowNode)) {
                     graph.addNode(workflowNode, AsyncNodeAction.node_async(state -> nodeTemplate.execute(
                             workflowNode, state, this::orderManageWorkflow)));
+                    continue;
+                }
+                if (productQuerySubgraphWired
+                        && GuideGraphNodeNames.PRODUCT_QUERY_WORKFLOW.equals(workflowNode)) {
+                    graph.addNode(workflowNode, productQuerySubgraphFactory.build());
                     continue;
                 }
                 GuideGraphNodeAction defaultAction = defaultWorkflowActions.getOrDefault(
@@ -773,11 +792,40 @@ public class GuideStateGraphFactory {
                 && state.value(com.bytedance.ai.graph.cartmanage.subgraph.CartGraphStateKeys.NODE_MESSAGE).isPresent()) {
             return nonBlankStateString(state, com.bytedance.ai.graph.cartmanage.subgraph.CartGraphStateKeys.NODE_MESSAGE);
         }
+        if (GuideGraphNodeNames.PRODUCT_QUERY_WORKFLOW.equals(targetWorkflow)
+                && state.value(ProductQueryGraphStateKeys.NODE_MESSAGE).isPresent()) {
+            return nonBlankStateString(state, ProductQueryGraphStateKeys.NODE_MESSAGE);
+        }
         Optional<String> orderMessage = nonBlankStateString(state, OrderManageStateKeys.NODE_MESSAGE);
         if (orderMessage.isPresent()) {
             return orderMessage;
         }
+        Optional<String> productQueryMessage = nonBlankStateString(state, ProductQueryGraphStateKeys.NODE_MESSAGE);
+        if (productQueryMessage.isPresent()) {
+            return productQueryMessage;
+        }
         return nonBlankStateString(state, GuideGraphStateKeys.NODE_MESSAGE);
+    }
+
+    private void emitWorkflowStarted(
+            java.util.function.Consumer<AgentStreamEvent> eventSink,
+            OverAllState state,
+            Map<String, Object> routerResult
+    ) {
+        if (eventSink == null || routerResult == null) {
+            return;
+        }
+        Object targetWorkflow = routerResult.get(GuideGraphStateKeys.TARGET_WORKFLOW);
+        if (targetWorkflow == null) {
+            return;
+        }
+        Object intent = routerResult.get(GuideGraphStateKeys.INTENT);
+        String correlationId = state.value(GuideGraphStateKeys.CORRELATION_ID, "");
+        eventSink.accept(GuideGraphStreamEvents.workflowStarted(
+                correlationId,
+                String.valueOf(targetWorkflow),
+                intent == null ? null : String.valueOf(intent)
+        ));
     }
 
     private Optional<String> nonBlankStateString(OverAllState state, String key) {

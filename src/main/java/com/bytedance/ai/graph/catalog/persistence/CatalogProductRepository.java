@@ -1,0 +1,35 @@
+package com.bytedance.ai.graph.catalog.persistence;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+public interface CatalogProductRepository {
+
+    CatalogProductRecord save(
+            String title,
+            String brand,
+            String category,
+            String subCategory,
+            BigDecimal basePrice,
+            BigDecimal priceMin,
+            BigDecimal priceMax,
+            int totalStock,
+            String imagePath,
+            Map<String, Object> attributesJson,
+            Map<String, Object> rawJson
+    );
+
+    Optional<CatalogProductRecord> findById(Long id);
+
+    List<CatalogProductRecord> searchActiveByKeyword(String keyword, int limit);
+
+    boolean decreaseStock(Long productId, int quantity);
+
+    boolean markAttributeExtractionRunning(Long productId);
+
+    void markAttributeExtractionSucceeded(Long productId, Map<String, Object> attributesJson);
+
+    void markAttributeExtractionFailed(Long productId, String errorMessage);
+}

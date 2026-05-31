@@ -16,11 +16,9 @@ import org.springframework.validation.annotation.Validated;
  * @param rocketMq RocketMQ 相关配置
  * @param milvus Milvus 相关配置
  * @param indexing 离线索引流程配置
- * @param queryTransformation 查询改写/压缩配置
- * @param queryExpansion 查询扩展配置
- * @param retrieval 检索权重与候选集配置
  * @param outbox Outbox 投递配置
  * @param recovery 定时补偿配置
+ * @param productQuery 商品查询 subgraph 配置（仅 product_query_workflow 消费）
  */
 @Validated
 @ConfigurationProperties(prefix = "rag")
@@ -53,22 +51,16 @@ public record RagProperties(
         Indexing indexing,
 
         @DefaultValue
-        QueryTransformation queryTransformation,
-
-        @DefaultValue
-        QueryExpansion queryExpansion,
-
-        @DefaultValue
-        Retrieval retrieval,
-
-        @DefaultValue
         Outbox outbox,
 
         @DefaultValue
         Recovery recovery,
 
         @DefaultValue
-        Catalog catalog
+        Catalog catalog,
+
+        @DefaultValue
+        ProductQuery productQuery
 ) {
     public static RagProperties defaults() {
         return new RagProperties(
@@ -79,12 +71,10 @@ public record RagProperties(
                 RocketMq.defaults(),
                 Milvus.defaults(),
                 Indexing.defaults(),
-                QueryTransformation.defaults(),
-                QueryExpansion.defaults(),
-                Retrieval.defaults(),
                 Outbox.defaults(),
                 Recovery.defaults(),
-                Catalog.defaults()
+                Catalog.defaults(),
+                ProductQuery.defaults()
         );
     }
 
@@ -242,10 +232,51 @@ public record RagProperties(
             @DefaultValue("COSINE")
             String metricType,
             @DefaultValue("0.2")
-            double similarityThreshold
+            double similarityThreshold,
+            @DefaultValue
+            ProductSchema productSchema
     ) {
         public static Milvus defaults() {
-            return new Milvus(false, null, null, null, null, 1536, "COSINE", 0.2d);
+            return new Milvus(false, null, null, null, null, 1536, "COSINE", 0.2d, ProductSchema.defaults());
+        }
+
+        /**
+         * Milvus 集合中 product 相关的 scalar 字段映射。
+         *
+         * <p>{@link com.bytedance.ai.graph.product.retrieval.filter.MilvusScalarFilterBuilder}
+         * 只为「值非空」的字段生成 scalar filter；某字段没在 Milvus collection schema 里时把对应配置留空，
+         * builder 会跳过该项，未进入 Milvus filter 的条件由 PostgreSQL hard filter 与 hydrate 后 post-filter 兜底。
+         *
+         * <p>默认所有字段都为空：与现网 rag_chunks 集合保持兼容（当前只写了
+         * vectorId/documentId/productId/indexGeneration/sourceType/chunkType/chunkIndex 七个 metadata key）。
+         * 若运维侧补齐字段并重新索引，按需在 {@code application.yml} 里把对应字段名填上即可启用 Milvus 侧推下。
+         *
+         * @param statusField       商品状态字段名（VARCHAR，如 "ON_SHELF" / "ACTIVE"）；空则跳过
+         * @param activeStatusValue {@code statusField != null} 时表示「在售」的具体取值
+         * @param stockField        库存字段名（INT64）；空则跳过 stock 过滤
+         * @param priceField        价格字段名（DOUBLE）；空则跳过 price 过滤
+         * @param categoryIdField   品类 id 字段名（INT64）；与 {@code categoryNameField} 二选一，前者优先
+         * @param categoryNameField 品类 name 字段名（VARCHAR）；fallback
+         * @param brandIdField      品牌 id 字段名（INT64）
+         * @param brandNameField    品牌 name 字段名（VARCHAR）
+         * @param productIdField    商品 id 字段名（INT64）；不直接拼到 filter，但暴露给 builder 供 productId in [...] 场景
+         */
+        public record ProductSchema(
+                String statusField,
+                @DefaultValue("ACTIVE")
+                String activeStatusValue,
+                String stockField,
+                String priceField,
+                String categoryIdField,
+                String categoryNameField,
+                String brandIdField,
+                String brandNameField,
+                @DefaultValue("productId")
+                String productIdField
+        ) {
+            public static ProductSchema defaults() {
+                return new ProductSchema(null, "ACTIVE", null, null, null, null, null, null, "productId");
+            }
         }
     }
 
@@ -254,7 +285,6 @@ public record RagProperties(
      *
      * @param maxRetries 单次消息允许的最大重试次数
      * @param retryBackoffMillis 应用内重试退避时间，单位毫秒
-     * @param embeddingCacheEnabled 是否启用 embedding 缓存
      */
     public record Indexing(
             @DefaultValue("3")
@@ -265,252 +295,10 @@ public record RagProperties(
             @DefaultValue("1000")
             @Min(0)
             @Max(60_000)
-            long retryBackoffMillis,
-
-            @DefaultValue("true")
-            boolean embeddingCacheEnabled
+            long retryBackoffMillis
     ) {
         public static Indexing defaults() {
-            return new Indexing(3, 1_000L, true);
-        }
-    }
-
-    /**
-     * 查询压缩/改写配置。
-     *
-     * @param enabled 是否启用 CompressionQueryTransformer
-     * @param useModel 是否调用模型执行 compression
-     * @param minConversationTurns 对话总轮数达到该值后才启动 compression，当前问题计入轮数
-     * @param queryTemplate 自定义 compression 提示词模板，需包含 {history} 和 {query} 占位符
-     * @param minQuestionLength 当前问题长度达到该值后才触发 compression；小于等于 0 表示不启用该阈值
-     * @param minQuestionTokens 当前问题估算 token 数达到该值后才触发 compression；小于等于 0 表示不启用该阈值
-     * @param minHistoryTurns 历史 user 轮次达到该值后才触发 compression；小于等于 0 表示不启用该阈值
-     * @param timeoutMillis query transform 阶段的超时时间，单位毫秒；小于等于 0 表示不启用超时
-     * @param rewriteEnabled 是否启用 RewriteQueryTransformer
-     * @param rewriteUseModel 是否调用模型执行 rewrite
-     * @param rewriteQueryTemplate 自定义 rewrite 提示词模板
-     * @param rewriteTargetSearchSystem Spring AI RewriteQueryTransformer 的 target search system 配置
-     */
-    public record QueryTransformation(
-            @DefaultValue("true")
-            boolean enabled,
-
-            @DefaultValue("true")
-            boolean useModel,
-
-            @DefaultValue("3")
-            @Min(1)
-            @Max(32)
-            int minConversationTurns,
-
-            @DefaultValue("")
-            String queryTemplate,
-
-            @DefaultValue("0")
-            @Min(0)
-            @Max(8_192)
-            int minQuestionLength,
-
-            @DefaultValue("0")
-            @Min(0)
-            @Max(8_192)
-            int minQuestionTokens,
-
-            @DefaultValue("0")
-            @Min(0)
-            @Max(64)
-            int minHistoryTurns,
-
-            @DefaultValue("2000")
-            @Min(0)
-            @Max(120_000)
-            long timeoutMillis,
-
-            @DefaultValue("true")
-            boolean rewriteEnabled,
-
-            @DefaultValue("true")
-            boolean rewriteUseModel,
-
-            @DefaultValue("")
-            String rewriteQueryTemplate,
-
-            @DefaultValue("")
-            String rewriteTargetSearchSystem
-    ) {
-        public static QueryTransformation defaults() {
-            return new QueryTransformation(true, true, 3, "", 0, 0, 0, 2_000L, true, true, "", "");
-        }
-    }
-
-    /**
-     * 查询扩展配置。
-     *
-     * @param enabled 是否启用查询扩展
-     * @param useModel 是否调用模型生成扩展 query
-     * @param includeOriginal 是否保留原始问题
-     * @param numberOfQueries 期望生成的查询数量
-     * @param queryTemplate 自定义 query expansion 提示词模板，需包含 {number} 和 {query} 占位符
-     * @param timeoutMillis query expand 阶段的超时时间，单位毫秒；小于等于 0 表示不启用超时
-     */
-    public record QueryExpansion(
-            @DefaultValue("true")
-            boolean enabled,
-
-            @DefaultValue("true")
-            boolean useModel,
-
-            @DefaultValue("true")
-            boolean includeOriginal,
-
-            @DefaultValue("3")
-            @Min(1)
-            @Max(16)
-            int numberOfQueries,
-
-            @DefaultValue(""" 
-                    """)
-            String queryTemplate,
-
-            @DefaultValue("2000")
-            @Min(0)
-            @Max(120_000)
-            long timeoutMillis
-    ) {
-        public static QueryExpansion defaults() {
-            return new QueryExpansion(true, true, true, 3, "", 2_000L);
-        }
-    }
-
-    /**
-     * 检索阶段的权重与候选规模配置。
-     *
-     * @param keywordHeadingWeight 标题命中的关键词权重
-     * @param keywordTitleWeight 文档标题命中的关键词权重
-     * @param keywordContentWeight 正文命中的关键词权重
-     * @param semanticHeadingWeight 语义检索时标题命中的附加权重
-     * @param keywordCandidateMultiplier 关键词检索候选倍数
-     * @param keywordCandidateTopKMax 关键词检索候选上限
-     * @param hybridPerRetrieverMultiplier 混合检索每路候选倍数
-     * @param hybridPerRetrieverTopKMax 混合检索每路候选上限
-     * @param multiQueryPerQueryMultiplier 多查询模式下每个 query 的候选倍数
-     * @param multiQueryPerQueryTopKMax 多查询模式下每个 query 的候选上限
-     * @param semanticCandidateMultiplier 语义检索候选倍数
-     * @param semanticFilteredCandidateMultiplier 带过滤条件时的语义候选倍数
-     * @param semanticCandidateTopKMax 语义检索候选上限
-     * @param adaptiveSingleQueryJoinCandidateMultiplier 单 query 时 join 候选总预算倍数
-     * @param adaptiveMultiQueryJoinCandidateMultiplier 多 query 时 join 候选总预算倍数
-     * @param maxTotalJoinCandidateBudget 初次检索 join 候选总预算上限
-     * @param progressiveWideningEnabled 是否在召回不足时启用二次放大
-     * @param progressiveMaxTotalJoinCandidateBudget 二次放大 join 候选总预算上限
-     * @param rrfK RRF 融合参数 K
-     * @param neighborWindowBefore 返回上下文时向前扩展的切片数
-     * @param neighborWindowAfter 返回上下文时向后扩展的切片数
-     * @param semanticTimeoutMillis 语义检索超时，单位毫秒；小于等于 0 表示不启用超时
-     * @param keywordTimeoutMillis 关键词检索超时，单位毫秒；小于等于 0 表示不启用超时
-     * @param queryTimeoutMillis 单个扩展 query 的总检索超时，单位毫秒；小于等于 0 表示不启用超时
-     * @param queryConcurrency 多 query 检索并发度
-     * @param answerGenerationTimeoutMillis 答案生成超时，单位毫秒；小于等于 0 表示不启用超时
-     */
-    public record Retrieval(
-            @DefaultValue("4.0")
-            double keywordHeadingWeight,
-
-            @DefaultValue("1.5")
-            double keywordTitleWeight,
-
-            @DefaultValue("1.0")
-            double keywordContentWeight,
-
-            @DefaultValue("0.25")
-            double semanticHeadingWeight,
-
-            @DefaultValue("8")
-            int keywordCandidateMultiplier,
-
-            @DefaultValue("100")
-            int keywordCandidateTopKMax,
-
-            @DefaultValue("2")
-            int hybridPerRetrieverMultiplier,
-
-            @DefaultValue("20")
-            int hybridPerRetrieverTopKMax,
-
-            @DefaultValue("2")
-            int multiQueryPerQueryMultiplier,
-
-            @DefaultValue("10")
-            int multiQueryPerQueryTopKMax,
-
-            @DefaultValue("3")
-            int semanticCandidateMultiplier,
-
-            @DefaultValue("5")
-            int semanticFilteredCandidateMultiplier,
-
-            @DefaultValue("50")
-            int semanticCandidateTopKMax,
-
-            @DefaultValue("2")
-            @Min(1)
-            @Max(16)
-            int adaptiveSingleQueryJoinCandidateMultiplier,
-
-            @DefaultValue("4")
-            @Min(1)
-            @Max(16)
-            int adaptiveMultiQueryJoinCandidateMultiplier,
-
-            @DefaultValue("24")
-            @Min(1)
-            @Max(512)
-            int maxTotalJoinCandidateBudget,
-
-            @DefaultValue("true")
-            boolean progressiveWideningEnabled,
-
-            @DefaultValue("48")
-            @Min(1)
-            @Max(1024)
-            int progressiveMaxTotalJoinCandidateBudget,
-
-            @DefaultValue("60.0")
-            double rrfK,
-
-            @DefaultValue("1")
-            int neighborWindowBefore,
-
-            @DefaultValue("1")
-            int neighborWindowAfter,
-
-            @DefaultValue("1500")
-            @Min(0)
-            @Max(120_000)
-            long semanticTimeoutMillis,
-
-            @DefaultValue("1500")
-            @Min(0)
-            @Max(120_000)
-            long keywordTimeoutMillis,
-
-            @DefaultValue("3000")
-            @Min(0)
-            @Max(120_000)
-            long queryTimeoutMillis,
-
-            @DefaultValue("4")
-            @Min(1)
-            @Max(16)
-            int queryConcurrency,
-
-            @DefaultValue("12000")
-            @Min(0)
-            @Max(300_000)
-            long answerGenerationTimeoutMillis
-    ) {
-        public static Retrieval defaults() {
-            return new Retrieval(4.0d, 1.5d, 1.0d, 0.25d, 8, 100, 2, 20, 2, 10, 3, 5, 50, 2, 4, 24, true, 48, 60.0d, 1, 1, 1_500L, 1_500L, 3_000L, 4, 12_000L);
+            return new Indexing(3, 1_000L);
         }
     }
 
@@ -599,6 +387,112 @@ public record RagProperties(
     ) {
         public static Recovery defaults() {
             return new Recovery(true, 60_000L, 300_000L, 600_000L, 3_600_000L, 60_000L, 20);
+        }
+    }
+
+    /**
+     * 商品查询 subgraph（product_query_workflow）配置。
+     *
+     * <p>product retrieval 与 graph 两侧共用同一份配置：product retrieval 侧负责 SQL 推下、RRF 与基础打分，
+     * graph 侧负责 condition-specific 二次排序与多轮上下文持久化。
+     *
+     * @param defaultTopK            最终返回给用户的商品数量上限
+     * @param keywordCandidateTopK   关键词分支召回候选数
+     * @param semanticCandidateTopK  语义分支召回候选数
+     * @param rrfK                   RRF 融合参数 K
+     * @param keywordTimeoutMillis   关键词分支超时，单位毫秒；≤0 表示不启用超时
+     * @param semanticTimeoutMillis  语义分支超时，单位毫秒；≤0 表示不启用超时
+     * @param pendingTtlHours        pending_product_query_actions 行的存活时间（小时）
+     * @param mustHaveStockDefault   未显式表达时是否默认要求有库存
+     * @param rankWeights            基础排序权重 + condition 二次排序权重
+     * @param comparison             对比节点配置
+     */
+    public record ProductQuery(
+            @DefaultValue("8")
+            @Min(1)
+            @Max(50)
+            int defaultTopK,
+
+            @DefaultValue("40")
+            @Min(1)
+            @Max(500)
+            int keywordCandidateTopK,
+
+            @DefaultValue("40")
+            @Min(1)
+            @Max(500)
+            int semanticCandidateTopK,
+
+            @DefaultValue("60.0")
+            double rrfK,
+
+            @DefaultValue("8000")
+            @Min(0)
+            @Max(120_000)
+            long keywordTimeoutMillis,
+
+            @DefaultValue("8000")
+            @Min(0)
+            @Max(120_000)
+            long semanticTimeoutMillis,
+
+            @DefaultValue("24")
+            @Min(1)
+            @Max(168)
+            long pendingTtlHours,
+
+            @DefaultValue("true")
+            boolean mustHaveStockDefault,
+
+            @DefaultValue
+            RankWeights rankWeights,
+
+            @DefaultValue
+            Comparison comparison
+    ) {
+        public static ProductQuery defaults() {
+            return new ProductQuery(
+                    8, 40, 40, 60.0d,
+                    1_500L, 1_500L,
+                    24L, true,
+                    RankWeights.defaults(),
+                    Comparison.defaults()
+            );
+        }
+
+        /**
+         * 排序权重。基础权重由 graph product 侧 ProductBaseRanker 使用；
+         * condition* 权重由 graph 侧 ProductRanker 在二次排序时使用。
+         */
+        public record RankWeights(
+                @DefaultValue("0.30") double keyword,
+                @DefaultValue("0.30") double semantic,
+                @DefaultValue("0.15") double categoryMatch,
+                @DefaultValue("0.10") double includeMatch,
+                @DefaultValue("0.10") double priceMatch,
+                @DefaultValue("0.05") double stock,
+                @DefaultValue("0.10") double conditionIncludeBoost,
+                @DefaultValue("0.05") double conditionSortBoost
+        ) {
+            public static RankWeights defaults() {
+                return new RankWeights(0.30d, 0.30d, 0.15d, 0.10d, 0.10d, 0.05d, 0.10d, 0.05d);
+            }
+        }
+
+        /**
+         * 对比节点配置。
+         *
+         * @param defaultTopN comparisonTargets 为空时默认取前 N 个候选做对比
+         */
+        public record Comparison(
+                @DefaultValue("2")
+                @Min(2)
+                @Max(5)
+                int defaultTopN
+        ) {
+            public static Comparison defaults() {
+                return new Comparison(2);
+            }
         }
     }
 }

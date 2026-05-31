@@ -7,6 +7,7 @@ import com.bytedance.ai.graph.api.AgentStreamEvent;
 import com.bytedance.ai.graph.api.*;
 import com.bytedance.ai.graph.cartmanage.subgraph.CartGraphStateKeys;
 import com.bytedance.ai.graph.conversation.AgentConversationRepository;
+import com.bytedance.ai.graph.product.query.ProductQueryGraphStateKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -164,6 +165,11 @@ public class GuideGraphStreamService implements GuideGraphStreamFacade {
         String targetWorkflow = state.value(GuideGraphStateKeys.TARGET_WORKFLOW, "");
         if (GuideGraphNodeNames.CART_MANAGE_WORKFLOW.equals(targetWorkflow)) {
             return state.value(CartGraphStateKeys.NODE_MESSAGE)
+                    .map(Object::toString)
+                    .filter(value -> !value.isBlank());
+        }
+        if (GuideGraphNodeNames.PRODUCT_QUERY_WORKFLOW.equals(targetWorkflow)) {
+            return state.value(ProductQueryGraphStateKeys.NODE_MESSAGE)
                     .map(Object::toString)
                     .filter(value -> !value.isBlank());
         }

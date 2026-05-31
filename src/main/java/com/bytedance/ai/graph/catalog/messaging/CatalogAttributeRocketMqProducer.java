@@ -52,23 +52,22 @@ public class CatalogAttributeRocketMqProducer {
                     topic + ":" + tag,
                     MessageBuilder.withPayload(body)
                             .setHeader(RocketMQHeaders.TAGS, tag)
-                            .setHeader(RocketMQHeaders.KEYS, "catalog-spu-" + payload.spuId())
+                            .setHeader(RocketMQHeaders.KEYS, "catalog-product-" + payload.productId())
                             .build()
             );
             String messageId = receipt == null || receipt.getMessageId() == null
                     ? null
                     : receipt.getMessageId().toString();
             log.info(
-                    "catalog attribute message published: spuId={}, externalRef={}, topic={}, messageId={}",
-                    payload.spuId(),
-                    payload.externalRef(),
+                    "catalog attribute message published: productId={}, topic={}, messageId={}",
+                    payload.productId(),
                     topic,
                     messageId
             );
             return messageId;
         } catch (Exception exception) {
             throw new IllegalStateException(
-                    "catalog attribute message publish failed: spuId=" + payload.spuId()
+                    "catalog attribute message publish failed: productId=" + payload.productId()
                             + ", reason=" + exception.getMessage(),
                     exception
             );

@@ -1,7 +1,7 @@
 /**
- * Catalog 模块：电商商品域（SPU / SKU / 价格 / 库存 / LLM 抽取的结构化属性）。
+ * Catalog 模块：电商商品域（Product / SKU / 价格 / 库存 / LLM 抽取的结构化属性）。
  *
- * <p>导入与变更会双写一行 {@code rag_documents}（{@code source_type=catalog-spu}），
+ * <p>导入与变更会写入多篇 {@code rag_documents}（{@code PRODUCT_PROFILE / PRODUCT_KNOWLEDGE / PRODUCT_FAQ / PRODUCT_REVIEW}），
  * 借助 document 模块对外发布的 {@code DocumentIndexRequestedEvent} 自动触发既有索引链路；
  * indexing 模块无需感知 catalog 的存在。
  *

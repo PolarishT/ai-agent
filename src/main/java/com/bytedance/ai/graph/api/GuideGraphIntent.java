@@ -10,6 +10,7 @@ public enum GuideGraphIntent {
     PRODUCT_SEARCH,
     PRODUCT_COMPARE,
     PRODUCT_DETAIL_QUERY,
+    PRODUCT_QUERY,
 
     PRICE_QUERY,
     INVENTORY_QUERY,

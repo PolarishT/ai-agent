@@ -356,13 +356,13 @@ public class RagIndexingService {
         }
 
         validateIndexableDocument(loadDocument(documentId), document.contentSha256(), true);
-        cleanupObsoleteGenerations(documentId, indexGeneration, currentMaxChunkIndex, milvusVectorIndexer);
         workflowService.succeed(
                 workflowCommand
                         .withTargetGeneration(indexGeneration)
                         .withChunkCount(savedChunks.size())
                         .withMetadata("maxChunkIndex", currentMaxChunkIndex)
         );
+        cleanupObsoleteGenerationsAfterCommit(documentId, indexGeneration, currentMaxChunkIndex, milvusVectorIndexer);
         return savedChunks.size();
     }
 
@@ -372,21 +372,32 @@ public class RagIndexingService {
             RagTextChunk chunk,
             long indexGeneration
     ) {
-        // stable vectorId 只由 documentId + chunkIndex 组成，这样同一段位可以通过 Upsert 覆盖旧向量。
-        String vectorId = buildStableVectorId(document.id(), chunk.chunkIndex());
+        String sourceType = normalizeUpper(document.sourceType());
+        com.bytedance.ai.shared.metadata.RagChunkType classifiedChunkType = chunkTypeClassifier.classify(
+                document.sourceType(),
+                chunk.chunkIndex(),
+                chunk.headingPath(),
+                chunk.blockMetadata()
+        );
+        String chunkType = com.bytedance.ai.indexing.service.ProductChunkTypeNormalizer
+                .normalize(sourceType, chunk.headingPath(), classifiedChunkType);
+        String headingPathText = toHeadingPathText(chunk.headingPath());
+        Long productId = extractProductId(document.metadata());
+        String vectorId = buildVectorId(document.id(), indexGeneration, chunk.chunkIndex());
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("documentId", document.id());
         metadata.put("indexGeneration", indexGeneration);
-        metadata.put("sourceType", document.sourceType());
         metadata.put("sourceUri", defaultString(document.sourceUri()));
         metadata.put("chunkIndex", chunk.chunkIndex());
         metadata.put("blockType", chunk.blockType());
+        if (productId != null) {
+            metadata.put("productId", productId);
+        }
         if (documentTags != null && !documentTags.isEmpty()) {
             metadata.put("documentTags", new ArrayList<>(documentTags));
         }
         if (chunk.headingPath() != null && !chunk.headingPath().isEmpty()) {
             metadata.put("headingPath", new ArrayList<>(chunk.headingPath()));
-            metadata.put("headingPathText", toHeadingPathText(chunk.headingPath()));
         }
         if (chunk.codeLanguage() != null && !chunk.codeLanguage().isBlank()) {
             metadata.put("codeLanguage", chunk.codeLanguage());
@@ -394,18 +405,13 @@ public class RagIndexingService {
         if (chunk.blockMetadata() != null && !chunk.blockMetadata().isEmpty()) {
             metadata.putAll(chunk.blockMetadata());
         }
-        // chunkType 在 blockMetadata 之后写入，保证启发式分类不会被块级遗留字段覆盖；
-        // 显式声明优先的语义由 classifier 自己维护。
-        com.bytedance.ai.shared.metadata.RagChunkType chunkType = chunkTypeClassifier.classify(
-                document.sourceType(),
-                chunk.chunkIndex(),
-                chunk.headingPath(),
-                chunk.blockMetadata()
-        );
-        metadata.put("chunkType", chunkType.name());
         return new RagChunkDraft(
                 indexGeneration,
+                productId,
+                sourceType,
                 chunk.chunkIndex(),
+                chunkType,
+                headingPathText,
                 chunk.text(),
                 chunk.hash(),
                 chunk.charCount(),
@@ -415,8 +421,31 @@ public class RagIndexingService {
         );
     }
 
-    private String buildStableVectorId(Long documentId, int chunkIndex) {
-        return "rag-" + documentId + "-" + chunkIndex;
+    private String buildVectorId(Long documentId, long indexGeneration, int chunkIndex) {
+        return "rag-doc-" + documentId + "-gen-" + indexGeneration + "-chunk-" + chunkIndex;
+    }
+
+    private Long extractProductId(Map<String, Object> metadata) {
+        if (metadata == null || metadata.isEmpty()) {
+            return null;
+        }
+        Object value = metadata.get("productId");
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value instanceof String string && !string.isBlank()) {
+            try {
+                return Long.parseLong(string.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+
+    private String normalizeUpper(String value) {
+        return value == null ? null : value.trim().replace('-', '_').toUpperCase(Locale.ROOT);
     }
 
     private String defaultString(String value) {
@@ -530,23 +559,15 @@ public class RagIndexingService {
             );
             deleteVectorIds(sameGenerationVectorIds, milvusVectorIndexer, "pending-generation");
         } else {
-            Integer preservedMaxChunkIndex = chunkRepository.findMaxChunkIndexByDocumentIdAndGeneration(documentId, preservedGeneration);
-            Integer pendingMaxChunkIndex = chunkRepository.findMaxChunkIndexByDocumentIdAndGeneration(documentId, indexGeneration);
+            List<String> sameGenerationVectorIds = chunkRepository.findVectorIdsByDocumentIdAndGeneration(documentId, indexGeneration);
             log.debug(
-                    "按 stable vectorId 清理 pending generation 尾部。documentId={}, pendingGeneration={}, preservedGeneration={}, fromChunkIndex={}, toChunkIndex={}",
+                    "清理 pending generation 向量。documentId={}, pendingGeneration={}, preservedGeneration={}, vectorCount={}",
                     documentId,
                     indexGeneration,
                     preservedGeneration,
-                    normalizedNextChunkIndex(preservedMaxChunkIndex),
-                    pendingMaxChunkIndex
+                    sameGenerationVectorIds.size()
             );
-            deleteStableTailVectors(
-                    documentId,
-                    normalizedNextChunkIndex(preservedMaxChunkIndex),
-                    pendingMaxChunkIndex,
-                    milvusVectorIndexer,
-                    "pending-generation-tail"
-            );
+            deleteVectorIds(sameGenerationVectorIds, milvusVectorIndexer, "pending-generation");
         }
         chunkRepository.deleteByDocumentIdAndGeneration(documentId, indexGeneration);
     }
@@ -568,22 +589,14 @@ public class RagIndexingService {
             return;
         }
 
-        Integer activeMaxChunkIndex = chunkRepository.findMaxChunkIndexByDocumentIdAndGeneration(documentId, activeGeneration);
-        Integer danglingMaxChunkIndex = chunkRepository.findMaxChunkIndexByDocumentIdExceptGeneration(documentId, activeGeneration);
+        List<String> danglingVectorIds = chunkRepository.findVectorIdsByDocumentIdExceptGeneration(documentId, activeGeneration);
         log.debug(
-                "索引前清理非 active generation 尾部向量。documentId={}, activeGeneration={}, activeMaxChunkIndex={}, danglingMaxChunkIndex={}",
+                "索引前清理非 active generation 向量。documentId={}, activeGeneration={}, vectorCount={}",
                 documentId,
                 activeGeneration,
-                activeMaxChunkIndex,
-                danglingMaxChunkIndex
+                danglingVectorIds.size()
         );
-        deleteStableTailVectors(
-                documentId,
-                normalizedNextChunkIndex(activeMaxChunkIndex),
-                danglingMaxChunkIndex,
-                milvusVectorIndexer,
-                "pre-index-non-active-tail"
-        );
+        deleteVectorIds(danglingVectorIds, milvusVectorIndexer, "pre-index-non-active");
         chunkRepository.deleteByDocumentIdExceptGeneration(documentId, activeGeneration);
     }
 
@@ -638,27 +651,31 @@ public class RagIndexingService {
         milvusVectorIndexer.add(document, activeChunks);
     }
 
-    private void cleanupObsoleteGenerations(
+    private void cleanupObsoleteGenerationsAfterCommit(
             Long documentId,
             long activeGeneration,
             int activeMaxChunkIndex,
             RagMilvusVectorIndexer milvusVectorIndexer
     ) {
-        Integer obsoleteMaxChunkIndex = chunkRepository.findMaxChunkIndexByDocumentIdExceptGeneration(documentId, activeGeneration);
-        log.debug(
-                "提交后清理旧 generation 尾部向量。documentId={}, activeGeneration={}, activeMaxChunkIndex={}, obsoleteMaxChunkIndex={}",
-                documentId,
-                activeGeneration,
-                activeMaxChunkIndex,
-                obsoleteMaxChunkIndex
-        );
-        deleteStableTailVectors(
-                documentId,
-                activeMaxChunkIndex + 1,
-                obsoleteMaxChunkIndex,
-                milvusVectorIndexer,
-                "obsolete-generation-tail"
-        );
+        List<String> obsoleteVectorIds = chunkRepository.findVectorIdsByDocumentIdExceptGeneration(documentId, activeGeneration);
+        try {
+            log.debug(
+                    "提交后清理旧 generation 向量。documentId={}, activeGeneration={}, activeMaxChunkIndex={}, vectorCount={}",
+                    documentId,
+                    activeGeneration,
+                    activeMaxChunkIndex,
+                    obsoleteVectorIds.size()
+            );
+            deleteVectorIds(obsoleteVectorIds, milvusVectorIndexer, "obsolete-generation");
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "旧 generation Milvus 向量清理失败，将由 recovery 补偿。documentId={}, activeGeneration={}, vectorCount={}, error={}",
+                    documentId,
+                    activeGeneration,
+                    obsoleteVectorIds.size(),
+                    RagLogHelper.errorSummary(exception)
+            );
+        }
         chunkRepository.deleteByDocumentIdExceptGeneration(documentId, activeGeneration);
     }
 
@@ -689,32 +706,6 @@ public class RagIndexingService {
                 ErrorCode.CLIENT_ERROR,
                 "Milvus 向量删除器未装配，无法执行向量删除: phase=" + phase + ", vectorCount=" + normalizedVectorIds.size()
         );
-    }
-
-    private void deleteStableTailVectors(
-            Long documentId,
-            int fromChunkIndexInclusive,
-            Integer toChunkIndexInclusive,
-            RagMilvusVectorIndexer milvusVectorIndexer,
-            String phase
-    ) {
-        if (toChunkIndexInclusive == null || fromChunkIndexInclusive > toChunkIndexInclusive) {
-            return;
-        }
-        // stable vectorId 语义下，只有文档变短时才需要物理删除尾部向量，前半段直接由 Upsert 覆盖。
-        List<String> stableVectorIds = new ArrayList<>();
-        for (int chunkIndex = Math.max(0, fromChunkIndexInclusive); chunkIndex <= toChunkIndexInclusive; chunkIndex++) {
-            stableVectorIds.add(buildStableVectorId(documentId, chunkIndex));
-        }
-        log.debug(
-                "按 stable vectorId 删除尾部向量。phase={}, documentId={}, fromChunkIndex={}, toChunkIndex={}, vectorCount={}",
-                phase,
-                documentId,
-                Math.max(0, fromChunkIndexInclusive),
-                toChunkIndexInclusive,
-                stableVectorIds.size()
-        );
-        deleteVectorIds(stableVectorIds, milvusVectorIndexer, phase);
     }
 
     private int normalizedNextChunkIndex(Integer maxChunkIndex) {

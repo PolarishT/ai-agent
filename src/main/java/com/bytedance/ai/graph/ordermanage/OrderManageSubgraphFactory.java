@@ -10,8 +10,8 @@ import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
 import com.bytedance.ai.graph.cart.api.CartItemView;
 import com.bytedance.ai.graph.cart.api.CartQueryFacade;
 import com.bytedance.ai.graph.cart.api.CartView;
+import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
-import com.bytedance.ai.graph.catalog.api.CatalogSpuView;
 import com.bytedance.ai.graph.GuideGraphStateKeys;
 import com.bytedance.ai.graph.cartmanage.subgraph.PendingCartActionRepository;
 import org.springframework.beans.factory.ObjectProvider;
@@ -398,9 +398,9 @@ public class OrderManageSubgraphFactory {
             return "购物车为空";
         }
         for (CartItemView item : snapshotService.sortedItems(cart)) {
-            CatalogSpuView spu = catalogQueryFacade.getSpu(item.spuId());
+            CatalogProductView product = catalogQueryFacade.getProduct(item.spuId());
             int required = item.quantity() == null ? 0 : item.quantity();
-            if (!"ACTIVE".equals(spu.status()) || spu.stock() == null || spu.stock() < required) {
+            if (!"ACTIVE".equals(product.status()) || product.totalStock() == null || product.totalStock() < required) {
                 return "「" + item.title() + "」库存不足或已下架";
             }
         }

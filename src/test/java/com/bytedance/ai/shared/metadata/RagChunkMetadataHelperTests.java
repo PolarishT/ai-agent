@@ -15,11 +15,11 @@ class RagChunkMetadataHelperTests {
     @Test
     void parsesJsonMetadata() {
         RagChunkMetadataView view = helper.parse("""
-                {"blockType":"text","chunkType":"DESC","headingPath":["商品","描述"],"documentTags":["防晒"]}
+                {"blockType":"text","chunkType":"MARKETING","headingPath":["商品","描述"],"documentTags":["防晒"]}
                 """);
 
         assertThat(view.blockType()).isEqualTo("text");
-        assertThat(view.chunkType()).isEqualTo(RagChunkType.DESC);
+        assertThat(view.chunkType()).isEqualTo(RagChunkType.MARKETING);
         assertThat(view.headingPath()).containsExactly("商品", "描述");
         assertThat(view.documentTags()).containsExactly("防晒");
     }
@@ -27,13 +27,21 @@ class RagChunkMetadataHelperTests {
     @Test
     void parsesLegacyJavaMapStringMetadata() {
         RagChunkMetadataView view = helper.parse("""
-                {blockType=text, chunkType=DESC, sourceUri=catalog://spu/SPU-0009, headingPath=[纯物理防晒霜不含酒精敏感肌可用, 商品描述], headingPathText=纯物理防晒霜不含酒精敏感肌可用 / 商品描述, documentTags=[防晒, 敏感肌]}
+                {blockType=text, chunkType=PRODUCT_PROFILE, sourceUri=product:9:profile, headingPath=[纯物理防晒霜不含酒精敏感肌可用, 商品描述], headingPathText=纯物理防晒霜不含酒精敏感肌可用 / 商品描述, documentTags=[防晒, 敏感肌]}
                 """);
 
         assertThat(view.blockType()).isEqualTo("text");
-        assertThat(view.chunkType()).isEqualTo(RagChunkType.DESC);
+        assertThat(view.chunkType()).isEqualTo(RagChunkType.PRODUCT_PROFILE);
         assertThat(view.headingPath()).containsExactly("纯物理防晒霜不含酒精敏感肌可用", "商品描述");
         assertThat(view.documentTags()).containsExactly("防晒", "敏感肌");
-        assertThat(view.raw()).containsEntry("sourceUri", "catalog://spu/SPU-0009");
+        assertThat(view.raw()).containsEntry("sourceUri", "product:9:profile");
+    }
+
+    @Test
+    void unknownChunkTypeFallsBackToNull() {
+        RagChunkMetadataView view = helper.parse("""
+                {"blockType":"text","chunkType":"DESC"}
+                """);
+        assertThat(view.chunkType()).isNull();
     }
 }

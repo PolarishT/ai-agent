@@ -54,6 +54,15 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
+        <!-- aop: 注解式限流 @RateLimit 依赖 @AspectJ 自动代理。
+             Spring Boot 4 不再提供 spring-boot-starter-aop，spring-aop 已随 spring-context 传递进来，
+             此处仅补 aspectjweaver（提供 @Aspect/@Around 注解与切点解析），版本由 BOM 管理。
+             classpath 出现 weaver 后，AopAutoConfiguration 会自动开启 @AspectJ 代理。 -->
+        <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+        </dependency>
+
         <!-- actuator -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

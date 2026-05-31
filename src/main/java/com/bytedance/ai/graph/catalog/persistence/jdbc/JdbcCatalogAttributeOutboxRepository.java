@@ -19,9 +19,6 @@ import java.util.Optional;
 
 /**
  * Spring JDBC 实现的 catalog 抽属性 Outbox 仓储。
- *
- * <p>PostgreSQL 走 jsonb，H2 测试库退化为 CLOB / VARCHAR；JDBC 层通过
- * {@link Connection#getMetaData()} 自动检测，复用 catalog_spu / rag_chunks 的同款套路。
  */
 @Repository
 public class JdbcCatalogAttributeOutboxRepository implements CatalogAttributeOutboxRepository {
@@ -29,13 +26,13 @@ public class JdbcCatalogAttributeOutboxRepository implements CatalogAttributeOut
     private static final RowMapper<CatalogAttributeOutboxRecord> ROW_MAPPER = (rs, rowNum) ->
             new CatalogAttributeOutboxRecord(
                     rs.getLong("id"),
-                    rs.getLong("spu_id"),
-                    rs.getString("external_ref"),
-                    rs.getString("payload_json"),
+                    rs.getLong("product_id"),
+                    rs.getString("event_type"),
+                    rs.getString("metadata"),
                     rs.getString("status"),
                     rs.getInt("attempt_count"),
                     rs.getString("last_error"),
-                    toOffsetDateTime(rs.getTimestamp("next_send_after")),
+                    toOffsetDateTime(rs.getTimestamp("next_attempt_at")),
                     rs.getString("message_id"),
                     toOffsetDateTime(rs.getTimestamp("created_at")),
                     toOffsetDateTime(rs.getTimestamp("updated_at"))
@@ -48,27 +45,29 @@ public class JdbcCatalogAttributeOutboxRepository implements CatalogAttributeOut
     }
 
     @Override
-    public void enqueue(Long spuId, String externalRef, String payloadJson) {
-        // 同一 SPU 仍有 PENDING / FAILED / SENDING 的 outbox 行时复用，避免无限堆积重复消息。
+    public void enqueue(Long productId, String eventType, String metadataJson) {
+        String safeEventType = eventType == null || eventType.isBlank() ? "EXTRACT_ATTRIBUTES" : eventType;
+        // 同一 Product 同事件仍有 NEW / FAILED / SENDING 的 outbox 行时复用，避免无限堆积重复消息。
         int updatedRows = jdbc.update(
                 """
                 UPDATE catalog_attribute_outbox
                    SET status = ?, attempt_count = 0, last_error = NULL, message_id = NULL,
-                       next_send_after = now(), updated_at = now()
-                 WHERE spu_id = ? AND status IN (?, ?, ?)
+                       next_attempt_at = now(), updated_at = now()
+                 WHERE product_id = ? AND event_type = ? AND status IN (?, ?, ?)
                 """,
-                CatalogAttributeOutboxStatus.PENDING.name(),
-                spuId,
-                CatalogAttributeOutboxStatus.PENDING.name(),
+                CatalogAttributeOutboxStatus.NEW.name(),
+                productId,
+                safeEventType,
+                CatalogAttributeOutboxStatus.NEW.name(),
                 CatalogAttributeOutboxStatus.FAILED.name(),
                 CatalogAttributeOutboxStatus.SENDING.name()
         );
         if (updatedRows > 0) {
-            // 仅在 payload 实质变化时覆盖，否则保留原始 payload 即可。
             jdbc.update(connection -> {
                 PreparedStatement statement = connection.prepareStatement(updatePayloadSql(connection));
-                bindPayload(statement, connection, 1, payloadJson);
-                statement.setLong(2, spuId);
+                bindPayload(statement, connection, 1, metadataJson);
+                statement.setLong(2, productId);
+                statement.setString(3, safeEventType);
                 return statement;
             });
             return;
@@ -77,15 +76,15 @@ public class JdbcCatalogAttributeOutboxRepository implements CatalogAttributeOut
         try {
             jdbc.update(connection -> {
                 PreparedStatement statement = connection.prepareStatement(insertSql(connection));
-                statement.setLong(1, spuId);
-                statement.setString(2, externalRef);
-                bindPayload(statement, connection, 3, payloadJson);
-                statement.setString(4, CatalogAttributeOutboxStatus.PENDING.name());
+                statement.setLong(1, productId);
+                statement.setString(2, safeEventType);
+                statement.setString(3, CatalogAttributeOutboxStatus.NEW.name());
+                bindPayload(statement, connection, 4, metadataJson);
                 return statement;
             });
         } catch (DuplicateKeyException ignored) {
             // 并发 enqueue 时最终仍收敛到唯一一行；递归一次走 UPDATE 分支。
-            enqueue(spuId, externalRef, payloadJson);
+            enqueue(productId, safeEventType, metadataJson);
         }
     }
 
@@ -95,12 +94,12 @@ public class JdbcCatalogAttributeOutboxRepository implements CatalogAttributeOut
                 """
                 SELECT * FROM catalog_attribute_outbox
                  WHERE status IN (?, ?)
-                   AND (next_send_after IS NULL OR next_send_after <= ?)
+                   AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
                  ORDER BY created_at ASC
                  LIMIT ?
                 """,
                 ROW_MAPPER,
-                CatalogAttributeOutboxStatus.PENDING.name(),
+                CatalogAttributeOutboxStatus.NEW.name(),
                 CatalogAttributeOutboxStatus.FAILED.name(),
                 Timestamp.from(now.toInstant()),
                 limit
@@ -117,7 +116,7 @@ public class JdbcCatalogAttributeOutboxRepository implements CatalogAttributeOut
                 """,
                 CatalogAttributeOutboxStatus.SENDING.name(),
                 id,
-                CatalogAttributeOutboxStatus.PENDING.name(),
+                CatalogAttributeOutboxStatus.NEW.name(),
                 CatalogAttributeOutboxStatus.FAILED.name()
         );
         return updatedRows > 0;
@@ -143,7 +142,7 @@ public class JdbcCatalogAttributeOutboxRepository implements CatalogAttributeOut
                 """
                 UPDATE catalog_attribute_outbox
                    SET status = ?, attempt_count = attempt_count + 1,
-                       last_error = ?, next_send_after = ?, updated_at = now()
+                       last_error = ?, next_attempt_at = ?, updated_at = now()
                  WHERE id = ?
                 """,
                 CatalogAttributeOutboxStatus.FAILED.name(),
@@ -175,7 +174,7 @@ public class JdbcCatalogAttributeOutboxRepository implements CatalogAttributeOut
         jdbc.update(
                 """
                 UPDATE catalog_attribute_outbox
-                   SET status = ?, last_error = ?, next_send_after = ?, updated_at = now()
+                   SET status = ?, last_error = ?, next_attempt_at = ?, updated_at = now()
                  WHERE id = ? AND status = ?
                 """,
                 CatalogAttributeOutboxStatus.FAILED.name(),
@@ -187,16 +186,16 @@ public class JdbcCatalogAttributeOutboxRepository implements CatalogAttributeOut
     }
 
     @Override
-    public Optional<CatalogAttributeOutboxRecord> findLatestBySpuId(Long spuId) {
+    public Optional<CatalogAttributeOutboxRecord> findLatestByProductId(Long productId) {
         List<CatalogAttributeOutboxRecord> records = jdbc.query(
                 """
                 SELECT * FROM catalog_attribute_outbox
-                 WHERE spu_id = ?
+                 WHERE product_id = ?
                  ORDER BY id DESC
                  LIMIT 1
                 """,
                 ROW_MAPPER,
-                spuId
+                productId
         );
         return records.stream().findFirst();
     }
@@ -207,13 +206,13 @@ public class JdbcCatalogAttributeOutboxRepository implements CatalogAttributeOut
         if (isPostgreSql(connection)) {
             return """
                     INSERT INTO catalog_attribute_outbox (
-                        spu_id, external_ref, payload_json, status, next_send_after
-                    ) VALUES (?, ?, CAST(? AS jsonb), ?, now())
+                        product_id, event_type, status, metadata, next_attempt_at
+                    ) VALUES (?, ?, ?, CAST(? AS jsonb), now())
                     """;
         }
         return """
                 INSERT INTO catalog_attribute_outbox (
-                    spu_id, external_ref, payload_json, status, next_send_after
+                    product_id, event_type, status, metadata, next_attempt_at
                 ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """;
     }
@@ -222,14 +221,14 @@ public class JdbcCatalogAttributeOutboxRepository implements CatalogAttributeOut
         if (isPostgreSql(connection)) {
             return """
                     UPDATE catalog_attribute_outbox
-                       SET payload_json = CAST(? AS jsonb), updated_at = now()
-                     WHERE spu_id = ? AND status = 'PENDING'
+                       SET metadata = CAST(? AS jsonb), updated_at = now()
+                     WHERE product_id = ? AND event_type = ? AND status = 'NEW'
                     """;
         }
         return """
                 UPDATE catalog_attribute_outbox
-                   SET payload_json = ?, updated_at = CURRENT_TIMESTAMP
-                 WHERE spu_id = ? AND status = 'PENDING'
+                   SET metadata = ?, updated_at = CURRENT_TIMESTAMP
+                 WHERE product_id = ? AND event_type = ? AND status = 'NEW'
                 """;
     }
 

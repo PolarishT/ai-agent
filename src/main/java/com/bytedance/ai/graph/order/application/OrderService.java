@@ -5,8 +5,8 @@ import com.bytedance.ai.graph.cart.api.CartItemView;
 import com.bytedance.ai.graph.cart.api.CartQueryFacade;
 import com.bytedance.ai.graph.cart.api.CartView;
 import com.bytedance.ai.graph.catalog.api.CatalogInventoryFacade;
+import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
-import com.bytedance.ai.graph.catalog.api.CatalogSpuView;
 import com.bytedance.ai.graph.order.api.DeliveryAddressView;
 import com.bytedance.ai.graph.order.api.OrderCommandFacade;
 import com.bytedance.ai.graph.order.api.OrderItemView;
@@ -119,8 +119,8 @@ public class OrderService implements OrderCommandFacade, OrderQueryFacade {
     }
 
     private PriceChangeView detectPriceChange(CartItemView item) {
-        CatalogSpuView spu = catalogQueryFacade.getSpu(item.spuId());
-        BigDecimal current = displayPrice(spu);
+        CatalogProductView product = catalogQueryFacade.getProduct(item.spuId());
+        BigDecimal current = displayPrice(product);
         if (item.unitPrice() == null || current == null || item.unitPrice().compareTo(current) == 0) {
             return null;
         }
@@ -135,8 +135,8 @@ public class OrderService implements OrderCommandFacade, OrderQueryFacade {
                 .orElseGet(() -> addressRepository.saveDefaultIfAbsent(userId));
     }
 
-    private BigDecimal displayPrice(CatalogSpuView spu) {
-        return spu.priceMin() != null ? spu.priceMin() : spu.priceMax();
+    private BigDecimal displayPrice(CatalogProductView product) {
+        return product.priceMin() != null ? product.priceMin() : product.priceMax();
     }
 
     private Map<String, Object> toAddressMap(DeliveryAddressRecord address) {

@@ -5,17 +5,10 @@ import io.milvus.client.MilvusServiceClient;
 import io.milvus.param.ConnectParam;
 import io.milvus.param.MetricType;
 import jakarta.annotation.PostConstruct;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.embedding.EmbeddingModel;
-import org.springframework.ai.chat.prompt.PromptTemplate;
-import org.springframework.ai.rag.preretrieval.query.expansion.MultiQueryExpander;
-import org.springframework.ai.rag.preretrieval.query.transformation.CompressionQueryTransformer;
-import org.springframework.ai.rag.preretrieval.query.transformation.RewriteQueryTransformer;
 import org.springframework.ai.embedding.TokenCountBatchingStrategy;
 import org.springframework.ai.vectorstore.milvus.MilvusVectorStore;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -41,16 +34,13 @@ public class RagConfiguration {
     private static final Logger log = LoggerFactory.getLogger(RagConfiguration.class);
 
     private final RagProperties ragProperties;
-    private final ObjectProvider<ChatModel> chatModelProvider;
     private final ObjectProvider<EmbeddingModel> embeddingModelProvider;
 
     public RagConfiguration(
             RagProperties ragProperties,
-            ObjectProvider<ChatModel> chatModelProvider,
             ObjectProvider<EmbeddingModel> embeddingModelProvider
     ) {
         this.ragProperties = ragProperties;
-        this.chatModelProvider = chatModelProvider;
         this.embeddingModelProvider = embeddingModelProvider;
     }
 
@@ -67,9 +57,6 @@ public class RagConfiguration {
                 ragProperties.recovery().enabled()
         );
         logEffectiveEmbeddingBinding();
-        warnWhenQueryExpansionChatModelMissing();
-        warnWhenCompressionChatModelMissing();
-        warnWhenRewriteChatModelMissing();
     }
 
     /**
@@ -77,7 +64,7 @@ public class RagConfiguration {
      * 任意一种 OpenAI-compatible endpoint，便于运维一眼确认接入的是哪一家。
      *
      * <p>同时校验 Milvus collection 期望维度与 RAG 配置维度一致性：不一致时按 WARN 提示，
-     * 避免索引写入后 retrieval 阶段才发现维度错配。
+     * 避免索引写入后向量检索阶段才发现维度错配。
      */
     void logEffectiveEmbeddingBinding() {
         EmbeddingModel embeddingModel = null;
@@ -96,49 +83,6 @@ public class RagConfiguration {
         );
         if (ragProperties.milvus().enabled() && embeddingModel == null) {
             log.warn("rag.milvus.enabled=true 但没有 EmbeddingModel Bean，向量索引写入会立刻失败");
-        }
-    }
-
-    void warnWhenQueryExpansionChatModelMissing() {
-        if (!ragProperties.queryExpansion().enabled() || !ragProperties.queryExpansion().useModel()) {
-            return;
-        }
-
-        try {
-            if (chatModelProvider.getIfAvailable() == null) {
-                log.warn("rag.queryExpansion.useModel=true，但当前没有 ChatModel Bean，查询扩展将降级为单查询");
-            }
-        } catch (Exception exception) {
-            log.warn("检测 ChatModel Bean 失败，查询扩展将降级为单查询: {}", exception.getMessage());
-        }
-    }
-
-    void warnWhenCompressionChatModelMissing() {
-        if (!ragProperties.queryTransformation().enabled() || !ragProperties.queryTransformation().useModel()) {
-            return;
-        }
-
-        try {
-            if (chatModelProvider.getIfAvailable() == null) {
-                log.warn("rag.queryTransformation.useModel=true，但当前没有 ChatModel Bean，查询压缩将降级为原始问题");
-            }
-        } catch (Exception exception) {
-            log.warn("检测 ChatModel Bean 失败，查询压缩将降级为原始问题: {}", exception.getMessage());
-        }
-    }
-
-    void warnWhenRewriteChatModelMissing() {
-        if (!ragProperties.queryTransformation().rewriteEnabled()
-                || !ragProperties.queryTransformation().rewriteUseModel()) {
-            return;
-        }
-
-        try {
-            if (chatModelProvider.getIfAvailable() == null) {
-                log.warn("rag.queryTransformation.rewriteUseModel=true，但当前没有 ChatModel Bean，查询 rewrite 将降级为原始问题");
-            }
-        } catch (Exception exception) {
-            log.warn("检测 ChatModel Bean 失败，查询 rewrite 将降级为原始问题: {}", exception.getMessage());
         }
     }
 
@@ -188,51 +132,6 @@ public class RagConfiguration {
                     exception
             );
         }
-    }
-
-    @Bean
-    @ConditionalOnProperty(prefix = "rag.query-expansion", name = {"enabled", "use-chat-model"}, havingValue = "true")
-    @ConditionalOnBean(ChatModel.class)
-    public MultiQueryExpander multiQueryExpander(ChatModel chatModel, RagProperties ragProperties) {
-        MultiQueryExpander.Builder builder = MultiQueryExpander.builder()
-                .chatClientBuilder(ChatClient.builder(chatModel))
-                .numberOfQueries(ragProperties.queryExpansion().numberOfQueries())
-                .includeOriginal(ragProperties.queryExpansion().includeOriginal());
-        String queryTemplate = ragProperties.queryExpansion().queryTemplate();
-        if (StringUtils.hasText(queryTemplate)) {
-            builder.promptTemplate(new PromptTemplate(queryTemplate));
-        }
-        return builder.build();
-    }
-
-    @Bean
-    @ConditionalOnProperty(prefix = "rag.query-transformation", name = {"enabled", "use-chat-model"}, havingValue = "true")
-    @ConditionalOnBean(ChatModel.class)
-    public CompressionQueryTransformer compressionQueryTransformer(ChatModel chatModel, RagProperties ragProperties) {
-        CompressionQueryTransformer.Builder builder = CompressionQueryTransformer.builder()
-                .chatClientBuilder(ChatClient.builder(chatModel));
-        String queryTemplate = ragProperties.queryTransformation().queryTemplate();
-        if (StringUtils.hasText(queryTemplate)) {
-            builder.promptTemplate(new PromptTemplate(queryTemplate));
-        }
-        return builder.build();
-    }
-
-    @Bean
-    @ConditionalOnProperty(prefix = "rag.query-transformation", name = {"rewrite-enabled", "rewrite-use-chat-model"}, havingValue = "true")
-    @ConditionalOnBean(ChatModel.class)
-    public RewriteQueryTransformer rewriteQueryTransformer(ChatModel chatModel, RagProperties ragProperties) {
-        RewriteQueryTransformer.Builder builder = RewriteQueryTransformer.builder()
-                .chatClientBuilder(ChatClient.builder(chatModel));
-        String queryTemplate = ragProperties.queryTransformation().rewriteQueryTemplate();
-        if (StringUtils.hasText(queryTemplate)) {
-            builder.promptTemplate(new PromptTemplate(queryTemplate));
-        }
-        String targetSearchSystem = ragProperties.queryTransformation().rewriteTargetSearchSystem();
-        if (StringUtils.hasText(targetSearchSystem)) {
-            builder.targetSearchSystem(targetSearchSystem);
-        }
-        return builder.build();
     }
 
     /**

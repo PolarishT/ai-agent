@@ -6,7 +6,6 @@ import com.bytedance.ai.document.api.RagDocumentCreateRequest;
 import com.bytedance.ai.document.spi.DocumentIndexingSpi;
 import com.bytedance.ai.document.spi.DocumentIndexingView;
 import com.bytedance.ai.indexing.api.RagIndexTimelineView;
-import com.bytedance.ai.indexing.api.IndexingChunkQueryFacade;
 import com.bytedance.ai.indexing.api.IndexingCommandFacade;
 import com.bytedance.ai.indexing.api.IndexingQueryFacade;
 import org.junit.jupiter.api.Test;
@@ -51,16 +50,12 @@ class IndexingModuleTests {
     private IndexingQueryFacade indexingQueryFacade;
 
     @Autowired
-    private IndexingChunkQueryFacade indexingChunkQueryFacade;
-
-    @Autowired
     private JdbcTemplate jdbcTemplate;
 
     @Test
     void exposesIndexingFacades() {
         assertThat(indexingCommandFacade).isNotNull();
         assertThat(indexingQueryFacade).isNotNull();
-        assertThat(indexingChunkQueryFacade).isNotNull();
     }
 
     @Test
@@ -97,8 +92,18 @@ class IndexingModuleTests {
                     assertThat(documentIndexingSpi.findById(documentView.id()))
                             .map(DocumentIndexingView::indexedGeneration)
                             .isPresent();
-                    assertThat(indexingChunkQueryFacade.findActiveChunksByDocumentIdAndRange(documentView.id(), 0, 10))
-                            .isNotEmpty();
+                    Integer activeChunkCount = jdbcTemplate.queryForObject(
+                            """
+                            SELECT COUNT(*)
+                              FROM rag_chunks c
+                              JOIN rag_documents d ON d.id = c.document_id
+                             WHERE c.document_id = ?
+                               AND d.indexed_generation = c.index_generation
+                            """,
+                            Integer.class,
+                            documentView.id()
+                    );
+                    assertThat(activeChunkCount).isPositive();
                 });
     }
 

@@ -15,7 +15,7 @@ import com.bytedance.ai.graph.cart.workflow.CartGuard;
 import com.bytedance.ai.graph.cart.workflow.CartStateMachineFactory;
 import com.bytedance.ai.graph.cart.workflow.CartTransitionAuditService;
 import com.bytedance.ai.graph.cart.workflow.CartWorkflowException;
-import com.bytedance.ai.graph.catalog.api.CatalogSpuView;
+import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
@@ -83,18 +83,20 @@ public class ShoppingCartService implements CartCommandFacade, CartQueryFacade {
                 null,
                 Map.of()
         );
-        CatalogSpuView spu = transition(cart, CartEvent.CONFIRM_ADD, command);
+        CatalogProductView product = transition(cart, CartEvent.CONFIRM_ADD, command);
         int effectiveQuantity = effectiveQuantity(quantity);
         itemRepository.upsertActive(
                 cart.id(),
-                spu.id(),
-                spu.externalRef(),
-                spu.title(),
-                spu.brand(),
-                firstImage(spu),
+                product.id(),
+                // catalog_product 已无 external_ref 列；沿用全代码库的兼容约定填 productId 字符串，
+                // 保证 cart_item.external_ref 非空且与 spu_id 指向同一商品。
+                String.valueOf(product.id()),
+                product.title(),
+                product.brand(),
+                firstImage(product),
                 effectiveQuantity,
-                displayPrice(spu),
-                spu.stock()
+                displayPrice(product),
+                product.totalStock()
         );
         recomputeTotals(cart.id());
         return toView(refresh(cart.id()));
@@ -192,11 +194,11 @@ public class ShoppingCartService implements CartCommandFacade, CartQueryFacade {
         return cart != null && !itemRepository.findActiveByCartId(cart.id()).isEmpty();
     }
 
-    private CatalogSpuView transition(ShoppingCartRecord cart, CartEvent event, CartCommand command) {
+    private CatalogProductView transition(ShoppingCartRecord cart, CartEvent event, CartCommand command) {
         CartState fromState = cart.state();
-        CatalogSpuView guardedSpu = null;
+        CatalogProductView guardedProduct = null;
         try {
-            guardedSpu = guard.validate(event, fromState, command);
+            guardedProduct = guard.validate(event, fromState, command);
             StateMachine<CartState, CartEvent> stateMachine = stateMachineFactory.create(fromState);
             stateMachine.start();
             try {
@@ -207,7 +209,7 @@ public class ShoppingCartService implements CartCommandFacade, CartQueryFacade {
                 CartState toState = stateMachine.getState().getId();
                 cartRepository.updateState(cart.id(), toState);
                 auditService.record(cart, fromState, toState, event, command, true, null, null);
-                return guardedSpu;
+                return guardedProduct;
             } finally {
                 stateMachine.stop();
             }
@@ -273,11 +275,11 @@ public class ShoppingCartService implements CartCommandFacade, CartQueryFacade {
         return quantity == null || quantity <= 0 ? 1 : quantity;
     }
 
-    private BigDecimal displayPrice(CatalogSpuView spu) {
-        return spu.priceMin() != null ? spu.priceMin() : spu.priceMax();
+    private BigDecimal displayPrice(CatalogProductView product) {
+        return product.priceMin() != null ? product.priceMin() : product.priceMax();
     }
 
-    private String firstImage(CatalogSpuView spu) {
-        return spu.images() == null || spu.images().isEmpty() ? null : spu.images().getFirst();
+    private String firstImage(CatalogProductView product) {
+        return product.imagePath();
     }
 }

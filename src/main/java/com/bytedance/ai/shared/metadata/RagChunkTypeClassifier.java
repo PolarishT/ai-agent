@@ -1,65 +1,36 @@
 package com.bytedance.ai.shared.metadata;
 
 import org.springframework.stereotype.Component;
-import org.springframework.util.StringUtils;
-
 import java.util.List;
-import java.util.Locale;
-import java.util.Set;
+import java.util.Map;
 
 /**
- * 把切片归类到 {@link RagChunkType}。
+ * Block 级 chunkType 提取器：仅消费 {@code blockMetadata.chunkType} 中的显式声明。
  *
- * <p>策略：
- * <ul>
- *   <li>显式声明的 chunkType（来自上游 chunker 或导入侧）优先使用。</li>
- *   <li>否则按 {@code sourceType} 走规则：
- *     <ul>
- *       <li>{@code catalog-spu}：第一段（chunkIndex=0 且无 heading）视为 {@link RagChunkType#TITLE}；
- *           headingPath 中匹配"规格 / spec / attributes / 参数"归 {@link RagChunkType#ATTR}；
- *           匹配"商品描述 / description / details / 介绍"归 {@link RagChunkType#DESC}；
- *           匹配"评论 / reviews / review"归 {@link RagChunkType#REVIEW}；
- *           其它归 {@link RagChunkType#BODY}。</li>
- *       <li>其它来源：统一归 {@link RagChunkType#BODY}，由 retrieval 后续按需扩展。</li>
- *     </ul>
- *   </li>
- * </ul>
+ * <p>主链路的 chunkType 归一交由 {@code RagIndexingService.normalizeChunkType(...)} 完成，
+ * 它会按文档 {@code source_type} + heading 路径决定最终落库的取值。这里只是给上游
+ * chunker 一个「显式标注覆盖」的口子：如果某个块在自己的 metadata 里显式写了
+ * {@code chunkType=PRODUCT_PROFILE/MARKETING/FAQ_QUERY/FAQ_ANSWER/REVIEW}，indexing 层应该尊重。
  *
- * <p>分类决策来自 catalog 模块约定的 markdown 模板（{@code SpuMarkdownRenderer}）：
- * {@code # 标题 / ## 商品描述 / ## 规格}。模板若调整需同步本类的关键词集合。
+ * <p>未显式声明或值非法时返回 {@code null}，由 indexing 层用归一规则兜底；
+ * 不要在这里硬塞默认值——避免「分类器自作主张」与 indexing 归一规则冲突。
  */
 @Component
 public class RagChunkTypeClassifier {
 
-    private static final Set<String> ATTR_KEYWORDS = Set.of("规格", "参数", "属性", "spec", "specs", "specification", "attributes");
-    private static final Set<String> DESC_KEYWORDS = Set.of("商品描述", "详情", "介绍", "description", "details");
-    private static final Set<String> REVIEW_KEYWORDS = Set.of("评论", "用户评价", "reviews", "review");
-
     /**
-     * 主分类入口。所有参数允许为 null / 空集合。
-     *
-     * @param sourceType    rag_documents.source_type
-     * @param chunkIndex    切片顺序号（0-based）
-     * @param headingPath   切片所在的 markdown heading 层级
-     * @param blockMetadata 切片块级 metadata；若上游显式塞了 chunkType 则优先采纳
+     * @param sourceType    rag_documents.source_type（仅作为上下文参数，目前未用于分类）
+     * @param chunkIndex    切片顺序号（0-based，目前未用于分类）
+     * @param headingPath   切片所在的 markdown heading 层级（目前未用于分类）
+     * @param blockMetadata 切片块级 metadata；若上游显式塞了 chunkType 则采纳
+     * @return 显式声明的 {@link RagChunkType}；缺失或非法时返回 {@code null}
      */
     public RagChunkType classify(
             String sourceType,
             int chunkIndex,
             List<String> headingPath,
-            java.util.Map<String, Object> blockMetadata
+            Map<String, Object> blockMetadata
     ) {
-        RagChunkType explicit = readExplicit(blockMetadata);
-        if (explicit != null) {
-            return explicit;
-        }
-        if (isCatalogSpu(sourceType)) {
-            return classifyCatalogSpu(chunkIndex, headingPath);
-        }
-        return RagChunkType.BODY;
-    }
-
-    private RagChunkType readExplicit(java.util.Map<String, Object> blockMetadata) {
         if (blockMetadata == null || blockMetadata.isEmpty()) {
             return null;
         }
@@ -67,50 +38,6 @@ public class RagChunkTypeClassifier {
         if (value == null) {
             return null;
         }
-        RagChunkType parsed = RagChunkType.parseOrBody(String.valueOf(value));
-        // 显式声明即使是 BODY 也尊重；只在 metadata 不含 key 时才走启发式。
-        return parsed;
-    }
-
-    private RagChunkType classifyCatalogSpu(int chunkIndex, List<String> headingPath) {
-        if (headingPath == null || headingPath.isEmpty()) {
-            // 没有 heading 通常意味着 markdown 主体直接是单段（SpuMarkdownRenderer 渲染异常时才走这里）。
-            return chunkIndex == 0 ? RagChunkType.TITLE : RagChunkType.BODY;
-        }
-        for (String segment : headingPath) {
-            if (!StringUtils.hasText(segment)) {
-                continue;
-            }
-            String lower = segment.toLowerCase(Locale.ROOT);
-            if (containsAny(lower, ATTR_KEYWORDS)) {
-                return RagChunkType.ATTR;
-            }
-            if (containsAny(lower, DESC_KEYWORDS)) {
-                return RagChunkType.DESC;
-            }
-            if (containsAny(lower, REVIEW_KEYWORDS)) {
-                return RagChunkType.REVIEW;
-            }
-        }
-        // 仅在 H1 根标题下（headingPath.size()==1）且未命中任何关键词，
-        // 视为 SpuMarkdownRenderer 模板里"标题 + 品牌 + 类目 + 价格"那一段，归 TITLE。
-        if (headingPath.size() == 1) {
-            return RagChunkType.TITLE;
-        }
-        // 进入 H2 / 更深层级但都不命中：保守归 BODY。
-        return RagChunkType.BODY;
-    }
-
-    private boolean isCatalogSpu(String sourceType) {
-        return "catalog-spu".equalsIgnoreCase(sourceType);
-    }
-
-    private boolean containsAny(String text, Set<String> keywords) {
-        for (String keyword : keywords) {
-            if (text.contains(keyword)) {
-                return true;
-            }
-        }
-        return false;
+        return RagChunkType.parseOrNull(String.valueOf(value));
     }
 }

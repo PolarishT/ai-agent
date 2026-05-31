@@ -4,6 +4,7 @@ import java.util.Locale;
 
 public enum AgentStreamEventType {
     TURN_STARTED,
+    WORKFLOW_STARTED,
     NODE_STARTED,
     NODE_COMPLETED,
     NODE_FAILED,

@@ -21,6 +21,7 @@ Allowed intents:
 - PRODUCT_SEARCH
 - PRODUCT_COMPARE
 - PRODUCT_DETAIL_QUERY
+- PRODUCT_QUERY
 - PRICE_QUERY
 - INVENTORY_QUERY
 - ORDER_QUERY
@@ -43,6 +44,7 @@ PRODUCT_RECOMMEND: User wants recommendations or shopping advice, usually withou
 PRODUCT_SEARCH: User wants to search or filter products with known conditions.
 PRODUCT_COMPARE: User wants to compare two or more products, brands, models, options, or choices.
 PRODUCT_DETAIL_QUERY: User asks about a specific product's details, usage, specs, ingredients, suitability, pros/cons, or explanation.
+PRODUCT_QUERY: General product browse / filter / refine intent — synonym alias of PRODUCT_SEARCH for use when the user issues a follow-up like "再便宜点", "不要黑色", "重新搜" against a previous product list; emit PRODUCT_QUERY when the request is clearly product-list-side and doesn't fit RECOMMEND / COMPARE / DETAIL exactly.
 PRICE_QUERY: User asks about price, discount, promotion, or cost.
 INVENTORY_QUERY: User asks whether an item is in stock, available, or has a specific SKU/spec.
 ORDER_QUERY: User asks about an existing order in general.

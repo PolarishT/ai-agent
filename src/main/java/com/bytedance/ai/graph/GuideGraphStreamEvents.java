@@ -7,6 +7,7 @@ import com.bytedance.ai.graph.api.events.TurnErrorPayload;
 import com.bytedance.ai.graph.api.events.TurnStartedPayload;
 import com.bytedance.ai.graph.api.events.WorkflowNodeCompletedPayload;
 import com.bytedance.ai.graph.api.events.WorkflowNodeStartedPayload;
+import com.bytedance.ai.graph.api.events.WorkflowStartedPayload;
 import com.bytedance.ai.graph.api.AgentStreamEventType;
 import com.bytedance.ai.graph.api.GuideGraphFinalSummary;
 import com.bytedance.ai.graph.api.GuideGraphRequest;
@@ -24,6 +25,14 @@ public final class GuideGraphStreamEvents {
                 AgentStreamEventType.TURN_STARTED,
                 request.correlationId(),
                 new TurnStartedPayload(request.runId(), request.conversationId(), "guide-state-graph-v1")
+        );
+    }
+
+    public static AgentStreamEvent workflowStarted(String correlationId, String workflowName, String intent) {
+        return of(
+                AgentStreamEventType.WORKFLOW_STARTED,
+                correlationId,
+                new WorkflowStartedPayload(workflowName, intent)
         );
     }
 

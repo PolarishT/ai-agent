@@ -28,7 +28,7 @@ public class RagChunkMetadataHelper {
         Map<String, Object> raw = parseRaw(metadataJson);
         return new RagChunkMetadataView(
                 asText(raw.get("blockType")),
-                RagChunkType.parseOrBody(asText(raw.get("chunkType"))),
+                RagChunkType.parseOrNull(asText(raw.get("chunkType"))),
                 asText(raw.get("codeLanguage")),
                 toStringList(raw.get("headingPath")),
                 toStringList(raw.get("documentTags")),
@@ -94,7 +94,7 @@ public class RagChunkMetadataHelper {
         }
 
         // mustNotIngredients 在召回阶段不查 chunk content（这里 metadata 不一定带正文），
-        // 交给 NegationRerankFilter 在拿到 hit.snippet / SPU description 后做精过滤。
+        // 交给 NegationRerankFilter 在拿到 hit.snippet / product description 后做精过滤。
 
         return true;
     }

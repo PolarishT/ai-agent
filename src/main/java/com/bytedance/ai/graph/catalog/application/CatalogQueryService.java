@@ -1,88 +1,72 @@
 package com.bytedance.ai.graph.catalog.application;
 
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
+import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
-import com.bytedance.ai.graph.catalog.api.CatalogSpuView;
 import com.bytedance.ai.graph.catalog.persistence.CatalogSkuRecord;
 import com.bytedance.ai.graph.catalog.persistence.CatalogSkuRepository;
-import com.bytedance.ai.graph.catalog.persistence.CatalogSpuRecord;
-import com.bytedance.ai.graph.catalog.persistence.CatalogSpuRepository;
+import com.bytedance.ai.graph.catalog.persistence.CatalogProductRecord;
+import com.bytedance.ai.graph.catalog.persistence.CatalogProductRepository;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.Optional;
 
 @Service
 class CatalogQueryService implements CatalogQueryFacade {
 
-    private final CatalogSpuRepository spuRepository;
+    private final CatalogProductRepository productRepository;
     private final CatalogSkuRepository skuRepository;
 
-    CatalogQueryService(CatalogSpuRepository spuRepository, CatalogSkuRepository skuRepository) {
-        this.spuRepository = spuRepository;
+    CatalogQueryService(CatalogProductRepository productRepository, CatalogSkuRepository skuRepository) {
+        this.productRepository = productRepository;
         this.skuRepository = skuRepository;
     }
 
     @Override
-    public CatalogSpuView getSpu(Long spuId) {
-        CatalogSpuRecord record = spuRepository.findById(spuId)
-                .orElseThrow(() -> new IllegalArgumentException("catalog_spu 不存在: " + spuId));
-        List<CatalogSkuView> skuViews = skuRepository.findBySpuId(spuId).stream()
+    public CatalogProductView getProduct(Long productId) {
+        CatalogProductRecord record = productRepository.findById(productId)
+                .orElseThrow(() -> new IllegalArgumentException("catalog_product 不存在: " + productId));
+        List<CatalogSkuView> skuViews = skuRepository.findByProductId(productId).stream()
                 .map(CatalogQueryService::toSkuView)
                 .toList();
-        return toSpuView(record, skuViews);
+        return toProductView(record, skuViews);
     }
 
     @Override
-    public Optional<CatalogSpuView> findSpuByExternalRef(String externalRef) {
-        if (externalRef == null || externalRef.isBlank()) {
-            return Optional.empty();
-        }
-        return spuRepository.findByExternalRef(externalRef).map(record -> {
-            List<CatalogSkuView> skuViews = skuRepository.findBySpuId(record.id()).stream()
-                    .map(CatalogQueryService::toSkuView)
-                    .toList();
-            return toSpuView(record, skuViews);
-        });
-    }
-
-    @Override
-    public List<CatalogSpuView> searchActiveSpus(String keyword, int limit) {
+    public List<CatalogProductView> searchActiveProducts(String keyword, int limit) {
         int safeLimit = limit <= 0 ? 5 : Math.min(limit, 20);
-        return spuRepository.searchActiveByKeyword(keyword, safeLimit).stream()
+        return productRepository.searchActiveByKeyword(keyword, safeLimit).stream()
                 .map(record -> {
-                    List<CatalogSkuView> skuViews = skuRepository.findBySpuId(record.id()).stream()
+                    List<CatalogSkuView> skuViews = skuRepository.findByProductId(record.id()).stream()
                             .map(CatalogQueryService::toSkuView)
                             .toList();
-                    return toSpuView(record, skuViews);
+                    return toProductView(record, skuViews);
                 })
                 .toList();
     }
 
     @Override
-    public List<CatalogSkuView> listSkus(Long spuId) {
-        return skuRepository.findBySpuId(spuId).stream()
+    public List<CatalogSkuView> listSkus(Long productId) {
+        return skuRepository.findByProductId(productId).stream()
                 .map(CatalogQueryService::toSkuView)
                 .toList();
     }
 
-    private static CatalogSpuView toSpuView(CatalogSpuRecord record, List<CatalogSkuView> skus) {
-        return new CatalogSpuView(
+    private static CatalogProductView toProductView(CatalogProductRecord record, List<CatalogSkuView> skus) {
+        return new CatalogProductView(
                 record.id(),
-                record.externalRef(),
                 record.title(),
                 record.brand(),
-                record.categoryPath(),
+                record.category(),
+                record.subCategory(),
+                record.basePrice(),
                 record.priceMin(),
                 record.priceMax(),
-                record.stock(),
-                record.descriptionMd(),
-                record.images(),
-                record.videoUrl(),
-                record.attributesJson(),
-                record.attributesStatus(),
+                record.totalStock(),
+                record.imagePath(),
                 record.status(),
-                record.documentId(),
+                record.attributesJson(),
+                record.rawJson(),
                 skus,
                 record.createdAt(),
                 record.updatedAt()
@@ -92,8 +76,8 @@ class CatalogQueryService implements CatalogQueryFacade {
     private static CatalogSkuView toSkuView(CatalogSkuRecord record) {
         return new CatalogSkuView(
                 record.id(),
-                record.skuCode(),
-                record.specJson(),
+                String.valueOf(record.skuIndex()),
+                record.propertiesJson(),
                 record.price(),
                 record.stock(),
                 record.status()

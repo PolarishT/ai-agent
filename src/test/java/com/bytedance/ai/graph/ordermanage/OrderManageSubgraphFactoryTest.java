@@ -6,8 +6,8 @@ import com.bytedance.ai.graph.cart.api.CartState;
 import com.bytedance.ai.graph.cart.api.CartView;
 import com.bytedance.ai.graph.catalog.api.CatalogInventoryFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
+import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
-import com.bytedance.ai.graph.catalog.api.CatalogSpuView;
 import com.bytedance.ai.graph.GuideGraphStateKeys;
 import com.bytedance.ai.graph.cartmanage.CartCommandService;
 import com.bytedance.ai.graph.cartmanage.CartMutationResult;
@@ -360,19 +360,14 @@ class OrderManageSubgraphFactoryTest {
         int stock = 10;
 
         @Override
-        public CatalogSpuView getSpu(Long spuId) {
-            return new CatalogSpuView(spuId, "SPU-" + spuId, "苹果", "brand", "fruit",
-                    new BigDecimal("9.90"), new BigDecimal("9.90"), stock, "", List.of(), null,
-                    Map.of(), "DONE", "ACTIVE", null, List.of(), OffsetDateTime.now(), OffsetDateTime.now());
+        public CatalogProductView getProduct(Long productId) {
+            return new CatalogProductView(productId, "苹果", "brand", "fruit", null,
+                    new BigDecimal("9.90"), new BigDecimal("9.90"), new BigDecimal("9.90"), stock, "", "ACTIVE",
+                    Map.of(), Map.of(), List.of(), OffsetDateTime.now(), OffsetDateTime.now());
         }
 
         @Override
-        public Optional<CatalogSpuView> findSpuByExternalRef(String externalRef) {
-            return Optional.empty();
-        }
-
-        @Override
-        public List<CatalogSkuView> listSkus(Long spuId) {
+        public List<CatalogSkuView> listSkus(Long productId) {
             return List.of();
         }
     }

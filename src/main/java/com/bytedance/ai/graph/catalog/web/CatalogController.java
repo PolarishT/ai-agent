@@ -1,9 +1,9 @@
 package com.bytedance.ai.graph.catalog.web;
 
 import com.bytedance.ai.graph.catalog.api.CatalogCommandFacade;
+import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
-import com.bytedance.ai.graph.catalog.api.CatalogSpuView;
 import com.bytedance.ai.common.api.ApiResponse;
 import jakarta.validation.constraints.Positive;
 import org.springframework.http.MediaType;
@@ -21,6 +21,8 @@ import java.util.List;
  *
  * <p>读侧路径 {@code /public/catalog/...} 与现有 RAG 公共接口对齐；
  * 写侧路径 {@code /admin/catalog/...} 用于后台运营（属性重抽等）。
+ *
+ * <p>随 catalog 域由 SPU 迁移到 {@code catalog_product}，对外路径与视图统一改为 product 语义。
  */
 @RestController
 @Validated
@@ -35,19 +37,19 @@ public class CatalogController {
         this.catalogCommandFacade = catalogCommandFacade;
     }
 
-    @GetMapping("/public/catalog/spu/{spuId}")
-    public ApiResponse<CatalogSpuView> getSpu(@PathVariable @Positive Long spuId) {
-        return ApiResponse.ok(catalogQueryFacade.getSpu(spuId));
+    @GetMapping("/public/catalog/product/{productId}")
+    public ApiResponse<CatalogProductView> getProduct(@PathVariable @Positive Long productId) {
+        return ApiResponse.ok(catalogQueryFacade.getProduct(productId));
     }
 
-    @GetMapping("/public/catalog/spu/{spuId}/skus")
-    public ApiResponse<List<CatalogSkuView>> listSkus(@PathVariable @Positive Long spuId) {
-        return ApiResponse.ok(catalogQueryFacade.listSkus(spuId));
+    @GetMapping("/public/catalog/product/{productId}/skus")
+    public ApiResponse<List<CatalogSkuView>> listSkus(@PathVariable @Positive Long productId) {
+        return ApiResponse.ok(catalogQueryFacade.listSkus(productId));
     }
 
-    @PostMapping("/admin/catalog/spu/{spuId}/extract-attributes")
-    public ApiResponse<Void> retryExtractAttributes(@PathVariable @Positive Long spuId) {
-        catalogCommandFacade.requestAttributeExtraction(spuId);
+    @PostMapping("/admin/catalog/product/{productId}/extract-attributes")
+    public ApiResponse<Void> retryExtractAttributes(@PathVariable @Positive Long productId) {
+        catalogCommandFacade.requestAttributeExtraction(productId);
         return ApiResponse.okMessage("商品属性抽取已重新派发");
     }
 }

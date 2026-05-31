@@ -1,10 +1,7 @@
 package com.bytedance.ai.indexing.persistence;
 
-import com.bytedance.ai.indexing.persistence.RagChunkRecord;
-import com.bytedance.ai.indexing.persistence.RagChunkSearchRecord;
 import com.bytedance.ai.indexing.model.RagChunkDraft;
 import java.util.List;
-import java.util.Set;
 
 /**
  * 文档切片仓储。
@@ -61,18 +58,4 @@ public interface RagChunkRepository {
      */
     void deleteByDocumentIdExceptGeneration(Long documentId, Long indexGeneration);
 
-    /**
-     * 进行关键词候选召回，为混合检索提供文本侧结果。
-     */
-    List<RagChunkSearchRecord> findKeywordCandidates(Set<String> tokens, int limit);
-
-    /**
-     * 按文档和 chunk 序号范围查询当前可检索的切片窗口。
-     */
-    List<RagChunkSearchRecord> findActiveChunksByDocumentIdAndRange(Long documentId, int startChunkIndex, int endChunkIndex);
-
-    /**
-     * 根据向量 ID 回查可检索的切片记录，并保留输入顺序。
-     */
-    List<RagChunkSearchRecord> findSearchableByVectorIds(List<String> vectorIds);
 }

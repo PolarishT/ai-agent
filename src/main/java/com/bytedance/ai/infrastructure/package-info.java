@@ -13,8 +13,7 @@
                 "document::api",
                 "graph::intent-config",
                 "indexing::messaging",
-                "indexing::api",
-                "retrieval::api"
+                "indexing::api"
         },
         type = org.springframework.modulith.ApplicationModule.Type.OPEN
 )

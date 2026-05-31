@@ -12,10 +12,12 @@ public final class GuideGraphWorkflows {
     private static final Map<GuideGraphIntent, String> TARGETS = new EnumMap<>(GuideGraphIntent.class);
 
     static {
-        TARGETS.put(GuideGraphIntent.PRODUCT_RECOMMEND, GuideGraphNodeNames.PRODUCT_RECOMMEND_WORKFLOW);
-        TARGETS.put(GuideGraphIntent.PRODUCT_SEARCH, GuideGraphNodeNames.PRODUCT_SEARCH_WORKFLOW);
-        TARGETS.put(GuideGraphIntent.PRODUCT_COMPARE, GuideGraphNodeNames.PRODUCT_COMPARE_WORKFLOW);
-        TARGETS.put(GuideGraphIntent.PRODUCT_DETAIL_QUERY, GuideGraphNodeNames.PRODUCT_DETAIL_QUERY_WORKFLOW);
+        // 所有 product 系列 intent 收敛到统一的 product_query_workflow subgraph.
+        TARGETS.put(GuideGraphIntent.PRODUCT_QUERY, GuideGraphNodeNames.PRODUCT_QUERY_WORKFLOW);
+        TARGETS.put(GuideGraphIntent.PRODUCT_RECOMMEND, GuideGraphNodeNames.PRODUCT_QUERY_WORKFLOW);
+        TARGETS.put(GuideGraphIntent.PRODUCT_SEARCH, GuideGraphNodeNames.PRODUCT_QUERY_WORKFLOW);
+        TARGETS.put(GuideGraphIntent.PRODUCT_COMPARE, GuideGraphNodeNames.PRODUCT_QUERY_WORKFLOW);
+        TARGETS.put(GuideGraphIntent.PRODUCT_DETAIL_QUERY, GuideGraphNodeNames.PRODUCT_QUERY_WORKFLOW);
         TARGETS.put(GuideGraphIntent.PRICE_QUERY, GuideGraphNodeNames.PRICE_QUERY_WORKFLOW);
         TARGETS.put(GuideGraphIntent.INVENTORY_QUERY, GuideGraphNodeNames.INVENTORY_QUERY_WORKFLOW);
         TARGETS.put(GuideGraphIntent.ORDER_QUERY, GuideGraphNodeNames.ORDER_QUERY_WORKFLOW);

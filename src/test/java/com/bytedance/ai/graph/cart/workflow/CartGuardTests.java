@@ -1,15 +1,14 @@
 package com.bytedance.ai.graph.cart.workflow;
 
+import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
-import com.bytedance.ai.graph.catalog.api.CatalogSpuView;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -41,20 +40,15 @@ class CartGuardTests {
 
     private record StubCatalog(BigDecimal price) implements CatalogQueryFacade {
         @Override
-        public CatalogSpuView getSpu(Long spuId) {
-            return new CatalogSpuView(
-                    spuId, "SPU-" + spuId, "通勤包", "brand", "bags",
-                    price, price, 10, "", List.of(), null, Map.of(), "DONE", "ACTIVE",
-                    null, List.of(), OffsetDateTime.now(), OffsetDateTime.now());
+        public CatalogProductView getProduct(Long productId) {
+            return new CatalogProductView(
+                    productId, "通勤包", "brand", "bags", null,
+                    price, price, price, 10, "", "ACTIVE",
+                    Map.of(), Map.of(), List.of(), OffsetDateTime.now(), OffsetDateTime.now());
         }
 
         @Override
-        public Optional<CatalogSpuView> findSpuByExternalRef(String externalRef) {
-            return Optional.empty();
-        }
-
-        @Override
-        public List<CatalogSkuView> listSkus(Long spuId) {
+        public List<CatalogSkuView> listSkus(Long productId) {
             return List.of();
         }
     }

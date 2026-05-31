@@ -8,10 +8,13 @@ public final class MainIntentWorkflowMapping {
     private static final Map<MainIntent, String> TARGETS = new EnumMap<>(MainIntent.class);
 
     static {
-        TARGETS.put(MainIntent.PRODUCT_RECOMMEND, "product_recommend_workflow");
-        TARGETS.put(MainIntent.PRODUCT_SEARCH, "product_search_workflow");
-        TARGETS.put(MainIntent.PRODUCT_COMPARE, "product_compare_workflow");
-        TARGETS.put(MainIntent.PRODUCT_DETAIL_QUERY, "product_detail_query_workflow");
+        // 所有 product 系列 intent 收敛到统一的 product_query_workflow subgraph,
+        // 老的占位 workflow 节点名仅在 GuideGraphNodeNames 保留兼容外部引用.
+        TARGETS.put(MainIntent.PRODUCT_QUERY, "product_query_workflow");
+        TARGETS.put(MainIntent.PRODUCT_RECOMMEND, "product_query_workflow");
+        TARGETS.put(MainIntent.PRODUCT_SEARCH, "product_query_workflow");
+        TARGETS.put(MainIntent.PRODUCT_COMPARE, "product_query_workflow");
+        TARGETS.put(MainIntent.PRODUCT_DETAIL_QUERY, "product_query_workflow");
 
         TARGETS.put(MainIntent.PRICE_QUERY, "price_query_workflow");
         TARGETS.put(MainIntent.INVENTORY_QUERY, "inventory_query_workflow");

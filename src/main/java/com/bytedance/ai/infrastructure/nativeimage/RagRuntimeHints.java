@@ -11,11 +11,6 @@ import com.bytedance.ai.indexing.api.RagIndexTimelineView;
 import com.bytedance.ai.indexing.api.RagIndexTransitionView;
 import com.bytedance.ai.indexing.messaging.RagIndexMessage;
 import com.bytedance.ai.shared.properties.RagProperties;
-import com.bytedance.ai.retrieval.api.RagAnswerResponse;
-import com.bytedance.ai.retrieval.api.RagAskRequest;
-import com.bytedance.ai.retrieval.api.RagContextView;
-import com.bytedance.ai.retrieval.api.RagConversationMessage;
-import com.bytedance.ai.retrieval.api.RagResponseNoticeView;
 import org.springframework.aot.hint.BindingReflectionHintsRegistrar;
 import org.springframework.aot.hint.RuntimeHints;
 import org.springframework.aot.hint.RuntimeHintsRegistrar;
@@ -38,17 +33,12 @@ public class RagRuntimeHints implements RuntimeHintsRegistrar {
         BINDING_HINTS.registerReflectionHints(
                 hints.reflection(),
                 ApiResponse.class,
-                RagAskRequest.class,
                 RagDocumentCreateRequest.class,
                 RagDocumentUpdateRequest.class,
-                RagAnswerResponse.class,
                 RagDocumentView.class,
                 RagIndexJobView.class,
                 RagIndexTimelineDocumentView.class,
                 RagIndexTimelineView.class,
-                RagContextView.class,
-                RagConversationMessage.class,
-                RagResponseNoticeView.class,
                 RagIndexOutboxView.class,
                 RagIndexTransitionView.class,
                 RagIndexMessage.class,

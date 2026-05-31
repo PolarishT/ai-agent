@@ -4,11 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.bytedance.ai.document.spi.DocumentIndexingView;
 import com.bytedance.ai.indexing.persistence.RagChunkRecord;
-import com.bytedance.ai.indexing.persistence.RagEmbeddingCacheDraft;
-import com.bytedance.ai.indexing.persistence.RagEmbeddingCacheRepository;
-import com.bytedance.ai.shared.metadata.RagChunkMetadataHelper;
 import com.bytedance.ai.shared.properties.RagProperties;
-import com.bytedance.ai.shared.support.RagJsonCodec;
 import com.bytedance.ai.shared.support.RagLogHelper;
 import io.milvus.client.MilvusServiceClient;
 import io.milvus.grpc.MutationResult;
@@ -31,7 +27,7 @@ import java.time.Duration;
 import java.util.*;
 
 /**
- * 负责复用 embedding 缓存并直接写入 Milvus，避免 chunk 未变化时重复调用 embedding 模型。
+ * 负责生成 embedding 并直接写入 Milvus。
  */
 @Component
 @ConditionalOnProperty(prefix = "rag.milvus", name = "enabled", havingValue = "true")
@@ -42,31 +38,24 @@ public class RagMilvusVectorIndexer {
 
     private final ObjectProvider<MilvusServiceClient> milvusClientProvider;
     private final ObjectProvider<EmbeddingModel> embeddingModelProvider;
-    private final RagEmbeddingCacheRepository embeddingCacheRepository;
     private final RagIndexingMetrics indexingMetrics;
     private final RagProperties ragProperties;
-    private final RagJsonCodec jsonCodec;
     private final Gson gson = new Gson();
 
     public RagMilvusVectorIndexer(
             ObjectProvider<MilvusServiceClient> milvusClientProvider,
             ObjectProvider<EmbeddingModel> embeddingModelProvider,
-            RagEmbeddingCacheRepository embeddingCacheRepository,
             RagIndexingMetrics indexingMetrics,
-            RagProperties ragProperties,
-            RagJsonCodec jsonCodec
+            RagProperties ragProperties
     ) {
         this.milvusClientProvider = milvusClientProvider;
         this.embeddingModelProvider = embeddingModelProvider;
-        this.embeddingCacheRepository = embeddingCacheRepository;
         this.indexingMetrics = indexingMetrics;
         this.ragProperties = ragProperties;
-        this.jsonCodec = jsonCodec;
     }
 
     /**
      * 将当前 generation 的切片批量写入 Milvus。
-     * stable vectorId 模式下，相同段位通过 Upsert 覆盖旧向量，而不是继续插入新 ID。
      */
     public void add(DocumentIndexingView document, List<RagChunkRecord> chunks) {
         if (!ragProperties.milvus().enabled() || chunks == null || chunks.isEmpty()) {
@@ -86,13 +75,13 @@ public class RagMilvusVectorIndexer {
         }
 
         long writeStart = System.nanoTime();
-        Map<String, float[]> embeddingsByHash = resolveEmbeddings(chunks, embeddingModel);
+        Map<String, float[]> embeddingsByVectorId = resolveEmbeddings(chunks, embeddingModel);
         log.debug(
                 "Preparing Milvus upsert: documentId={}, contentSha={}, chunkCount={}, uniqueEmbeddingCount={}, collection={}, database={}",
                 document.id(),
                 RagLogHelper.shortSha(document.contentSha256()),
                 chunks.size(),
-                embeddingsByHash.size(),
+                embeddingsByVectorId.size(),
                 resolveCollectionName(),
                 resolveDatabaseName()
         );
@@ -103,13 +92,13 @@ public class RagMilvusVectorIndexer {
         List<List<Float>> embeddings = new ArrayList<>(chunks.size());
 
         for (RagChunkRecord chunk : chunks) {
-            float[] vector = embeddingsByHash.get(chunk.chunkHash());
+            float[] vector = embeddingsByVectorId.get(chunk.vectorId());
             if (vector == null) {
-                throw new IllegalStateException("未找到 chunk 的 embedding 缓存: " + chunk.chunkHash());
+                throw new IllegalStateException("未找到 chunk 的 embedding: " + chunk.vectorId());
             }
 
             ids.add(chunk.vectorId());
-            contents.add(chunk.chunkText());
+            contents.add("");
             metadatas.add(gson.toJsonTree(toMetadata(document, chunk)).getAsJsonObject());
             embeddings.add(EmbeddingUtils.toList(vector));
         }
@@ -222,62 +211,17 @@ public class RagMilvusVectorIndexer {
     }
 
     private Map<String, float[]> resolveEmbeddings(List<RagChunkRecord> chunks, EmbeddingModel embeddingModel) {
-        String model = ragProperties.embeddingModel();
-        int dimension = resolveEmbeddingDimension();
-        // 相同 chunkHash 的切片复用同一份 embedding，避免同批次内部重复请求模型。
-        List<RagChunkRecord> uniqueChunks = chunks.stream()
-                .collect(java.util.stream.Collectors.toMap(
-                        RagChunkRecord::chunkHash,
-                        chunk -> chunk,
-                        (left, right) -> left,
-                        LinkedHashMap::new
-                ))
-                .values()
-                .stream()
-                .toList();
-
-        Map<String, String> cachedJsonByHash = ragProperties.indexing().embeddingCacheEnabled()
-                ? embeddingCacheRepository.findEmbeddingJsonByChunkHashes(
-                uniqueChunks.stream().map(RagChunkRecord::chunkHash).toList(),
-                model,
-                dimension
-        )
-                : Map.of();
-
-        Map<String, float[]> embeddingsByHash = new LinkedHashMap<>();
-        for (Map.Entry<String, String> entry : cachedJsonByHash.entrySet()) {
-            embeddingsByHash.put(entry.getKey(), jsonCodec.read(entry.getValue(), float[].class));
-        }
-
-        List<RagChunkRecord> missingChunks = uniqueChunks.stream()
-                .filter(chunk -> !embeddingsByHash.containsKey(chunk.chunkHash()))
-                .toList();
-        indexingMetrics.recordCacheHits(cachedJsonByHash.size());
-        indexingMetrics.recordCacheMisses(missingChunks.size());
-        log.debug(
-                "Embedding 缓存检查完成。uniqueChunkCount={}, cacheHitCount={}, cacheMissCount={}, model={}, dimension={}",
-                uniqueChunks.size(),
-                cachedJsonByHash.size(),
-                missingChunks.size(),
-                model,
-                dimension
-        );
-
-        if (missingChunks.isEmpty()) {
-            return embeddingsByHash;
-        }
-
-        List<RagEmbeddingCacheDraft> newCacheEntries = new ArrayList<>(missingChunks.size());
-        for (int start = 0; start < missingChunks.size(); start += MAX_EMBEDDING_BATCH_SIZE) {
-            int end = Math.min(start + MAX_EMBEDDING_BATCH_SIZE, missingChunks.size());
-            List<RagChunkRecord> batch = missingChunks.subList(start, end);
+        Map<String, float[]> embeddingsByVectorId = new LinkedHashMap<>();
+        for (int start = 0; start < chunks.size(); start += MAX_EMBEDDING_BATCH_SIZE) {
+            int end = Math.min(start + MAX_EMBEDDING_BATCH_SIZE, chunks.size());
+            List<RagChunkRecord> batch = chunks.subList(start, end);
             log.debug(
                     "Embedding 批次生成开始。batchStart={}, batchEnd={}, batchSize={}, totalMissingCount={}, model={}",
                     start,
                     end,
                     batch.size(),
-                    missingChunks.size(),
-                    model
+                    chunks.size(),
+                    ragProperties.embeddingModel()
             );
             List<float[]> batchEmbeddings = embeddingModel.embed(batch.stream()
                     .map(RagChunkRecord::chunkText)
@@ -291,46 +235,24 @@ public class RagMilvusVectorIndexer {
             for (int index = 0; index < batch.size(); index++) {
                 RagChunkRecord chunk = batch.get(index);
                 float[] embedding = batchEmbeddings.get(index);
-                embeddingsByHash.put(chunk.chunkHash(), embedding);
-                if (ragProperties.indexing().embeddingCacheEnabled()) {
-                    newCacheEntries.add(new RagEmbeddingCacheDraft(
-                            chunk.chunkHash(),
-                            model,
-                            dimension,
-                            jsonCodec.write(embedding)
-                    ));
-                }
+                embeddingsByVectorId.put(chunk.vectorId(), embedding);
             }
         }
-
-        if (!newCacheEntries.isEmpty()) {
-            embeddingCacheRepository.saveAll(newCacheEntries);
-            log.debug("保存新的 embedding 缓存条目。count={}", newCacheEntries.size());
-        }
-        return embeddingsByHash;
+        return embeddingsByVectorId;
     }
 
     private Map<String, Object> toMetadata(DocumentIndexingView document, RagChunkRecord chunk) {
-        Map<String, Object> metadata = parseChunkMetadata(chunk.metadata());
+        Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("vectorId", chunk.vectorId());
         metadata.put("documentId", document.id());
+        if (chunk.productId() != null) {
+            metadata.put("productId", chunk.productId());
+        }
         metadata.put("indexGeneration", chunk.indexGeneration());
-        metadata.put("sourceType", document.sourceType());
-        metadata.put("sourceUri", defaultString(document.sourceUri()));
-        metadata.put("title", defaultString(document.title()));
+        metadata.put("sourceType", chunk.sourceType());
+        metadata.put("chunkType", chunk.chunkType());
         metadata.put("chunkIndex", chunk.chunkIndex());
         return metadata;
-    }
-
-    private Map<String, Object> parseChunkMetadata(Map<String, Object> metadataJson) {
-        if (metadataJson == null || metadataJson.isEmpty()) {
-            return new LinkedHashMap<>();
-        }
-        return new LinkedHashMap<>(metadataJson);
-    }
-
-    private String defaultString(String value) {
-        return value == null ? "" : value;
     }
 
     private String buildDeleteExpression(List<String> vectorIds) {

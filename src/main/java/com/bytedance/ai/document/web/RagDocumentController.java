@@ -3,6 +3,7 @@ package com.bytedance.ai.document.web;
 import com.bytedance.ai.common.api.ApiResponse;
 import com.bytedance.ai.document.api.*;
 import com.bytedance.ai.shared.markdown.MarkdownDocumentParser;
+import com.bytedance.ai.shared.support.RagJsonCodec;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Positive;
 import org.slf4j.Logger;
@@ -38,15 +39,18 @@ public class RagDocumentController {
     private final DocumentCommandFacade documentCommandFacade;
     private final DocumentQueryFacade documentQueryFacade;
     private final MarkdownDocumentParser markdownDocumentParser;
+    private final RagJsonCodec jsonCodec;
 
     public RagDocumentController(
             DocumentCommandFacade documentCommandFacade,
             DocumentQueryFacade documentQueryFacade,
-            MarkdownDocumentParser markdownDocumentParser
+            MarkdownDocumentParser markdownDocumentParser,
+            RagJsonCodec jsonCodec
     ) {
         this.documentCommandFacade = documentCommandFacade;
         this.documentQueryFacade = documentQueryFacade;
         this.markdownDocumentParser = markdownDocumentParser;
+        this.jsonCodec = jsonCodec;
     }
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, value = "/create")
@@ -57,7 +61,8 @@ public class RagDocumentController {
     @PostMapping(value = "/create", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ApiResponse<RagDocumentView> createDocument(
             @Valid
-            @RequestPart("file") MultipartFile file
+            @RequestPart("file") MultipartFile file,
+            @RequestPart(value = "metadata", required = false) String metadata
     ) {
         // 1. Web 层的文件基础校验（防空文件、防超大文件 OOM）
         if (file == null || file.isEmpty()) {
@@ -98,8 +103,8 @@ public class RagDocumentController {
         // 4. 从 Markdown 内容和上传对象推导文档属性，避免调用方手工维护元数据。
         InferredUploadMetadata inferred = inferUploadMetadata(content, originalFilename);
 
-        // 5. 组装 Web 层附加的元数据
-        Map<String, Object> uploadMetadata = new LinkedHashMap<>();
+        // 5. 合并调用方传入的业务元数据与 Web 层附加的上传诊断字段。
+        Map<String, Object> uploadMetadata = parseClientMetadata(metadata);
         if (StringUtils.hasText(originalFilename)) uploadMetadata.put("originalFilename", originalFilename);
         if (StringUtils.hasText(file.getContentType())) uploadMetadata.put("contentType", file.getContentType());
         uploadMetadata.put("uploadMode", "multipart");
@@ -195,6 +200,17 @@ public class RagDocumentController {
         String externalRef = firstText(frontmatter, "externalRef", "external_ref", "ref", "id", "slug")
                 .orElse(null);
         return new InferredUploadMetadata(sourceType, sourceUri, externalRef, title);
+    }
+
+    private Map<String, Object> parseClientMetadata(String metadata) {
+        if (!StringUtils.hasText(metadata)) {
+            return new LinkedHashMap<>();
+        }
+        try {
+            return new LinkedHashMap<>(jsonCodec.readMap(metadata));
+        } catch (RuntimeException exception) {
+            throw new IllegalArgumentException("metadata 必须是 JSON 对象", exception);
+        }
     }
 
     private java.util.Optional<String> firstText(Map<String, Object> values, String... keys) {

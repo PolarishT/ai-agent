@@ -3,9 +3,9 @@ package com.bytedance.ai.graph.catalog;
 import com.bytedance.ai.graph.catalog.api.CatalogCommandFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogImportRequest;
 import com.bytedance.ai.graph.catalog.api.CatalogImportSummary;
+import com.bytedance.ai.graph.catalog.api.CatalogProductCreateRequest;
+import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
-import com.bytedance.ai.graph.catalog.api.CatalogSpuCreateRequest;
-import com.bytedance.ai.graph.catalog.api.CatalogSpuView;
 import com.bytedance.ai.graph.catalog.persistence.CatalogAttributeOutboxRecord;
 import com.bytedance.ai.graph.catalog.persistence.CatalogAttributeOutboxRepository;
 import com.bytedance.ai.document.api.DocumentIndexRequestedEvent;
@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.event.EventListener;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
@@ -38,7 +39,7 @@ import static org.awaitility.Awaitility.await;
  *
  * <p>{@code rag.catalog.enabled=false} 关掉 listener 实际调 LLM；
  * {@code rag.rocketmq.enabled=false} 关掉 producer 与 dispatcher 装配，
- * outbox 行入库后保持 PENDING 即可，用于断言"导入事务成功写出 outbox 行"。
+ * outbox 行入库后保持 NEW 即可，用于断言"导入事务成功写出 outbox 行"。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @ActiveProfiles("test")
@@ -61,6 +62,9 @@ class CatalogModuleTests {
     private CatalogAttributeOutboxRepository attributeOutboxRepository;
 
     @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Autowired
     private CatalogTestEventProbe eventProbe;
 
     /**
@@ -79,69 +83,102 @@ class CatalogModuleTests {
     @Test
     void importBatchDoubleWritesAndEnqueuesOutbox() {
         eventProbe.clear();
-        CatalogImportRequest request = new CatalogImportRequest(List.of(sample("SPU-M-1")));
+        CatalogImportRequest request = new CatalogImportRequest(List.of(sample("p-module-1")));
 
         CatalogImportSummary summary = catalogCommandFacade.importBatch(request);
 
         assertThat(summary.failed()).isZero();
         assertThat(summary.succeeded()).isEqualTo(1);
-        Long spuId = summary.succeededIds().get(0);
+        Long productId = summary.succeededIds().get(0);
 
-        CatalogSpuView view = catalogQueryFacade.getSpu(spuId);
-        assertThat(view.documentId())
-                .as("catalog_spu.document_id 必须回填为 rag_documents.id")
-                .isNotNull();
-        assertThat(view.attributesStatus()).isEqualTo("PENDING");
+        CatalogProductView view = catalogQueryFacade.getProduct(productId);
+        assertThat(view.id()).isEqualTo(productId);
         assertThat(view.skus()).hasSize(1);
 
         await().untilAsserted(() -> {
+            List<Long> documentIds = jdbcTemplate.queryForList(
+                    "SELECT id FROM rag_documents WHERE external_ref=? ORDER BY source_uri",
+                    Long.class,
+                    String.valueOf(productId)
+            );
+            assertThat(documentIds)
+                    .as("商品导入应拆分生成多篇 rag_documents")
+                    .hasSizeGreaterThanOrEqualTo(5);
+            assertThat(jdbcTemplate.queryForList(
+                    "SELECT source_uri FROM rag_documents WHERE external_ref=? ORDER BY source_uri",
+                    String.class,
+                    String.valueOf(productId)
+            )).contains(
+                    "product:" + productId + ":profile",
+                    "product:" + productId + ":knowledge:MARKETING_DESCRIPTION",
+                    "product:" + productId + ":review-summary",
+                    "product:" + productId + ":faq:0",
+                    "product:" + productId + ":review:0"
+            );
+
             assertThat(eventProbe.indexEvents())
                     .as("应发布 DocumentIndexRequestedEvent（catalog → document 跨模块事件保留）")
-                    .anyMatch(e -> e.documentId().equals(view.documentId())
+                    .anyMatch(e -> documentIds.contains(e.documentId())
                             && "document-command-service".equals(e.triggeredBy()));
 
-            CatalogAttributeOutboxRecord row = attributeOutboxRepository.findLatestBySpuId(spuId).orElseThrow();
+            CatalogAttributeOutboxRecord row = attributeOutboxRepository.findLatestByProductId(productId).orElseThrow();
             assertThat(row.status())
-                    .as("rag.rocketmq.enabled=false 时 outbox 行应保持 PENDING")
-                    .isEqualTo("PENDING");
-            assertThat(row.externalRef()).isEqualTo("SPU-M-1");
+                    .as("rag.rocketmq.enabled=false 时 outbox 行应保持 NEW")
+                    .isEqualTo("NEW");
+            assertThat(row.eventType()).isEqualTo("EXTRACT_ATTRIBUTES");
         });
     }
 
     @Test
     void importBatchPartialSuccessReportsFailures() {
-        CatalogSpuCreateRequest ok = sample("SPU-M-3-OK");
-        CatalogSpuCreateRequest duplicate = sample("SPU-M-3-DUP");
-        catalogCommandFacade.importBatch(new CatalogImportRequest(List.of(duplicate)));
+        CatalogProductCreateRequest ok = sample("p-module-ok");
+        CatalogProductCreateRequest another = sample("p-module-another");
         CatalogImportSummary summary = catalogCommandFacade.importBatch(
-                new CatalogImportRequest(List.of(ok, duplicate))
+                new CatalogImportRequest(List.of(ok, another))
         );
 
         assertThat(summary.total()).isEqualTo(2);
-        assertThat(summary.succeeded()).isEqualTo(1);
-        assertThat(summary.failed()).isEqualTo(1);
-        assertThat(summary.failures()).hasSize(1);
-        assertThat(summary.failures().get(0).externalRef()).isEqualTo("SPU-M-3-DUP");
+        assertThat(summary.succeeded()).isEqualTo(2);
+        assertThat(summary.failed()).isZero();
+        assertThat(summary.failures()).isEmpty();
     }
 
-    private CatalogSpuCreateRequest sample(String externalRef) {
-        return new CatalogSpuCreateRequest(
-                externalRef,
-                "测试商品 " + externalRef,
+    private CatalogProductCreateRequest sample(String rawProductId) {
+        return new CatalogProductCreateRequest(
+                "测试商品 " + rawProductId,
                 "TestBrand",
-                "类目/子类目",
+                "类目",
+                "子类目",
+                new BigDecimal("99"),
                 new BigDecimal("99"),
                 new BigDecimal("99"),
                 10,
-                "这是一段足够长的商品描述，用于在 RAG 内容字段上产生稳定的 sha256。",
-                List.of("https://example.com/img.jpg"),
-                null,
-                List.of(new CatalogSpuCreateRequest.SkuDraft(
-                        "SKU-" + externalRef,
+                "https://example.com/img.jpg",
+                Map.of(),
+                Map.of("product_id", rawProductId),
+                List.of(new CatalogProductCreateRequest.SkuDraft(
+                        0,
                         Map.of("color", "黑色"),
                         new BigDecimal("99"),
-                        10
-                ))
+                        10,
+                        Map.of("sku_id", "sku-" + rawProductId)
+                )),
+                List.of(
+                        new CatalogProductCreateRequest.KnowledgeDraft(
+                                "MARKETING_DESCRIPTION",
+                                "卖点",
+                                "这是一段足够长的商品描述，用于在 RAG 内容字段上产生稳定的 sha256。",
+                                Map.of()
+                        ),
+                        new CatalogProductCreateRequest.KnowledgeDraft(
+                                "REVIEW_SUMMARY",
+                                "评价总结",
+                                "用户评价总结文本。",
+                                Map.of()
+                        )
+                ),
+                List.of(new CatalogProductCreateRequest.FaqDraft(0, "怎么用", "早晚使用。", Map.of())),
+                List.of(new CatalogProductCreateRequest.ReviewDraft(0, "alice", 5, "很好用", "POSITIVE", Map.of()))
         );
     }
 

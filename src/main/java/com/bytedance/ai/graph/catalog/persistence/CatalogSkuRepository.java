@@ -6,31 +6,33 @@ import java.util.Map;
 
 /**
  * catalog_sku 仓储。
- *
- * <p>一次导入一条 SPU 通常带 1~N 个 SKU，使用 {@link #saveAll} 批量插入降低 IO。
  */
 public interface CatalogSkuRepository {
 
-    /**
-     * 批量插入 SKU。所有记录绑定到同一个 SPU。
-     */
-    List<CatalogSkuRecord> saveAll(Long spuId, List<SkuDraft> drafts);
+    List<CatalogSkuRecord> saveAll(Long productId, List<SkuDraft> drafts);
 
-    List<CatalogSkuRecord> findBySpuId(Long spuId);
+    List<CatalogSkuRecord> findByProductId(Long productId);
+
+    @Deprecated
+    default List<CatalogSkuRecord> findBySpuId(Long productId) {
+        return findByProductId(productId);
+    }
 
     /**
      * SKU 插入草稿——避免接口里堆参数。
      *
-     * @param skuCode  SKU 业务编码
-     * @param specJson 规格 KV
+     * @param skuIndex       SKU 数组下标
+     * @param propertiesJson 规格 KV
      * @param price    价格
      * @param stock    库存
+     * @param rawJson  原始评委 SKU payload
      */
     record SkuDraft(
-            String skuCode,
-            Map<String, Object> specJson,
+            int skuIndex,
+            Map<String, Object> propertiesJson,
             BigDecimal price,
-            int stock
+            int stock,
+            Map<String, Object> rawJson
     ) {
     }
 }

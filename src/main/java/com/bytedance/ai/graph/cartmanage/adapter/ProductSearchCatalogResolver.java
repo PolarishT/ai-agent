@@ -1,11 +1,12 @@
 package com.bytedance.ai.graph.cartmanage.adapter;
 
+import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
-import com.bytedance.ai.graph.catalog.api.CatalogSpuView;
 import com.bytedance.ai.graph.cartmanage.ProductCandidate;
 import com.bytedance.ai.graph.cartmanage.ProductCatalogResolver;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -25,13 +26,13 @@ public class ProductSearchCatalogResolver implements ProductCatalogResolver {
     public List<ProductCandidate> searchCandidates(String productName, int limit) {
         int safeLimit = limit <= 0 ? 5 : Math.min(limit, 20);
         List<ProductCandidate> candidates = new ArrayList<>();
-        for (CatalogSpuView spu : catalogQueryFacade.searchActiveSpus(productName, safeLimit)) {
-            List<CatalogSkuView> skus = spu.skus() == null ? List.of() : spu.skus();
+        for (CatalogProductView product : catalogQueryFacade.searchActiveProducts(productName, safeLimit)) {
+            List<CatalogSkuView> skus = product.skus() == null ? List.of() : product.skus();
             if (skus.isEmpty()) {
-                candidates.add(candidate(spu, null));
+                candidates.add(candidate(product, null));
             } else {
                 for (CatalogSkuView sku : skus) {
-                    candidates.add(candidate(spu, sku));
+                    candidates.add(candidate(product, sku));
                     if (candidates.size() >= safeLimit) {
                         return List.copyOf(candidates);
                     }
@@ -41,30 +42,45 @@ public class ProductSearchCatalogResolver implements ProductCatalogResolver {
         return List.copyOf(candidates);
     }
 
-    private ProductCandidate candidate(CatalogSpuView spu, CatalogSkuView sku) {
+    private ProductCandidate candidate(CatalogProductView product, CatalogSkuView sku) {
+        String productIdString = String.valueOf(product.id());
         return new ProductCandidate(
-                String.valueOf(spu.id()),
+                productIdString,
                 sku == null ? null : String.valueOf(sku.id()),
-                spu.title(),
-                price(spu, sku),
-                brief(spu),
+                product.title(),
+                price(product, sku),
+                brief(product),
                 spec(sku),
-                spu.externalRef()
+                // catalog_product 已无 external_ref 列；保留字段并填 productId 作 SPI 向后兼容,
+                // 让旧消费者（DefaultCandidateSelectionLlmService / normalizedCandidateText）
+                // 不报 NPE。新代码应直接读 productId。
+                productIdString
         );
     }
 
-    private BigDecimal price(CatalogSpuView spu, CatalogSkuView sku) {
+    private BigDecimal price(CatalogProductView product, CatalogSkuView sku) {
         if (sku != null && sku.price() != null) {
             return sku.price();
         }
-        return spu.priceMin() != null ? spu.priceMin() : spu.priceMax();
+        if (product.priceMin() != null) {
+            return product.priceMin();
+        }
+        if (product.priceMax() != null) {
+            return product.priceMax();
+        }
+        return product.basePrice();
     }
 
-    private String brief(CatalogSpuView spu) {
-        if (spu.brand() != null && !spu.brand().isBlank()) {
-            return spu.brand();
+    private String brief(CatalogProductView product) {
+        if (StringUtils.hasText(product.brand())) {
+            return product.brand();
         }
-        return spu.categoryPath();
+        String category = product.category();
+        String subCategory = product.subCategory();
+        if (StringUtils.hasText(category) && StringUtils.hasText(subCategory)) {
+            return category + "/" + subCategory;
+        }
+        return StringUtils.hasText(category) ? category : subCategory;
     }
 
     private String spec(CatalogSkuView sku) {

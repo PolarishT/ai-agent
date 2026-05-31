@@ -144,9 +144,9 @@ class GuideGraphStreamServiceTests {
             @Override
             public com.alibaba.cloud.ai.graph.CompiledGraph compile(java.util.function.Consumer<AgentStreamEvent> eventSink) {
                 return compile(eventSink, Map.of(
-                        GuideGraphNodeNames.SEARCH_WORKFLOW,
+                        GuideGraphNodeNames.PRODUCT_QUERY_WORKFLOW,
                         state -> {
-                            throw new IllegalStateException("search workflow failed");
+                            throw new IllegalStateException("product query workflow failed");
                         }
                 ));
             }
@@ -174,9 +174,9 @@ class GuideGraphStreamServiceTests {
 
         GuideGraphFinalSummary summary = (GuideGraphFinalSummary) events.getLast().data();
         assertThat(summary.status()).isEqualTo(NodeRunStatus.FAILED);
-        assertThat(summary.finalNode()).isEqualTo(GuideGraphNodeNames.SEARCH_WORKFLOW);
+        assertThat(summary.finalNode()).isEqualTo(GuideGraphNodeNames.PRODUCT_QUERY_WORKFLOW);
         assertThat(summary.errorCode()).isEqualTo("GUIDE_GRAPH_NODE_FAILED");
-        assertThat(summary.errorMessage()).isEqualTo("search workflow failed");
+        assertThat(summary.errorMessage()).isEqualTo("product query workflow failed");
     }
 
     @Test
@@ -186,6 +186,7 @@ class GuideGraphStreamServiceTests {
                 new GuideStateGraphFactory(
                         timeoutRepo,
                         new TimeoutMainIntentRouterService(),
+                        null,
                         null,
                         null,
                         null,

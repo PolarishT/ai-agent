@@ -6,13 +6,13 @@ import jakarta.validation.constraints.NotEmpty;
 import java.util.List;
 
 /**
- * 批量导入请求：携带若干 SPU 草稿。
+ * 批量导入请求：携带若干 Product 草稿。
  *
- * @param items SPU 列表
+ * @param items Product 列表
  */
 public record CatalogImportRequest(
-        @NotEmpty(message = "至少需要一条 SPU")
+        @NotEmpty(message = "至少需要一条商品")
         @Valid
-        List<CatalogSpuCreateRequest> items
+        List<?> items
 ) {
 }

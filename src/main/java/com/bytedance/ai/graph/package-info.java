@@ -3,6 +3,9 @@
  */
 @org.springframework.modulith.ApplicationModule(
         displayName = "Spring AI Alibaba Graph",
-        allowedDependencies = {"graph.cart::api", "graph.catalog::api", "retrieval::spi"}
+        allowedDependencies = {
+                "graph.cart::api",
+                "graph.catalog::api"
+        }
 )
 package com.bytedance.ai.graph;

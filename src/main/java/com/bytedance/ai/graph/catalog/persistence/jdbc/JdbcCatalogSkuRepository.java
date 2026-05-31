@@ -21,9 +21,6 @@ import java.util.List;
 
 /**
  * 基于 Spring JDBC 的 catalog_sku 仓储实现。
- *
- * <p>每条 SPU 通常只带 1~10 个 SKU，单行 insert + KeyHolder 即可；
- * 不引入 batchUpdate 避免在 PG jsonb 列与 H2 普通列之间适配复杂度。
  */
 @Repository
 public class JdbcCatalogSkuRepository implements CatalogSkuRepository {
@@ -39,27 +36,28 @@ public class JdbcCatalogSkuRepository implements CatalogSkuRepository {
     }
 
     @Override
-    public List<CatalogSkuRecord> saveAll(Long spuId, List<SkuDraft> drafts) {
+    public List<CatalogSkuRecord> saveAll(Long productId, List<SkuDraft> drafts) {
         if (drafts == null || drafts.isEmpty()) {
             return List.of();
         }
         List<CatalogSkuRecord> saved = new ArrayList<>(drafts.size());
         for (SkuDraft draft : drafts) {
-            saved.add(insertOne(spuId, draft));
+            saved.add(insertOne(productId, draft));
         }
         return saved;
     }
 
-    private CatalogSkuRecord insertOne(Long spuId, SkuDraft draft) {
+    private CatalogSkuRecord insertOne(Long productId, SkuDraft draft) {
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             PreparedStatement statement = connection.prepareStatement(insertSql(connection), Statement.RETURN_GENERATED_KEYS);
-            statement.setLong(1, spuId);
-            statement.setString(2, draft.skuCode());
-            statement.setString(3, jsonCodec.write(draft.specJson() == null ? java.util.Map.of() : draft.specJson()));
+            statement.setLong(1, productId);
+            statement.setInt(2, draft.skuIndex());
+            statement.setString(3, jsonCodec.write(draft.propertiesJson() == null ? java.util.Map.of() : draft.propertiesJson()));
             statement.setBigDecimal(4, draft.price());
             statement.setInt(5, draft.stock());
             statement.setString(6, STATUS_ACTIVE);
+            statement.setString(7, jsonCodec.write(draft.rawJson() == null ? java.util.Map.of() : draft.rawJson()));
             return statement;
         }, keyHolder);
 
@@ -71,11 +69,11 @@ public class JdbcCatalogSkuRepository implements CatalogSkuRepository {
     }
 
     @Override
-    public List<CatalogSkuRecord> findBySpuId(Long spuId) {
+    public List<CatalogSkuRecord> findByProductId(Long productId) {
         return jdbc.query(
-                "SELECT * FROM catalog_sku WHERE spu_id = ? ORDER BY id",
+                "SELECT * FROM catalog_sku WHERE product_id = ? ORDER BY sku_index, id",
                 rowMapper(),
-                spuId
+                productId
         );
     }
 
@@ -93,14 +91,14 @@ public class JdbcCatalogSkuRepository implements CatalogSkuRepository {
         if (isPostgreSql(connection)) {
             return """
                     INSERT INTO catalog_sku (
-                        spu_id, sku_code, spec_json, price, stock, status
-                    ) VALUES (?, ?, CAST(? AS jsonb), ?, ?, ?)
+                        product_id, sku_index, properties_json, price, stock, status, raw_json
+                    ) VALUES (?, ?, CAST(? AS jsonb), ?, ?, ?, CAST(? AS jsonb))
                     """;
         }
         return """
                 INSERT INTO catalog_sku (
-                    spu_id, sku_code, spec_json, price, stock, status
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    product_id, sku_index, properties_json, price, stock, status, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """;
     }
 
@@ -125,12 +123,13 @@ public class JdbcCatalogSkuRepository implements CatalogSkuRepository {
     private RowMapper<CatalogSkuRecord> rowMapper() {
         return (rs, rowNum) -> new CatalogSkuRecord(
                 rs.getLong("id"),
-                rs.getLong("spu_id"),
-                rs.getString("sku_code"),
-                jsonCodec.readMap(rs.getString("spec_json")),
+                rs.getLong("product_id"),
+                rs.getInt("sku_index"),
+                jsonCodec.readMap(rs.getString("properties_json")),
                 rs.getBigDecimal("price"),
                 rs.getInt("stock"),
                 rs.getString("status"),
+                jsonCodec.readMap(rs.getString("raw_json")),
                 toOffsetDateTime(rs.getTimestamp("created_at")),
                 toOffsetDateTime(rs.getTimestamp("updated_at"))
         );

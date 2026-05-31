@@ -20,6 +20,7 @@ public final class GuideGraphNodeNames {
     public static final String UPDATE_CART_ITEM_WORKFLOW = "update_cart_item_workflow";
     public static final String CART_MANAGE_WORKFLOW = "cart_manage_workflow";
     public static final String ORDER_MANAGE_WORKFLOW = "order_manage_workflow";
+    public static final String PRODUCT_QUERY_WORKFLOW = "product_query_workflow";
     public static final String CREATE_ORDER_WORKFLOW = "create_order_workflow";
     public static final String CONFIRM_ORDER_WORKFLOW = "confirm_order_workflow";
     public static final String CANCEL_ORDER_WORKFLOW = "cancel_order_workflow";

@@ -15,11 +15,11 @@ import java.time.ZoneOffset;
 import java.util.List;
 
 /**
- * 定时扫描 {@code catalog_attribute_outbox}：把 PENDING / FAILED（next_send_after 已到）
+ * 定时扫描 {@code catalog_attribute_outbox}：把 NEW / FAILED（next_attempt_at 已到）
  * 行投递给 RocketMQ，并按 markSending → publish → markSent / markFailed 推进状态机。
  *
  * <p>仅当 RocketMQ producer Bean 存在时（即 {@code rag.rocketmq.enabled=true} 且
- * topic 配齐）才装配；否则本 dispatcher 不会启动，outbox 行会保留为 PENDING，
+ * topic 配齐）才装配；否则本 dispatcher 不会启动，outbox 行会保留为 NEW，
  * 等待人工 REST 触发或环境就位后继续投递——符合"开发环境无 RocketMQ 时降级"的设计。
  */
 @Component
@@ -67,8 +67,7 @@ public class CatalogAttributeOutboxDispatcher {
             return;
         }
         CatalogAttributeMessagePayload payload = new CatalogAttributeMessagePayload(
-                row.spuId(),
-                row.externalRef(),
+                row.productId(),
                 "outbox-dispatcher",
                 System.currentTimeMillis()
         );
@@ -81,9 +80,9 @@ public class CatalogAttributeOutboxDispatcher {
             String reason = RagLogHelper.errorSummary(exception);
             outboxRepository.markFailed(row.id(), reason, nextAttemptAt);
             log.warn(
-                    "catalog outbox dispatch failed: outboxId={}, spuId={}, reason={}, nextAttemptAt={}",
+                    "catalog outbox dispatch failed: outboxId={}, productId={}, reason={}, nextAttemptAt={}",
                     row.id(),
-                    row.spuId(),
+                    row.productId(),
                     reason,
                     nextAttemptAt
             );

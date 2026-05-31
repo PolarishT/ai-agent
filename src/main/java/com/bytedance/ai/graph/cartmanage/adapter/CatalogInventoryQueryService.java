@@ -1,8 +1,8 @@
 package com.bytedance.ai.graph.cartmanage.adapter;
 
+import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
-import com.bytedance.ai.graph.catalog.api.CatalogSpuView;
 import com.bytedance.ai.graph.cartmanage.InventoryQueryService;
 import com.bytedance.ai.graph.cartmanage.StockResult;
 import org.springframework.stereotype.Service;
@@ -11,7 +11,7 @@ import org.springframework.util.StringUtils;
 import java.util.List;
 
 /**
- * Real inventory probe for cart management, backed by catalog SPU/SKU stock.
+ * Real inventory probe for cart management, backed by {@code catalog_product} stock.
  */
 @Service
 public class CatalogInventoryQueryService implements InventoryQueryService {
@@ -30,28 +30,28 @@ public class CatalogInventoryQueryService implements InventoryQueryService {
             return StockResult.outOfStock(productId, skuId, 0);
         }
 
-        Long spuId = parseId(productId);
-        if (spuId == null) {
+        Long productPrimaryId = parseId(productId);
+        if (productPrimaryId == null) {
             return StockResult.outOfStock(productId, skuId, 0);
         }
 
-        CatalogSpuView spu;
+        CatalogProductView product;
         try {
-            spu = catalogQueryFacade.getSpu(spuId);
+            product = catalogQueryFacade.getProduct(productPrimaryId);
         } catch (RuntimeException ignored) {
             return StockResult.outOfStock(productId, skuId, 0);
         }
 
-        if (spu == null || !ACTIVE.equalsIgnoreCase(nullToEmpty(spu.status()))) {
+        if (product == null || !ACTIVE.equalsIgnoreCase(nullToEmpty(product.status()))) {
             return StockResult.outOfStock(productId, skuId, 0);
         }
 
         Long skuPrimaryId = parseId(skuId);
         if (skuPrimaryId != null) {
-            return checkSkuStock(productId, skuId, requestedQuantity, spu.skus(), skuPrimaryId);
+            return checkSkuStock(productId, skuId, requestedQuantity, product.skus(), skuPrimaryId);
         }
 
-        int availableQty = spu.stock() == null ? 0 : spu.stock();
+        int availableQty = product.totalStock() == null ? 0 : product.totalStock();
         return availableQty >= requestedQuantity
                 ? StockResult.inStock(productId, skuId, availableQty)
                 : StockResult.outOfStock(productId, skuId, availableQty);

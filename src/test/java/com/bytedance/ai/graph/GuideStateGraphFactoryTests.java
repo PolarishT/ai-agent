@@ -7,8 +7,8 @@ import com.bytedance.ai.graph.cart.api.CartState;
 import com.bytedance.ai.graph.cart.api.CartView;
 import com.bytedance.ai.graph.catalog.api.CatalogInventoryFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
+import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
-import com.bytedance.ai.graph.catalog.api.CatalogSpuView;
 import com.bytedance.ai.graph.cartmanage.CartCommandService;
 import com.bytedance.ai.graph.cartmanage.CartMutationResult;
 import com.bytedance.ai.graph.cartmanage.subgraph.PendingCartActionRepository;
@@ -123,8 +123,8 @@ class GuideStateGraphFactoryTests {
         assertThat(GuideGraphStateValues.intent(state, GuideGraphStateKeys.INTENT))
                 .contains(GuideGraphIntent.PRODUCT_SEARCH);
         assertThat(state.value(GuideGraphStateKeys.TARGET_WORKFLOW, ""))
-                .isEqualTo(GuideGraphNodeNames.SEARCH_WORKFLOW);
-        assertTraceOrder(state, GuideGraphNodeNames.INIT_CONVERSATION, GuideGraphNodeNames.SEARCH_WORKFLOW);
+                .isEqualTo(GuideGraphNodeNames.PRODUCT_QUERY_WORKFLOW);
+        assertTraceOrder(state, GuideGraphNodeNames.INIT_CONVERSATION, GuideGraphNodeNames.PRODUCT_QUERY_WORKFLOW);
     }
 
     @Test
@@ -132,7 +132,7 @@ class GuideStateGraphFactoryTests {
         OverAllState state = invoke(Map.of(GuideGraphStateKeys.INITIAL_INTENT, GuideGraphIntent.PRODUCT_SEARCH));
 
         Map<String, Object> answerContext = state.value(GuideGraphStateKeys.ANSWER_CONTEXT, Map.of());
-        assertThat(answerContext).containsEntry("targetWorkflow", GuideGraphNodeNames.SEARCH_WORKFLOW);
+        assertThat(answerContext).containsEntry("targetWorkflow", GuideGraphNodeNames.PRODUCT_QUERY_WORKFLOW);
         assertThat(answerContext)
                 .doesNotContainKeys(GuideGraphStateKeys.NODE_RESULTS, GuideGraphStateKeys.LAST_NODE_RESULT);
     }
@@ -141,7 +141,7 @@ class GuideStateGraphFactoryTests {
     void buildAnswerContextUsesFailureCopyWhenErrorCodeExistsWithoutNodeMessage() throws Exception {
         OverAllState state = invokeWithOverrides(
                 Map.of(GuideGraphStateKeys.INITIAL_INTENT, GuideGraphIntent.PRODUCT_SEARCH),
-                Map.of(GuideGraphNodeNames.SEARCH_WORKFLOW,
+                Map.of(GuideGraphNodeNames.PRODUCT_QUERY_WORKFLOW,
                         _ -> GuideNodeExecutionResult.withStateUpdates(
                                 Map.of(GuideGraphStateKeys.ERROR_CODE, "UPSTREAM_FAILED"),
                                 Map.of("forcedError", true)
@@ -212,7 +212,8 @@ class GuideStateGraphFactoryTests {
                 null,
                 null,
                 rig.factory,
-                rig.pending
+                rig.pending,
+                null
         );
         CompiledGraph graph = orderFactory.compile(event -> {
         });
@@ -551,19 +552,14 @@ class GuideStateGraphFactoryTests {
 
     private static final class StubCatalog implements CatalogQueryFacade {
         @Override
-        public CatalogSpuView getSpu(Long spuId) {
-            return new CatalogSpuView(spuId, "SPU-" + spuId, "苹果", "brand", "fruit",
-                    new BigDecimal("9.90"), new BigDecimal("9.90"), 10, "", List.of(), null,
-                    Map.of(), "DONE", "ACTIVE", null, List.of(), OffsetDateTime.now(), OffsetDateTime.now());
+        public CatalogProductView getProduct(Long productId) {
+            return new CatalogProductView(productId, "苹果", "brand", "fruit", null,
+                    new BigDecimal("9.90"), new BigDecimal("9.90"), new BigDecimal("9.90"), 10, "", "ACTIVE",
+                    Map.of(), Map.of(), List.of(), OffsetDateTime.now(), OffsetDateTime.now());
         }
 
         @Override
-        public Optional<CatalogSpuView> findSpuByExternalRef(String externalRef) {
-            return Optional.empty();
-        }
-
-        @Override
-        public List<CatalogSkuView> listSkus(Long spuId) {
+        public List<CatalogSkuView> listSkus(Long productId) {
             return List.of();
         }
     }

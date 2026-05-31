@@ -3,10 +3,11 @@ package com.bytedance.ai.graph.catalog.application;
 import com.bytedance.ai.graph.catalog.api.CatalogCommandFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogImportRequest;
 import com.bytedance.ai.graph.catalog.api.CatalogImportSummary;
-import com.bytedance.ai.graph.catalog.api.CatalogSpuCreateRequest;
+import com.bytedance.ai.graph.catalog.api.CatalogProductCreateRequest;
+import com.bytedance.ai.graph.catalog.api.CatalogProductJsonImportRequest;
 import com.bytedance.ai.graph.catalog.persistence.CatalogAttributeOutboxRepository;
-import com.bytedance.ai.graph.catalog.persistence.CatalogSpuRecord;
-import com.bytedance.ai.graph.catalog.persistence.CatalogSpuRepository;
+import com.bytedance.ai.graph.catalog.persistence.CatalogProductRecord;
+import com.bytedance.ai.graph.catalog.persistence.CatalogProductRepository;
 import com.bytedance.ai.shared.support.RagJsonCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,39 +31,42 @@ class CatalogCommandService implements CatalogCommandFacade {
     private static final String MANUAL_TRIGGER = "manual-retry";
 
     private final CatalogImportService catalogImportService;
-    private final CatalogSpuRepository spuRepository;
+    private final CatalogProductRepository productRepository;
     private final CatalogAttributeOutboxRepository attributeOutboxRepository;
     private final RagJsonCodec jsonCodec;
+    private final CatalogJsonImportMapper jsonImportMapper;
 
     CatalogCommandService(
             CatalogImportService catalogImportService,
-            CatalogSpuRepository spuRepository,
+            CatalogProductRepository productRepository,
             CatalogAttributeOutboxRepository attributeOutboxRepository,
-            RagJsonCodec jsonCodec
+            RagJsonCodec jsonCodec,
+            CatalogJsonImportMapper jsonImportMapper
     ) {
         this.catalogImportService = catalogImportService;
-        this.spuRepository = spuRepository;
+        this.productRepository = productRepository;
         this.attributeOutboxRepository = attributeOutboxRepository;
         this.jsonCodec = jsonCodec;
+        this.jsonImportMapper = jsonImportMapper;
     }
 
     @Override
     public CatalogImportSummary importBatch(CatalogImportRequest request) {
-        List<CatalogSpuCreateRequest> items = request.items();
+        List<?> items = request.items();
         List<Long> succeededIds = new ArrayList<>(items.size());
         List<CatalogImportSummary.Failure> failures = new ArrayList<>();
 
-        for (CatalogSpuCreateRequest item : items) {
+        for (Object item : items) {
             try {
-                Long spuId = catalogImportService.importOne(item);
-                succeededIds.add(spuId);
+                Long productId = importOne(item);
+                succeededIds.add(productId);
             } catch (RuntimeException exception) {
                 log.warn(
-                        "catalog import single SPU failed: externalRef={}, reason={}",
-                        item.externalRef(),
+                        "catalog import single Product failed: title={}, reason={}",
+                        itemTitle(item),
                         exception.getMessage()
                 );
-                failures.add(new CatalogImportSummary.Failure(item.externalRef(), exception.getMessage()));
+                failures.add(new CatalogImportSummary.Failure(itemTitle(item), exception.getMessage()));
             }
         }
         log.info(
@@ -74,19 +78,38 @@ class CatalogCommandService implements CatalogCommandFacade {
         return new CatalogImportSummary(items.size(), succeededIds.size(), failures.size(), succeededIds, failures);
     }
 
+    private Long importOne(Object item) {
+        if (item instanceof CatalogProductCreateRequest product) {
+            return catalogImportService.importOne(product);
+        }
+        throw new IllegalArgumentException("Unsupported catalog import item type: " + (item == null ? "null" : item.getClass().getName()));
+    }
+
+    private String itemTitle(Object item) {
+        if (item instanceof CatalogProductCreateRequest product) {
+            return product.title();
+        }
+        return String.valueOf(item);
+    }
+
     @Override
-    public void requestAttributeExtraction(Long spuId) {
-        CatalogSpuRecord record = spuRepository.findById(spuId)
-                .orElseThrow(() -> new IllegalArgumentException("catalog_spu 不存在: " + spuId));
+    public CatalogImportSummary importJson(CatalogProductJsonImportRequest request) {
+        CatalogProductCreateRequest mapped = jsonImportMapper.toCreateRequest(request);
+        return importBatch(new CatalogImportRequest(List.of(mapped)));
+    }
+
+    @Override
+    public void requestAttributeExtraction(Long productId) {
+        CatalogProductRecord record = productRepository.findById(productId)
+                .orElseThrow(() -> new IllegalArgumentException("catalog_product 不存在: " + productId));
         String payload = jsonCodec.write(Map.of(
                 "triggeredBy", MANUAL_TRIGGER,
                 "enqueuedAtMs", System.currentTimeMillis()
         ));
-        attributeOutboxRepository.enqueue(record.id(), record.externalRef(), payload);
+        attributeOutboxRepository.enqueue(record.id(), "REFRESH_ATTRIBUTES", payload);
         log.info(
-                "catalog attribute extraction requested manually: spuId={}, externalRef={}",
-                spuId,
-                record.externalRef()
+                "catalog attribute extraction requested manually: productId={}",
+                productId
         );
     }
 }

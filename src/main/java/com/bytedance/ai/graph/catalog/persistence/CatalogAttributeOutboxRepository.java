@@ -6,25 +6,22 @@ import java.util.Optional;
 
 /**
  * catalog 抽属性 Outbox 仓储。
- *
- * <p>同 {@code rag_index_outbox} 一样遵循事务边界保证：caller 在导入事务里同步 {@link #enqueue}，
- * 由后台 dispatcher 异步 {@link #claimNextBatch} / {@link #markSent} / {@link #markFailed} 推进状态机。
  */
 public interface CatalogAttributeOutboxRepository {
 
     /**
-     * 入队一条抽属性请求。重复 enqueue 同一个 spuId 时复用既有 PENDING/FAILED 行，
+     * 入队一条抽属性请求。重复 enqueue 同一个 productId 时复用既有 NEW/FAILED 行，
      * 不会产生重复投递。
      */
-    void enqueue(Long spuId, String externalRef, String payloadJson);
+    void enqueue(Long productId, String eventType, String metadataJson);
 
     /**
-     * 查询 dispatcher 当前应该认领的 outbox 行（PENDING 或 FAILED 且 next_send_after 已到）。
+     * 查询 dispatcher 当前应该认领的 outbox 行（NEW 或 FAILED 且 next_attempt_at 已到）。
      */
     List<CatalogAttributeOutboxRecord> findDispatchable(OffsetDateTime now, int limit);
 
     /**
-     * 把指定 id 从 PENDING/FAILED 原子地迁移到 SENDING，确保多实例 dispatcher 不会重复投递。
+     * 把指定 id 从 NEW/FAILED 原子地迁移到 SENDING，确保多实例 dispatcher 不会重复投递。
      *
      * @return 是否抢占成功
      */
@@ -51,7 +48,12 @@ public interface CatalogAttributeOutboxRepository {
     void resetForRetry(Long id, String errorMessage, OffsetDateTime nextSendAfter);
 
     /**
-     * 查询 SPU 最近一条 outbox 行，主要用于排障 / 测试断言。
+     * 查询 Product 最近一条 outbox 行，主要用于排障 / 测试断言。
      */
-    Optional<CatalogAttributeOutboxRecord> findLatestBySpuId(Long spuId);
+    Optional<CatalogAttributeOutboxRecord> findLatestByProductId(Long productId);
+
+    @Deprecated
+    default Optional<CatalogAttributeOutboxRecord> findLatestBySpuId(Long productId) {
+        return findLatestByProductId(productId);
+    }
 }

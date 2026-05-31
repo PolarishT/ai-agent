@@ -1,13 +1,13 @@
 package com.bytedance.ai.graph.catalog.application;
 
-import com.bytedance.ai.graph.catalog.api.CatalogSpuCreateRequest;
+import com.bytedance.ai.graph.catalog.api.CatalogProductCreateRequest;
 import com.bytedance.ai.graph.catalog.persistence.CatalogAttributeOutboxRepository;
+import com.bytedance.ai.graph.catalog.persistence.CatalogProductContentRepository;
+import com.bytedance.ai.graph.catalog.persistence.CatalogProductRecord;
+import com.bytedance.ai.graph.catalog.persistence.CatalogProductRepository;
 import com.bytedance.ai.graph.catalog.persistence.CatalogSkuRepository;
-import com.bytedance.ai.graph.catalog.persistence.CatalogSpuRecord;
-import com.bytedance.ai.graph.catalog.persistence.CatalogSpuRepository;
 import com.bytedance.ai.document.api.DocumentCommandFacade;
 import com.bytedance.ai.document.api.RagDocumentCreateRequest;
-import com.bytedance.ai.document.api.RagDocumentView;
 import com.bytedance.ai.shared.support.RagJsonCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,44 +16,57 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
-import java.util.LinkedHashMap;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 
 /**
- * 单条 SPU 的事务化导入服务。拆出独立 bean 是为了让 Spring 代理生效——
+ * 单条 Product 的事务化导入服务。拆出独立 bean 是为了让 Spring 代理生效——
  * {@link CatalogCommandService#importBatch} 调用本类时会通过容器代理，
  * 单条失败由本类抛错回滚，由调用方记录失败明细并继续下一条。
  *
  * <p>导入流程末尾调 {@link CatalogAttributeOutboxRepository#enqueue}，
- * 利用同事务保证「SPU 落库 + 双写 rag_documents + outbox 行」三者要么全部成功要么全部回滚，
+ * 利用同事务保证「Product 落库 + 多篇 rag_documents + outbox 行」三者要么全部成功要么全部回滚，
  * 后台 dispatcher 看到 outbox 行后才会真正投递 RocketMQ，参见 {@code AGENT.md §3.9}。
  */
 @Service
 class CatalogImportService {
 
     private static final Logger log = LoggerFactory.getLogger(CatalogImportService.class);
-    private static final String SOURCE_TYPE = "catalog-spu";
     private static final String IMPORT_TRIGGER = "import";
     private static final int RAG_DOCUMENT_TITLE_MAX = 100;
+    private static final String PRODUCT_PROFILE = "PRODUCT_PROFILE";
+    private static final String PRODUCT_KNOWLEDGE = "PRODUCT_KNOWLEDGE";
+    private static final String PRODUCT_FAQ = "PRODUCT_FAQ";
+    private static final String PRODUCT_REVIEW = "PRODUCT_REVIEW";
+    private static final String PRODUCT_REVIEW_SUMMARY = "PRODUCT_REVIEW_SUMMARY";
+    private static final String REVIEW_SUMMARY = "REVIEW_SUMMARY";
 
-    private final CatalogSpuRepository spuRepository;
+    private final CatalogProductRepository productRepository;
     private final CatalogSkuRepository skuRepository;
+    private final CatalogProductContentRepository productContentRepository;
     private final DocumentCommandFacade documentCommandFacade;
-    private final SpuMarkdownRenderer markdownRenderer;
+    private final ProductMarkdownRenderer markdownRenderer;
     private final CatalogAttributeOutboxRepository attributeOutboxRepository;
     private final RagJsonCodec jsonCodec;
 
     CatalogImportService(
-            CatalogSpuRepository spuRepository,
+            CatalogProductRepository productRepository,
             CatalogSkuRepository skuRepository,
+            CatalogProductContentRepository productContentRepository,
             DocumentCommandFacade documentCommandFacade,
-            SpuMarkdownRenderer markdownRenderer,
+            ProductMarkdownRenderer markdownRenderer,
             CatalogAttributeOutboxRepository attributeOutboxRepository,
             RagJsonCodec jsonCodec
     ) {
-        this.spuRepository = spuRepository;
+        this.productRepository = productRepository;
         this.skuRepository = skuRepository;
+        this.productContentRepository = productContentRepository;
         this.documentCommandFacade = documentCommandFacade;
         this.markdownRenderer = markdownRenderer;
         this.attributeOutboxRepository = attributeOutboxRepository;
@@ -61,52 +74,46 @@ class CatalogImportService {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public Long importOne(CatalogSpuCreateRequest item) {
-        CatalogSpuRecord spu = spuRepository.save(
-                item.externalRef(),
+    public Long importOne(CatalogProductCreateRequest item) {
+        CatalogProductRecord product = productRepository.save(
                 item.title(),
                 item.brand(),
-                item.categoryPath(),
+                item.category(),
+                item.subCategory(),
+                item.basePrice(),
                 item.priceMin(),
                 item.priceMax(),
-                item.stock() == null ? 0 : item.stock(),
-                item.descriptionMd(),
-                item.images(),
-                item.videoUrl()
+                item.totalStock() == null ? 0 : item.totalStock(),
+                item.imagePath(),
+                safeMap(item.attributesJson()),
+                safeMap(item.rawJson())
         );
 
-        List<CatalogSkuRepository.SkuDraft> skuDrafts = item.skus().stream()
+        List<CatalogSkuRepository.SkuDraft> skuDrafts = safeList(item.skus()).stream()
                 .map(s -> new CatalogSkuRepository.SkuDraft(
-                        s.skuCode(),
-                        s.specJson(),
+                        s.skuIndex() == null ? 0 : s.skuIndex(),
+                        safeMap(s.propertiesJson()),
                         s.price(),
-                        s.stock() == null ? 0 : s.stock()
+                        s.stock() == null ? 0 : s.stock(),
+                        safeMap(s.rawJson())
                 ))
                 .toList();
-        skuRepository.saveAll(spu.id(), skuDrafts);
+        skuRepository.saveAll(product.id(), skuDrafts);
 
-        String content = markdownRenderer.render(item);
-        Map<String, Object> metadata = buildDocumentMetadata(spu, item);
+        productContentRepository.saveKnowledge(product.id(), toKnowledgeDrafts(item));
+        productContentRepository.saveFaqs(product.id(), toFaqDrafts(item));
+        productContentRepository.saveReviews(product.id(), toReviewDrafts(item));
 
-        RagDocumentView created = documentCommandFacade.createDocument(new RagDocumentCreateRequest(
-                SOURCE_TYPE,
-                buildSourceUri(item.externalRef()),
-                item.externalRef(),
-                truncateForDocumentTitle(item.title()),
-                content,
-                metadata
-        ));
-        spuRepository.attachDocument(spu.id(), created.id());
+        createRagDocuments(product, item);
 
-        attributeOutboxRepository.enqueue(spu.id(), spu.externalRef(), buildOutboxPayload(IMPORT_TRIGGER));
+        attributeOutboxRepository.enqueue(product.id(), "EXTRACT_ATTRIBUTES", buildOutboxPayload(IMPORT_TRIGGER));
 
         log.info(
-                "catalog SPU imported: spuId={}, externalRef={}, documentId={}",
-                spu.id(),
-                spu.externalRef(),
-                created.id()
+                "catalog product imported: productId={}, title={}",
+                product.id(),
+                product.title()
         );
-        return spu.id();
+        return product.id();
     }
 
     private String buildOutboxPayload(String trigger) {
@@ -116,29 +123,165 @@ class CatalogImportService {
         ));
     }
 
-    private Map<String, Object> buildDocumentMetadata(CatalogSpuRecord spu, CatalogSpuCreateRequest item) {
-        // RagDocumentCreateRequest 强校验 metadata 非空，这里至少塞稳定的可观测字段。
+    private void createRagDocuments(CatalogProductRecord product, CatalogProductCreateRequest item) {
+        createDocument(product, PRODUCT_PROFILE, "product:" + product.id() + ":profile",
+                item.title(), markdownRenderer.renderProfile(item), baseDocumentMetadata(product, item, PRODUCT_PROFILE));
+
+        for (CatalogProductCreateRequest.KnowledgeDraft knowledge : safeList(item.knowledge())) {
+            String knowledgeType = normalizeKnowledgeType(knowledge.knowledgeType());
+            Map<String, Object> metadata = baseDocumentMetadata(product, item, PRODUCT_KNOWLEDGE);
+            metadata.put("knowledgeType", knowledgeType);
+            createDocument(product, PRODUCT_KNOWLEDGE, "product:" + product.id() + ":knowledge:" + knowledgeType,
+                    knowledge.title() == null ? item.title() : knowledge.title(),
+                    markdownRenderer.renderKnowledge(knowledge),
+                    metadata);
+            if (REVIEW_SUMMARY.equals(knowledgeType)) {
+                Map<String, Object> summaryMetadata = baseDocumentMetadata(product, item, PRODUCT_REVIEW_SUMMARY);
+                summaryMetadata.put("knowledgeType", knowledgeType);
+                createDocument(product, PRODUCT_REVIEW_SUMMARY, "product:" + product.id() + ":review-summary",
+                        item.title() + " review summary",
+                        markdownRenderer.renderReviewSummary(item.title(), knowledge.content()),
+                        summaryMetadata);
+            }
+        }
+
+        for (CatalogProductCreateRequest.FaqDraft faq : safeList(item.faqs())) {
+            int faqIndex = faq.faqIndex() == null ? 0 : faq.faqIndex();
+            Map<String, Object> metadata = baseDocumentMetadata(product, item, PRODUCT_FAQ);
+            metadata.put("faqIndex", faqIndex);
+            createDocument(product, PRODUCT_FAQ, "product:" + product.id() + ":faq:" + faqIndex,
+                    item.title() + " FAQ " + faqIndex,
+                    markdownRenderer.renderFaq(faq),
+                    metadata);
+        }
+
+        for (CatalogProductCreateRequest.ReviewDraft review : safeList(item.reviews())) {
+            int reviewIndex = review.reviewIndex() == null ? 0 : review.reviewIndex();
+            Map<String, Object> metadata = baseDocumentMetadata(product, item, PRODUCT_REVIEW);
+            metadata.put("reviewIndex", reviewIndex);
+            createDocument(product, PRODUCT_REVIEW, "product:" + product.id() + ":review:" + reviewIndex,
+                    item.title() + " review " + reviewIndex,
+                    markdownRenderer.renderReview(review),
+                    metadata);
+        }
+    }
+
+    private void createDocument(
+            CatalogProductRecord product,
+            String sourceType,
+            String sourceUri,
+            String title,
+            String content,
+            Map<String, Object> metadata
+    ) {
+        documentCommandFacade.createDocument(new RagDocumentCreateRequest(
+                sourceType,
+                sourceUri,
+                String.valueOf(product.id()),
+                truncateForDocumentTitle(title),
+                content,
+                metadata
+        ));
+    }
+
+    private Map<String, Object> baseDocumentMetadata(
+            CatalogProductRecord product,
+            CatalogProductCreateRequest item,
+            String sourceType
+    ) {
         Map<String, Object> metadata = new LinkedHashMap<>();
-        metadata.put("spuId", spu.id());
-        metadata.put("externalRef", spu.externalRef());
-        metadata.put("sourceType", SOURCE_TYPE);
+        metadata.put("productId", product.id());
+        metadata.put("sourceType", sourceType);
         if (StringUtils.hasText(item.brand())) {
             metadata.put("brand", item.brand());
         }
-        if (StringUtils.hasText(item.categoryPath())) {
-            metadata.put("category", item.categoryPath());
+        if (StringUtils.hasText(item.category())) {
+            metadata.put("category", item.category());
         }
-        if (item.priceMin() != null) {
-            metadata.put("priceMin", item.priceMin());
+        if (StringUtils.hasText(item.subCategory())) {
+            metadata.put("subCategory", item.subCategory());
         }
-        if (item.priceMax() != null) {
-            metadata.put("priceMax", item.priceMax());
+        Object rawProductId = safeMap(item.rawJson()).get("product_id");
+        if (rawProductId != null) {
+            metadata.put("rawProductId", rawProductId);
+        }
+        List<String> rawSkuIds = safeList(item.skus()).stream()
+                .map(CatalogProductCreateRequest.SkuDraft::rawJson)
+                .filter(Objects::nonNull)
+                .map(raw -> raw.get("sku_id"))
+                .filter(Objects::nonNull)
+                .map(String::valueOf)
+                .toList();
+        if (!rawSkuIds.isEmpty()) {
+            metadata.put("rawSkuIds", rawSkuIds);
         }
         return metadata;
     }
 
-    private String buildSourceUri(String externalRef) {
-        return "catalog://spu/" + externalRef;
+    private List<CatalogProductContentRepository.KnowledgeDraft> toKnowledgeDrafts(CatalogProductCreateRequest item) {
+        return safeList(item.knowledge()).stream()
+                .map(draft -> new CatalogProductContentRepository.KnowledgeDraft(
+                        normalizeKnowledgeType(draft.knowledgeType()),
+                        draft.title(),
+                        draft.content(),
+                        sha256Hex(draft.content()),
+                        safeMap(draft.metadata())
+                ))
+                .toList();
+    }
+
+    private List<CatalogProductContentRepository.FaqDraft> toFaqDrafts(CatalogProductCreateRequest item) {
+        return safeList(item.faqs()).stream()
+                .map(draft -> new CatalogProductContentRepository.FaqDraft(
+                        draft.faqIndex() == null ? 0 : draft.faqIndex(),
+                        draft.question(),
+                        draft.answer(),
+                        sha256Hex(draft.question() + "\n" + draft.answer()),
+                        safeMap(draft.metadata())
+                ))
+                .toList();
+    }
+
+    private List<CatalogProductContentRepository.ReviewDraft> toReviewDrafts(CatalogProductCreateRequest item) {
+        return safeList(item.reviews()).stream()
+                .map(draft -> new CatalogProductContentRepository.ReviewDraft(
+                        draft.reviewIndex() == null ? 0 : draft.reviewIndex(),
+                        draft.nickname(),
+                        draft.rating(),
+                        draft.content(),
+                        sha256Hex(draft.content()),
+                        normalizeNullable(draft.sentiment()),
+                        safeMap(draft.metadata())
+                ))
+                .toList();
+    }
+
+    private String normalizeKnowledgeType(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "OTHER";
+        }
+        return value.trim().toUpperCase(java.util.Locale.ROOT);
+    }
+
+    private String normalizeNullable(String value) {
+        return StringUtils.hasText(value) ? value.trim().toUpperCase(java.util.Locale.ROOT) : null;
+    }
+
+    private Map<String, Object> safeMap(Map<String, Object> value) {
+        return value == null ? Map.of() : value;
+    }
+
+    private <T> List<T> safeList(List<T> value) {
+        return value == null ? List.of() : value;
+    }
+
+    private String sha256Hex(String value) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 不可用", exception);
+        }
     }
 
     private String truncateForDocumentTitle(String title) {
@@ -150,4 +293,5 @@ class CatalogImportService {
         }
         return title.substring(0, RAG_DOCUMENT_TITLE_MAX);
     }
+
 }

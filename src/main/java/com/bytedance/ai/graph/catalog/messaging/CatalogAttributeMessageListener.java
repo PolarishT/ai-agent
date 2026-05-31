@@ -1,7 +1,7 @@
 package com.bytedance.ai.graph.catalog.messaging;
 
-import com.bytedance.ai.graph.catalog.persistence.CatalogSpuRecord;
-import com.bytedance.ai.graph.catalog.persistence.CatalogSpuRepository;
+import com.bytedance.ai.graph.catalog.persistence.CatalogProductRecord;
+import com.bytedance.ai.graph.catalog.persistence.CatalogProductRepository;
 import com.bytedance.ai.graph.catalog.service.LlmAttributeExtractor;
 import com.bytedance.ai.shared.properties.RagProperties;
 import com.bytedance.ai.shared.support.RagJsonCodec;
@@ -19,16 +19,15 @@ import java.nio.ByteBuffer;
 import java.util.Map;
 
 /**
- * 消费 catalog 抽属性消息：调 LLM 抽 attributes_json 并回填到 catalog_spu。
+ * 消费 catalog 抽属性消息：调 LLM 抽 attributes_json 并回填到 catalog_product。
  *
- * <p>幂等 / 并发：{@link CatalogSpuRepository#markAttributeExtractionRunning} 走原子
- * UPDATE WHERE attributes_status IN ('PENDING','FAILED')，多个消费者并发投递时只有
+ * <p>幂等 / 并发：{@link CatalogProductRepository#markAttributeExtractionRunning} 走原子
+ * UPDATE，多个消费者并发投递时只有
  * 一个能抢到 RUNNING；其余直接 ack 返回 SUCCESS（重复消息不会重复调 LLM）。
  *
  * <p>失败重试：抛出 RuntimeException 时返回 {@link ConsumeResult#FAILURE}，
  * RocketMQ 自动重投递，最多到 {@code rag.rocketmq.max-attempt-times}；耗尽后由
- * RocketMQ 进入死信队列或丢弃，{@code catalog_spu.attributes_status=FAILED} 保留
- * 给人工通过 {@code POST /admin/catalog/spu/{id}/extract-attributes} 重启 outbox。
+ * RocketMQ 进入死信队列或丢弃。
  */
 @Service
 @ConditionalOnProperty(prefix = "rag.rocketmq", name = "enabled", havingValue = "true")
@@ -46,18 +45,18 @@ public class CatalogAttributeMessageListener implements RocketMQListener {
 
     private final RagJsonCodec jsonCodec;
     private final RagProperties ragProperties;
-    private final CatalogSpuRepository spuRepository;
+    private final CatalogProductRepository productRepository;
     private final LlmAttributeExtractor llmAttributeExtractor;
 
     public CatalogAttributeMessageListener(
             RagJsonCodec jsonCodec,
             RagProperties ragProperties,
-            CatalogSpuRepository spuRepository,
+            CatalogProductRepository productRepository,
             LlmAttributeExtractor llmAttributeExtractor
     ) {
         this.jsonCodec = jsonCodec;
         this.ragProperties = ragProperties;
-        this.spuRepository = spuRepository;
+        this.productRepository = productRepository;
         this.llmAttributeExtractor = llmAttributeExtractor;
     }
 
@@ -82,37 +81,35 @@ public class CatalogAttributeMessageListener implements RocketMQListener {
             return ConsumeResult.SUCCESS;
         }
 
-        Long spuId = payload.spuId();
-        if (!spuRepository.markAttributeExtractionRunning(spuId)) {
-            log.debug("catalog attribute extraction skipped because state not eligible: spuId={}", spuId);
+        Long productId = payload.productId();
+        if (!productRepository.markAttributeExtractionRunning(productId)) {
+            log.debug("catalog attribute extraction skipped because state not eligible: productId={}", productId);
             return ConsumeResult.SUCCESS;
         }
 
-        CatalogSpuRecord spu = spuRepository.findById(spuId).orElse(null);
-        if (spu == null) {
-            spuRepository.markAttributeExtractionFailed(spuId, "spu_not_found");
-            log.warn("catalog attribute extraction aborted because SPU disappeared: spuId={}", spuId);
+        CatalogProductRecord product = productRepository.findById(productId).orElse(null);
+        if (product == null) {
+            productRepository.markAttributeExtractionFailed(productId, "product_not_found");
+            log.warn("catalog attribute extraction aborted because Product disappeared: productId={}", productId);
             return ConsumeResult.SUCCESS;
         }
 
         try {
-            Map<String, Object> attributes = llmAttributeExtractor.extract(spu.descriptionMd());
-            spuRepository.markAttributeExtractionSucceeded(spuId, attributes);
+            Map<String, Object> attributes = llmAttributeExtractor.extract(product.title() + "\n" + product.rawJson());
+            productRepository.markAttributeExtractionSucceeded(productId, attributes);
             log.info(
-                    "catalog attribute extraction succeeded: spuId={}, externalRef={}, triggeredBy={}, attributesSize={}",
-                    spuId,
-                    spu.externalRef(),
+                    "catalog attribute extraction succeeded: productId={}, triggeredBy={}, attributesSize={}",
+                    productId,
                     payload.triggeredBy(),
                     attributes.size()
             );
             return ConsumeResult.SUCCESS;
         } catch (RuntimeException exception) {
             String reason = RagLogHelper.errorSummary(exception);
-            spuRepository.markAttributeExtractionFailed(spuId, reason);
+            productRepository.markAttributeExtractionFailed(productId, reason);
             log.warn(
-                    "catalog attribute extraction failed: spuId={}, externalRef={}, triggeredBy={}, reason={}",
-                    spuId,
-                    spu.externalRef(),
+                    "catalog attribute extraction failed: productId={}, triggeredBy={}, reason={}",
+                    productId,
                     payload.triggeredBy(),
                     reason
             );
