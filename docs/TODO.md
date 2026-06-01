@@ -15,67 +15,6 @@
 | pending 行查询索引                   | `findActiveByUserIdAndConversationId` WHERE 含 `status='ACTIVE' AND expire_at > NOW()`，但只有 `(user_id, conversation_id)` 索引 | 可加部分索引 `WHERE status = 'ACTIVE'`；同会话 ACTIVE 行 ≤ 1，影响很小                                         |
 | 新表 knowledge / faq / review 未利用 | DDL 新增了 `catalog_product_knowledge` / `_faq` / `_review`，但 product query 链路还只用 `rag_chunks` 的索引内容                         | 后续可在索引侧把这三张表的文本 chunk 化（带 chunk_type=KNOWLEDGE/FAQ/REVIEW），product_query 自动受益                  |
 
-
-
-6. ；离线链路对spring ai 异常错误没有做全局拦截
-
-com.bytedance.ai.indexing.model.RagIndexAttemptException: 索引失败 [unknown]: 404 -
-at com.bytedance.ai.indexing.application.RagIndexingService.indexDocument(RagIndexingService.java:202)
-at com.bytedance.ai.indexing.messaging.RagIndexMessageListener.consume(RagIndexMessageListener.java:117)
-at io.opentelemetry.javaagent.instrumentation.rocketmqclient.v5_0.MessageListenerWrapper.consume(MessageListenerWrapper.java:44)
-at org.apache.rocketmq.client.java.impl.consumer.ConsumeTask.call(ConsumeTask.java:64)
-at org.apache.rocketmq.client.java.impl.consumer.ConsumeTask.call(ConsumeTask.java:36)
-at org.apache.rocketmq.shaded.com.google.common.util.concurrent.TrustedListenableFutureTask$TrustedFutureInterruptibleTask.runInterruptibly(TrustedListenableFutureTask.java:131)
-at org.apache.rocketmq.shaded.com.google.common.util.concurrent.InterruptibleTask.run(InterruptibleTask.java:74)
-at org.apache.rocketmq.shaded.com.google.common.util.concurrent.TrustedListenableFutureTask.run(TrustedListenableFutureTask.java:82)
-at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
-at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
-at java.base/java.lang.Thread.run(Thread.java:1474)
-Caused by: org.springframework.ai.retry.NonTransientAiException: 404 -
-at org.springframework.ai.retry.RetryUtils$1.handleError(RetryUtils.java:90)
-at org.springframework.ai.retry.RetryUtils$1.handleError(RetryUtils.java:75)
-at org.springframework.web.client.StatusHandler.lambda$fromErrorHandler$0(StatusHandler.java:98)
-at org.springframework.web.client.StatusHandler.handle(StatusHandler.java:75)
-at org.springframework.web.client.DefaultRestClient$DefaultResponseSpec.applyStatusHandlers(DefaultRestClient.java:943)
-at org.springframework.web.client.DefaultRestClient$DefaultResponseSpec.lambda$readBody$0(DefaultRestClient.java:932)
-at org.springframework.web.client.DefaultRestClient.readWithMessageConverters(DefaultRestClient.java:224)
-at org.springframework.web.client.DefaultRestClient$DefaultResponseSpec.readBody(DefaultRestClient.java:931)
-at org.springframework.web.client.DefaultRestClient$DefaultResponseSpec.lambda$toEntityInternal$0(DefaultRestClient.java:871)
-at org.springframework.web.client.DefaultRestClient$DefaultRequestBodyUriSpec.exchangeInternal(DefaultRestClient.java:617)
-at org.springframework.web.client.DefaultRestClient$DefaultRequestBodyUriSpec.exchange(DefaultRestClient.java:572)
-at org.springframework.web.client.RestClient$RequestHeadersSpec.exchange(RestClient.java:747)
-at org.springframework.web.client.DefaultRestClient$DefaultResponseSpec.executeAndExtract(DefaultRestClient.java:924)
-at org.springframework.web.client.DefaultRestClient$DefaultResponseSpec.toEntityInternal(DefaultRestClient.java:870)
-at org.springframework.web.client.DefaultRestClient$DefaultResponseSpec.toEntity(DefaultRestClient.java:866)
-at org.springframework.ai.openai.api.OpenAiApi.embeddings(OpenAiApi.java:348)
-at org.springframework.ai.openai.OpenAiEmbeddingModel.lambda$call$2(OpenAiEmbeddingModel.java:175)
-at org.springframework.core.retry.RetryTemplate.execute(RetryTemplate.java:174)
-at org.springframework.ai.retry.RetryUtils.execute(RetryUtils.java:168)
-at org.springframework.ai.openai.OpenAiEmbeddingModel.lambda$call$1(OpenAiEmbeddingModel.java:174)
-at io.micrometer.observation.Observation.observe(Observation.java:634)
-at org.springframework.ai.openai.OpenAiEmbeddingModel.call(OpenAiEmbeddingModel.java:173)
-at org.springframework.ai.embedding.EmbeddingModel.embed(EmbeddingModel.java:85)
-at com.bytedance.ai.indexing.service.RagMilvusVectorIndexer.resolveEmbeddings(RagMilvusVectorIndexer.java:226)
-at com.bytedance.ai.indexing.service.RagMilvusVectorIndexer.add(RagMilvusVectorIndexer.java:78)
-at com.bytedance.ai.indexing.application.RagIndexingService.indexDocumentOnce(RagIndexingService.java:340)
-at com.bytedance.ai.indexing.application.RagIndexingService.indexDocument(RagIndexingService.java:120)
-... 10 common frames omitted
-
-7. Caused by: org.postgresql.util.PSQLException: ERROR: duplicate key value violates unique constraint "uq_rag_documents_source_uri_source_type"
-   Detail: Key (source_uri, source_type)=(product:manual-offline-e2e-001:profile, product_profile) already exists.
-   at org.postgresql.core.v3.QueryExecutorImpl.receiveErrorResponse(QueryExecutorImpl.java:2875)
-   at org.postgresql.core.v3.QueryExecutorImpl.processResults(QueryExecutorImpl.java:2560)
-   at org.postgresql.core.v3.QueryExecutorImpl.execute(QueryExecutorImpl.java:429)
-   at org.postgresql.jdbc.PgStatement.executeInternal(PgStatement.java:526)
-   at org.postgresql.jdbc.PgStatement.execute(PgStatement.java:436)
-   at org.postgresql.jdbc.PgPreparedStatement.executeWithFlags(PgPreparedStatement.java:196)
-   at org.postgresql.jdbc.PgPreparedStatement.executeUpdate(PgPreparedStatement.java:157)
-   at com.zaxxer.hikari.pool.ProxyPreparedStatement.executeUpdate(ProxyPreparedStatement.java:61)
-   at com.zaxxer.hikari.pool.HikariProxyPreparedStatement.executeUpdate(HikariProxyPreparedStatement.java)
-   at org.springframework.jdbc.core.JdbcTemplate.lambda$update$1(JdbcTemplate.java:998)
-   at org.springframework.jdbc.core.JdbcTemplate.execute(JdbcTemplate.java:670)
-   ... 78 common frames omitted
-rag 离线链路上传文档，没有全局异常拦截器
 8. catalog_product_knowledge 表中的title字段有什么用？是否可以删除？
 9. rag_properties 属性抽到env文件里
 10. product-query 流程目前的检索链路应该是 在检索前构建slot ，检索前：slot 转成 SQL / DB hard filter，用来缩小 PostgreSQL 关键词检索范围；

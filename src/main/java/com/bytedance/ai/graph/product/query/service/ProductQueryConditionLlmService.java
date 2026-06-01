@@ -91,16 +91,15 @@ public class ProductQueryConditionLlmService {
         }
         String userPrompt = buildUserPrompt(userMessage, conversationMemory, previousConditionSummary);
         try {
-            String raw = intentChatClient.prompt()
+            JsonNode root = intentChatClient.prompt()
                     .system(SYSTEM_PROMPT)
                     .user(userPrompt)
                     .call()
-                    .content();
-            if (!StringUtils.hasText(raw)) {
-                log.warn("Product query condition LLM returned empty content; falling back to clarify");
+                    .entity(JsonNode.class);
+            if (root == null) {
+                log.warn("Product query condition LLM returned null structured output; falling back to clarify");
                 return ProductQueryCondition.empty(userMessage);
             }
-            JsonNode root = objectMapper.readTree(raw);
             JsonNode sanitized = sanitizer.sanitizeJson(root);
             ProductQueryCondition condition = objectMapper.treeToValue(sanitized, ProductQueryCondition.class);
             return sanitizer.sanitizeCondition(condition);

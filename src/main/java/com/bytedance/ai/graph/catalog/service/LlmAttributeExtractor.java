@@ -1,20 +1,18 @@
 package com.bytedance.ai.graph.catalog.service;
 
 import com.bytedance.ai.shared.properties.RagProperties;
-import com.bytedance.ai.shared.support.RagJsonCodec;
 import com.bytedance.ai.shared.support.RagLogHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * 调 Doubao（或任意 Spring AI ChatModel）从商品描述抽出结构化属性 JSON。
@@ -25,29 +23,25 @@ import java.util.regex.Pattern;
  * <p>容错策略：
  * <ul>
  *   <li>ChatModel 不可用 → 抛 {@link LlmExtractionException}，由 worker 标 FAILED 并保留错误。</li>
- *   <li>模型输出非纯 JSON（带 ```json 代码块 / 前后解释）→ 用正则提取首个 {...} 片段后再解析。</li>
- *   <li>JSON 解析失败 → 抛 {@link LlmExtractionException}，错误信息保留原文片段帮助 oncall 排查。</li>
+ *   <li>结构化输出转换失败 → 抛 {@link LlmExtractionException}，由 worker 标 FAILED 并保留错误。</li>
  * </ul>
  */
 @Component
 public class LlmAttributeExtractor {
 
     private static final Logger log = LoggerFactory.getLogger(LlmAttributeExtractor.class);
-    private static final Pattern JSON_OBJECT_PATTERN = Pattern.compile("\\{[\\s\\S]*}");
-    private static final int RAW_OUTPUT_PREVIEW = 300;
+    private static final ParameterizedTypeReference<Map<String, Object>> ATTRIBUTE_MAP_TYPE = new ParameterizedTypeReference<>() {
+    };
 
     private final ObjectProvider<ChatModel> chatModelProvider;
     private final RagProperties ragProperties;
-    private final RagJsonCodec jsonCodec;
 
     public LlmAttributeExtractor(
             ObjectProvider<ChatModel> chatModelProvider,
-            RagProperties ragProperties,
-            RagJsonCodec jsonCodec
+            RagProperties ragProperties
     ) {
         this.chatModelProvider = chatModelProvider;
         this.ragProperties = ragProperties;
-        this.jsonCodec = jsonCodec;
     }
 
     /**
@@ -64,13 +58,16 @@ public class LlmAttributeExtractor {
         }
         ChatClient chatClient = resolveChatClient();
         String systemPrompt = ragProperties.catalog().attributeExtractionSystemPrompt();
-        String rawOutput;
+        Map<String, Object> attributes;
         try {
-            rawOutput = chatClient.prompt()
-                    .system(systemPrompt)
+            ChatClient.ChatClientRequestSpec request = chatClient.prompt();
+            if (StringUtils.hasText(systemPrompt)) {
+                request = request.system(systemPrompt);
+            }
+            attributes = request
                     .user(description)
                     .call()
-                    .content();
+                    .entity(ATTRIBUTE_MAP_TYPE);
         } catch (RuntimeException exception) {
             log.warn(
                     "LLM attribute extraction call failed: error={}",
@@ -79,7 +76,10 @@ public class LlmAttributeExtractor {
             throw new LlmExtractionException("LLM 调用失败：" + exception.getMessage(), exception);
         }
 
-        return parse(rawOutput);
+        if (attributes == null) {
+            throw new LlmExtractionException("LLM 返回空属性对象");
+        }
+        return new LinkedHashMap<>(attributes);
     }
 
     private ChatClient resolveChatClient() {
@@ -88,41 +88,6 @@ public class LlmAttributeExtractor {
             throw new LlmExtractionException("ChatModel 未配置，无法抽取商品属性");
         }
         return ChatClient.create(chatModel);
-    }
-
-    private Map<String, Object> parse(String rawOutput) {
-        if (!StringUtils.hasText(rawOutput)) {
-            throw new LlmExtractionException("LLM 返回空内容");
-        }
-        String json = extractJsonObject(rawOutput);
-        try {
-            return jsonCodec.readMap(json);
-        } catch (RuntimeException exception) {
-            String preview = rawOutput.length() > RAW_OUTPUT_PREVIEW
-                    ? rawOutput.substring(0, RAW_OUTPUT_PREVIEW) + "..."
-                    : rawOutput;
-            log.warn(
-                    "LLM attribute extraction produced unparsable JSON: preview={}, error={}",
-                    preview,
-                    RagLogHelper.errorSummary(exception)
-            );
-            throw new LlmExtractionException("LLM 输出无法解析为 JSON：" + exception.getMessage(), exception);
-        }
-    }
-
-    /**
-     * 从 LLM 原始输出中提取首个 {...} 片段。若已经是纯 JSON 则直接返回。
-     */
-    private String extractJsonObject(String rawOutput) {
-        String trimmed = rawOutput.trim();
-        if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-            return trimmed;
-        }
-        Matcher matcher = JSON_OBJECT_PATTERN.matcher(trimmed);
-        if (matcher.find()) {
-            return matcher.group();
-        }
-        throw new LlmExtractionException("LLM 输出未包含 JSON 对象片段");
     }
 
     /**

@@ -1,4 +1,5 @@
 package com.bytedance.ai.infrastructure.config;
+
 import io.micrometer.observation.ObservationRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -95,14 +96,16 @@ public class OpenAiClientConfiguration {
                 .model(model)
                 .temperature(temperature)
                 .build();
-        OpenAiApi api = OpenAiApi.builder()
+
+        OpenAiApi openAiApi = OpenAiApi.builder()
+                .baseUrl(chatCompletionsBaseUrl(baseUrl))
+                .completionsPath("/api/v3/chat/completions")
                 .apiKey(apiKey)
-                .baseUrl(trimTrailingSlash(baseUrl))
                 .build();
 
         log.info("OpenAI-compatible chat client configured: providerBaseUrl={}, model={}", safeBaseUrl(baseUrl), model);
         return OpenAiChatModel.builder()
-                .openAiApi(api)
+                .openAiApi(openAiApi)
                 .defaultOptions(options)
                 .retryTemplate(retryTemplate(maxRetries))
                 .observationRegistry(observationRegistry.getIfUnique(() -> ObservationRegistry.NOOP))

@@ -1,13 +1,16 @@
 package com.bytedance.ai.graph.catalog.service;
 
 import com.bytedance.ai.shared.properties.RagProperties;
-import com.bytedance.ai.shared.support.RagJsonCodec;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.beans.factory.ObjectProvider;
-import tools.jackson.databind.json.JsonMapper;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -38,8 +41,7 @@ class LlmAttributeExtractorTests {
         chatModelProvider = (ObjectProvider<ChatModel>) mock(ObjectProvider.class);
         extractor = new LlmAttributeExtractor(
                 chatModelProvider,
-                RagProperties.defaults(),
-                new RagJsonCodec(JsonMapper.builder().build())
+                RagProperties.defaults()
         );
     }
 
@@ -59,5 +61,28 @@ class LlmAttributeExtractorTests {
         assertThatThrownBy(() -> extractor.extract("一段商品描述，足够长以避免空检"))
                 .isInstanceOf(LlmAttributeExtractor.LlmExtractionException.class)
                 .hasMessageContaining("ChatModel 未配置");
+    }
+
+    @Test
+    void returnsStructuredAttributeMapFromChatClientEntity() {
+        when(chatModelProvider.getIfAvailable()).thenReturn(new StubChatModel("""
+                {"tags":["防水"],"usage_scenes":["通勤"],"target_audience":["学生"],"ingredients":[],"features":["轻量"]}
+                """));
+
+        Map<String, Object> result = extractor.extract("防水通勤双肩包，适合学生日常使用。");
+
+        assertThat(result)
+                .containsEntry("tags", List.of("防水"))
+                .containsEntry("usage_scenes", List.of("通勤"))
+                .containsEntry("target_audience", List.of("学生"))
+                .containsEntry("features", List.of("轻量"));
+    }
+
+    private record StubChatModel(String content) implements ChatModel {
+
+        @Override
+        public ChatResponse call(Prompt prompt) {
+            return new ChatResponse(List.of(new Generation(new AssistantMessage(content))));
+        }
     }
 }
