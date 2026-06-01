@@ -5,10 +5,8 @@ import com.bytedance.ai.graph.product.query.ProductQueryIntent;
 import com.bytedance.ai.shared.properties.RagProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
-
 import java.util.List;
 import java.util.Map;
-
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ProductSearchSpiAdapterTests {
@@ -130,7 +128,9 @@ class ProductSearchSpiAdapterTests {
         }
 
         @Override
-        public List<ProductSearchHit> search(String query, ProductQueryCondition condition, int topK) {
+        public List<ProductSearchHit> search(
+                String query, ProductQueryCondition condition, ProductQueryIntent intent, int topK
+        ) {
             return hits;
         }
     }
@@ -142,7 +142,9 @@ class ProductSearchSpiAdapterTests {
         }
 
         @Override
-        public List<ProductSearchHit> search(String query, ProductQueryCondition condition, int topK) {
+        public List<ProductSearchHit> search(
+                String query, ProductQueryCondition condition, ProductQueryIntent intent, int topK
+        ) {
             throw new IllegalStateException("milvus unavailable");
         }
     }

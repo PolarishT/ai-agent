@@ -1,192 +1,136 @@
 package com.bytedance.ai.graph.product.retrieval.filter;
 
 import com.bytedance.ai.graph.product.query.ProductQueryCondition;
-import com.bytedance.ai.graph.product.retrieval.dictionary.BrandDictionaryService;
-import com.bytedance.ai.graph.product.retrieval.dictionary.CategoryDictionaryService;
-import com.bytedance.ai.shared.properties.RagProperties;
-import java.math.BigDecimal;
-import java.util.ArrayList;
+import com.bytedance.ai.graph.product.query.ProductQueryIntent;
+import com.bytedance.ai.shared.metadata.RagChunkType;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
-import org.springframework.util.StringUtils;
 
 /**
- * 把 {@link ProductQueryCondition} 翻译为 Milvus scalar filter 表达式（boolean expression）。
+ * 把 {@link ProductQueryIntent} 翻译为 Milvus scalar filter expression，只下推
+ * {@code metadata["chunkType"]} 一个维度。
  *
- * <p>语法参考 <a href="https://milvus.io/docs/zh/boolean.md">Milvus boolean expression</a>：
+ * <h2>为何只下推 chunkType</h2>
+ * <p>当前 {@code RagMilvusVectorIndexer.toMetadata()} 写入的 metadata 字段只有：
+ * {@code vectorId / documentId / productId / indexGeneration / sourceType / chunkType / chunkIndex}。
+ * status / stock / price / category / brand 等业务字段并未写入 Milvus，下推这些 expression
+ * 会直接命中"不存在的字段"导致 Milvus 端 zero hit。所以这个 builder 现阶段只生成 chunkType in [...]，
+ * 其余硬过滤交给 PostgreSQL hard-filter（{@code ProductPostgresFilterBuilder}）与
+ * hydrate 后的 {@code ProductCandidatePostFilter} 兜底。
+ *
+ * <h2>PREFERRED vs FALLBACK</h2>
+ * <p>对 {@link ProductQueryIntent#PRODUCT_RECOMMEND} / {@link ProductQueryIntent#PRODUCT_SEARCH}：
  * <ul>
- *   <li>逻辑连接：{@code &&} / {@code ||} / {@code not}；</li>
- *   <li>等值：{@code field == "..."} / {@code field == 12}；</li>
- *   <li>区间：{@code field >= 1}、{@code field <= 100}；</li>
- *   <li>集合：{@code field in ["a", "b"]} / {@code field not in [...]}。</li>
+ *   <li>PREFERRED 限制为 {@code [PRODUCT_PROFILE, MARKETING]} —— 命中主商品 chunk + 营销卖点，质量最好；</li>
+ *   <li>FALLBACK 放宽到 {@code [PRODUCT_PROFILE, MARKETING, FAQ_QUERY, FAQ_ANSWER]} ——
+ *       让 FAQ 也参与召回，提高 recall，由 {@code ProductSemanticRagRetriever} 在 PREFERRED zero hit
+ *       时切换。</li>
  * </ul>
+ * 其他 intent 的 PREFERRED 已经足够宽，没有专门的 FALLBACK（统一走 default 全集）。
  *
- * <p>本 builder 严格只对 {@link RagProperties.Milvus.ProductSchema} 中「配置了字段名」的维度生成 expr；
- * 未配置的维度直接跳过，由 PostgreSQL hard filter + hydrate 后 post-filter 兜底。
- *
- * <p>字符串值会按 Milvus 规则转义反斜杠和双引号。表达式为空时返回 {@code null}，
- * caller 应按 {@code SearchRequest.builder()} 的契约不调 {@code filterExpression}。
+ * <h2>命名约定</h2>
+ * <p>spec 里出现的 {@code FAQ_QA} 与 {@code KNOWLEDGE} 是旧版 chunk_type 命名。当前 ingestion 把
+ * FAQ 文档按 heading 切成 {@link RagChunkType#FAQ_QUERY} / {@link RagChunkType#FAQ_ANSWER} 两类，
+ * 把 product knowledge 归一为 {@link RagChunkType#MARKETING}。因此 expression 里实际写的是
+ * 当前枚举值，不是旧名字。
  */
 @Component
 public class MilvusScalarFilterBuilder {
 
-    private final RagProperties ragProperties;
-    private final CategoryDictionaryService categoryDictionaryService;
-    private final BrandDictionaryService brandDictionaryService;
+    private static final String CHUNK_TYPE_FIELD = "chunkType";
 
-    public MilvusScalarFilterBuilder(
-            RagProperties ragProperties,
-            CategoryDictionaryService categoryDictionaryService,
-            BrandDictionaryService brandDictionaryService
-    ) {
-        this.ragProperties = ragProperties;
-        this.categoryDictionaryService = categoryDictionaryService;
-        this.brandDictionaryService = brandDictionaryService;
+    /**
+     * 推荐场景的「首选」chunkType 过滤；让 Milvus 优先命中高质量证据。
+     */
+    public String buildPreferred(ProductQueryIntent intent) {
+        return chunkTypeIn(preferredChunkTypes(intent));
     }
 
     /**
-     * 构建 Milvus scalar filter expression。空字符串返回 {@code null}。
+     * 推荐场景的「兜底」chunkType 过滤；首选命中为空时由 retriever 切换到此版本。
      */
+    public String buildFallback(ProductQueryIntent intent) {
+        return chunkTypeIn(fallbackChunkTypes(intent));
+    }
+
+    /**
+     * 旧 API：返回 {@code null}，留作向后兼容（外部已有 caller 调用 build(condition)）。
+     * 新代码请使用 {@link #buildPreferred(ProductQueryIntent)} / {@link #buildFallback(ProductQueryIntent)}。
+     *
+     * @deprecated 旧版本生成 status/stock/price/category/brand 多维度 scalar filter，
+     *             但 Milvus metadata 并未写入这些字段，下推后无效甚至误命中 zero hit。
+     */
+    @Deprecated
     public String build(ProductQueryCondition condition) {
-        if (condition == null) {
+        return null;
+    }
+
+    private List<String> preferredChunkTypes(ProductQueryIntent intent) {
+        ProductQueryIntent resolved = intent == null ? ProductQueryIntent.PRODUCT_SEARCH : intent;
+        return switch (resolved) {
+            // PREFERRED: 主商品 chunk + 营销卖点；命中质量优先
+            case PRODUCT_RECOMMEND, PRODUCT_SEARCH ->
+                    List.of(RagChunkType.PRODUCT_PROFILE.name(), RagChunkType.MARKETING.name());
+            // PRODUCT_QA: FAQ 问答 + 主商品 chunk + 营销（MARKETING 当作 KNOWLEDGE 用，承载 USAGE_GUIDE / SELLING_POINTS）
+            case PRODUCT_QA -> List.of(
+                    RagChunkType.FAQ_QUERY.name(),
+                    RagChunkType.FAQ_ANSWER.name(),
+                    RagChunkType.PRODUCT_PROFILE.name(),
+                    RagChunkType.MARKETING.name()
+            );
+            // REVIEW 场景：评价 + 主商品 chunk（避免只看评论无法挂回商品）
+            case REVIEW_QA ->
+                    List.of(RagChunkType.REVIEW.name(), RagChunkType.PRODUCT_PROFILE.name());
+            // COMPARE：所有有意义的 evidence 都要
+            case PRODUCT_COMPARE -> List.of(
+                    RagChunkType.PRODUCT_PROFILE.name(),
+                    RagChunkType.FAQ_QUERY.name(),
+                    RagChunkType.FAQ_ANSWER.name(),
+                    RagChunkType.REVIEW.name(),
+                    RagChunkType.MARKETING.name()
+            );
+            // INVENTORY / PRICE / FAQ_QA：默认全集
+            case INVENTORY_CHECK, PRICE_QA, FAQ_QA -> allChunkTypes();
+        };
+    }
+
+    private List<String> fallbackChunkTypes(ProductQueryIntent intent) {
+        ProductQueryIntent resolved = intent == null ? ProductQueryIntent.PRODUCT_SEARCH : intent;
+        return switch (resolved) {
+            // 推荐 / 搜索的 FALLBACK：把 FAQ 也放进来，提高 recall
+            case PRODUCT_RECOMMEND, PRODUCT_SEARCH -> List.of(
+                    RagChunkType.PRODUCT_PROFILE.name(),
+                    RagChunkType.MARKETING.name(),
+                    RagChunkType.FAQ_QUERY.name(),
+                    RagChunkType.FAQ_ANSWER.name()
+            );
+            // 其他场景 PREFERRED 已经偏宽，FALLBACK 直接退化到全集
+            default -> allChunkTypes();
+        };
+    }
+
+    private List<String> allChunkTypes() {
+        return List.of(
+                RagChunkType.PRODUCT_PROFILE.name(),
+                RagChunkType.MARKETING.name(),
+                RagChunkType.FAQ_QUERY.name(),
+                RagChunkType.FAQ_ANSWER.name(),
+                RagChunkType.REVIEW.name()
+        );
+    }
+
+    private String chunkTypeIn(List<String> chunkTypes) {
+        if (chunkTypes == null || chunkTypes.isEmpty()) {
             return null;
         }
-        RagProperties.Milvus.ProductSchema schema = ragProperties.milvus().productSchema();
-        if (schema == null) {
-            return null;
-        }
-        List<String> clauses = new ArrayList<>();
-
-        appendStatus(clauses, schema);
-        appendStock(clauses, schema, condition);
-        appendPrice(clauses, schema, condition);
-        appendCategory(clauses, schema, condition);
-        appendBrand(clauses, schema, condition);
-
-        if (clauses.isEmpty()) {
-            return null;
-        }
-        return String.join(" && ", clauses);
-    }
-
-    private void appendStatus(List<String> clauses, RagProperties.Milvus.ProductSchema schema) {
-        if (!StringUtils.hasText(schema.statusField()) || !StringUtils.hasText(schema.activeStatusValue())) {
-            return;
-        }
-        clauses.add(schema.statusField() + " == " + quote(schema.activeStatusValue()));
-    }
-
-    private void appendStock(List<String> clauses, RagProperties.Milvus.ProductSchema schema, ProductQueryCondition condition) {
-        if (!StringUtils.hasText(schema.stockField())) {
-            return;
-        }
-        if (resolveMustHaveStock(condition)) {
-            clauses.add(schema.stockField() + " > 0");
-        }
-    }
-
-    private void appendPrice(List<String> clauses, RagProperties.Milvus.ProductSchema schema, ProductQueryCondition condition) {
-        if (!StringUtils.hasText(schema.priceField())) {
-            return;
-        }
-        BigDecimal priceMin = condition.priceMin();
-        if (priceMin != null) {
-            clauses.add(schema.priceField() + " >= " + priceMin.toPlainString());
-        }
-        BigDecimal priceMax = condition.priceMax();
-        if (priceMax != null) {
-            clauses.add(schema.priceField() + " <= " + priceMax.toPlainString());
-        }
-    }
-
-    private void appendCategory(List<String> clauses, RagProperties.Milvus.ProductSchema schema, ProductQueryCondition condition) {
-        List<String> includes = condition.categoryTerms();
-        List<String> excludes = condition.excludeCategoryTerms();
-        boolean hasIdField = StringUtils.hasText(schema.categoryIdField());
-        boolean hasNameField = StringUtils.hasText(schema.categoryNameField());
-
-        if (!includes.isEmpty()) {
-            if (hasIdField) {
-                List<Long> ids = categoryDictionaryService.resolveIds(includes);
-                if (!ids.isEmpty()) {
-                    clauses.add(schema.categoryIdField() + " in [" + joinLongs(ids) + "]");
-                } else if (hasNameField) {
-                    clauses.add(schema.categoryNameField() + " in [" + joinStrings(includes) + "]");
-                }
-            } else if (hasNameField) {
-                clauses.add(schema.categoryNameField() + " in [" + joinStrings(includes) + "]");
-            }
-        }
-        if (!excludes.isEmpty()) {
-            if (hasIdField) {
-                List<Long> ids = categoryDictionaryService.resolveIds(excludes);
-                if (!ids.isEmpty()) {
-                    clauses.add(schema.categoryIdField() + " not in [" + joinLongs(ids) + "]");
-                } else if (hasNameField) {
-                    clauses.add(schema.categoryNameField() + " not in [" + joinStrings(excludes) + "]");
-                }
-            } else if (hasNameField) {
-                clauses.add(schema.categoryNameField() + " not in [" + joinStrings(excludes) + "]");
-            }
-        }
-    }
-
-    private void appendBrand(List<String> clauses, RagProperties.Milvus.ProductSchema schema, ProductQueryCondition condition) {
-        List<String> includes = condition.brandTerms();
-        List<String> excludes = condition.excludeBrandTerms();
-        boolean hasIdField = StringUtils.hasText(schema.brandIdField());
-        boolean hasNameField = StringUtils.hasText(schema.brandNameField());
-
-        if (!includes.isEmpty()) {
-            if (hasIdField) {
-                List<Long> ids = brandDictionaryService.resolveIds(includes);
-                if (!ids.isEmpty()) {
-                    clauses.add(schema.brandIdField() + " in [" + joinLongs(ids) + "]");
-                } else if (hasNameField) {
-                    clauses.add(schema.brandNameField() + " in [" + joinStrings(includes) + "]");
-                }
-            } else if (hasNameField) {
-                clauses.add(schema.brandNameField() + " in [" + joinStrings(includes) + "]");
-            }
-        }
-        if (!excludes.isEmpty()) {
-            if (hasIdField) {
-                List<Long> ids = brandDictionaryService.resolveIds(excludes);
-                if (!ids.isEmpty()) {
-                    clauses.add(schema.brandIdField() + " not in [" + joinLongs(ids) + "]");
-                } else if (hasNameField) {
-                    clauses.add(schema.brandNameField() + " not in [" + joinStrings(excludes) + "]");
-                }
-            } else if (hasNameField) {
-                clauses.add(schema.brandNameField() + " not in [" + joinStrings(excludes) + "]");
-            }
-        }
-    }
-
-    private boolean resolveMustHaveStock(ProductQueryCondition condition) {
-        Boolean hint = condition.mustHaveStock();
-        if (hint != null) {
-            return hint;
-        }
-        return ragProperties.productQuery().mustHaveStockDefault();
-    }
-
-    private String joinLongs(List<Long> ids) {
-        return ids.stream().map(String::valueOf).collect(Collectors.joining(", "));
-    }
-
-    private String joinStrings(List<String> values) {
-        return values.stream()
-                .filter(StringUtils::hasText)
-                .map(this::quote)
+        // 去重保序，避免 spec 误把同一类型写两次
+        Set<String> distinct = new LinkedHashSet<>(chunkTypes);
+        String joined = distinct.stream()
+                .map(value -> "\"" + value + "\"")
                 .collect(Collectors.joining(", "));
-    }
-
-    private String quote(String value) {
-        String escaped = value
-                .replace("\\", "\\\\")
-                .replace("\"", "\\\"");
-        return "\"" + escaped + "\"";
+        return CHUNK_TYPE_FIELD + " in [" + joined + "]";
     }
 }

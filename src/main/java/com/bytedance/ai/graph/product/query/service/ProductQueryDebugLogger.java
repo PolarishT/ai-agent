@@ -64,12 +64,20 @@ public class ProductQueryDebugLogger {
     }
 
     /**
-     * 打印 PG hard-filter 与 Milvus scalar filter 的生成结果与是否生效。
-     *
-     * <p>keyword 路径已不再 JOIN {@code rag_chunks}，PG hard-filter 对 keyword / semantic
-     * 两路输出一致，因此这里只打一条 [PG-FILTER]，不再分 keyword / semantic 两条。
+     * 旧 1 参数签名：未知 intent 时按 {@link ProductQueryIntent#PRODUCT_SEARCH} 打 milvus filter。
      */
     public void logFilters(ProductQueryCondition condition) {
+        logFilters(condition, ProductQueryIntent.PRODUCT_SEARCH);
+    }
+
+    /**
+     * 打印 PG hard-filter 与 Milvus scalar filter（PREFERRED + FALLBACK 两条）。
+     *
+     * <p>keyword 路径已不再 JOIN {@code rag_chunks}，PG hard-filter 对 keyword / semantic
+     * 两路输出一致，因此这里只打一条 [PG-FILTER]。Milvus 现在按 intent 区分 PREFERRED / FALLBACK
+     * 两套 chunkType filter，由 {@code ProductSemanticRagRetriever} 决定先用哪个、何时切换。
+     */
+    public void logFilters(ProductQueryCondition condition, ProductQueryIntent intent) {
         if (!log.isInfoEnabled() || condition == null) {
             return;
         }
@@ -77,10 +85,16 @@ public class ProductQueryDebugLogger {
         log.info("{} [PG-FILTER] effective={} sql=[{}] params={}",
                 PREFIX, !fragment.isEmpty(), flatten(fragment.sql()), fragment.params());
 
-        String milvusExpr = milvusScalarFilterBuilder.build(condition);
-        boolean milvusEffective = milvusExpr != null && !milvusExpr.isBlank();
-        log.info("{} [MILVUS-FILTER] effective={} expr=[{}]",
-                PREFIX, milvusEffective, milvusExpr == null ? "" : milvusExpr);
+        ProductQueryIntent resolved = intent == null ? ProductQueryIntent.PRODUCT_SEARCH : intent;
+        String preferredExpr = milvusScalarFilterBuilder.buildPreferred(resolved);
+        String fallbackExpr = milvusScalarFilterBuilder.buildFallback(resolved);
+        log.info("{} [MILVUS-FILTER] stage=PREFERRED intent={} effective={} expr=[{}]",
+                PREFIX, resolved, preferredExpr != null && !preferredExpr.isBlank(),
+                preferredExpr == null ? "" : preferredExpr);
+        log.info("{} [MILVUS-FILTER] stage=FALLBACK  intent={} effective={} expr=[{}] same_as_preferred={}",
+                PREFIX, resolved, fallbackExpr != null && !fallbackExpr.isBlank(),
+                fallbackExpr == null ? "" : fallbackExpr,
+                fallbackExpr != null && fallbackExpr.equals(preferredExpr));
     }
 
     /**

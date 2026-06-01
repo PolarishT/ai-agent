@@ -1,6 +1,7 @@
 package com.bytedance.ai.graph.product.retrieval;
 
 import com.bytedance.ai.graph.product.query.ProductQueryCondition;
+import com.bytedance.ai.graph.product.query.ProductQueryIntent;
 import com.bytedance.ai.graph.product.retrieval.filter.MilvusScalarFilterBuilder;
 import com.bytedance.ai.graph.product.retrieval.filter.PostgresFilterFragment;
 import com.bytedance.ai.graph.product.retrieval.filter.ProductPostgresFilterBuilder;
@@ -8,8 +9,10 @@ import com.bytedance.ai.shared.properties.RagProperties;
 import com.bytedance.ai.shared.support.RagLogHelper;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
@@ -45,6 +48,13 @@ public class ProductSemanticRagRetriever {
 
     private static final Logger log = LoggerFactory.getLogger(ProductSemanticRagRetriever.class);
 
+    /**
+     * 与 {@code ProductQueryDebugLogger.PREFIX} 保持一致：所有 product_query_workflow 链路
+     * 的「测试用」可观测性日志都用同一个前缀，{@code grep '--> ---> 测试' app.log} 即可一次性
+     * 看到 SLOT / PG-FILTER / MILVUS-FILTER / MILVUS-RETRIEVAL / INTENT / POST-FILTER 全链路。
+     */
+    private static final String DEBUG_PREFIX = "--> ---> 测试";
+
     private final MilvusVectorStore vectorStore;
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final RagProperties ragProperties;
@@ -65,23 +75,70 @@ public class ProductSemanticRagRetriever {
         this.postgresFilterBuilder = postgresFilterBuilder;
     }
 
+    /**
+     * 旧 3 参数签名：未声明 intent 时按 {@link ProductQueryIntent#PRODUCT_SEARCH} 走 PREFERRED 过滤。
+     */
     public List<ProductSearchHit> search(String query, ProductQueryCondition condition, int topK) {
+        return search(query, condition, ProductQueryIntent.PRODUCT_SEARCH, topK);
+    }
+
+    /**
+     * 两阶段语义检索：
+     *
+     * <ol>
+     *   <li>PREFERRED：{@link MilvusScalarFilterBuilder#buildPreferred(ProductQueryIntent)} 生成
+     *       高质量 chunkType filter，向 Milvus 发起一次检索；</li>
+     *   <li>FALLBACK：PREFERRED 命中为空时（{@code documents.isEmpty()}），用
+     *       {@link MilvusScalarFilterBuilder#buildFallback(ProductQueryIntent)} 放宽 chunkType
+     *       全集再检索一次。</li>
+     * </ol>
+     *
+     * <p>两阶段都走相同的 vectorTopK / similarityThreshold，只差 scalar filter；fallback 不会
+     * 重复 PG hydrate 子查询 —— 命中后由 {@link #lookupProductsByVectorIds} 统一回查。
+     */
+    public List<ProductSearchHit> search(
+            String query,
+            ProductQueryCondition condition,
+            ProductQueryIntent intent,
+            int topK
+    ) {
         if (!StringUtils.hasText(query)) {
             return List.of();
         }
         int effectiveTopK = Math.max(1, topK);
         int candidateTopK = Math.max(effectiveTopK, ragProperties.productQuery().semanticCandidateTopK());
-        String milvusFilter = milvusScalarFilterBuilder.build(condition);
+        ProductQueryIntent resolvedIntent = intent == null ? ProductQueryIntent.PRODUCT_SEARCH : intent;
+
+        String preferredFilter = milvusScalarFilterBuilder.buildPreferred(resolvedIntent);
+        String fallbackFilter = milvusScalarFilterBuilder.buildFallback(resolvedIntent);
 
         try {
-            SearchRequest.Builder requestBuilder = SearchRequest.builder()
-                    .query(query)
-                    .topK(candidateTopK)
-                    .similarityThreshold(ragProperties.milvus().similarityThreshold());
-            if (StringUtils.hasText(milvusFilter)) {
-                requestBuilder.filterExpression(milvusFilter);
+            // 第一阶段：PREFERRED
+            MilvusSearchOutcome preferred = runMilvusSearch(query, preferredFilter, candidateTopK, "PREFERRED", resolvedIntent);
+
+            List<Document> documents = preferred.documents();
+            String activeFilter = preferredFilter;
+            String activeStage = "PREFERRED";
+
+            // 第二阶段：FALLBACK（仅当 PREFERRED 零命中且 fallback 表达式不同）
+            boolean fallbackTriggered = false;
+            if ((documents == null || documents.isEmpty())
+                    && StringUtils.hasText(fallbackFilter)
+                    && !fallbackFilter.equals(preferredFilter)) {
+                MilvusSearchOutcome fallback = runMilvusSearch(query, fallbackFilter, candidateTopK, "FALLBACK", resolvedIntent);
+                documents = fallback.documents();
+                activeFilter = fallbackFilter;
+                activeStage = "FALLBACK";
+                fallbackTriggered = true;
+                log.info("{} [MILVUS-FALLBACK] queryPreview={} intent={} reason=preferred_zero_hit preferredExpr=[{}] fallbackExpr=[{}]",
+                        DEBUG_PREFIX,
+                        RagLogHelper.previewQuestion(query),
+                        resolvedIntent,
+                        preferredFilter == null ? "" : preferredFilter,
+                        fallbackFilter
+                );
             }
-            List<Document> documents = vectorStore.similaritySearch(requestBuilder.build());
+
             if (documents == null || documents.isEmpty()) {
                 return List.of();
             }
@@ -102,19 +159,81 @@ public class ProductSemanticRagRetriever {
             List<ProductSearchHit> hits = lookupProductsByVectorIds(scoreByVectorId, condition, effectiveTopK);
 
             log.debug(
-                    "Product semantic retrieval done: queryPreview={}, candidateTopK={}, vectorIds={}, finalHits={}, milvusExpr={}",
+                    "Product semantic retrieval done: queryPreview={}, intent={}, stage={}, fallbackTriggered={}, candidateTopK={}, vectorIds={}, finalHits={}, milvusExpr={}",
                     RagLogHelper.previewQuestion(query),
+                    resolvedIntent,
+                    activeStage,
+                    fallbackTriggered,
                     candidateTopK,
                     scoreByVectorId.size(),
                     hits.size(),
-                    milvusFilter
+                    activeFilter
             );
             return hits;
         } catch (RuntimeException exception) {
-            log.warn("Product semantic retrieval failed: queryPreview={}, milvusExpr={}, error={}",
-                    RagLogHelper.previewQuestion(query), milvusFilter, RagLogHelper.errorSummary(exception));
+            log.warn("Product semantic retrieval failed: queryPreview={}, intent={}, preferredExpr={}, fallbackExpr={}, error={}",
+                    RagLogHelper.previewQuestion(query),
+                    resolvedIntent,
+                    preferredFilter,
+                    fallbackFilter,
+                    RagLogHelper.errorSummary(exception));
             throw exception;
         }
+    }
+
+    /**
+     * 单次 Milvus 检索 + 打 [MILVUS-RETRIEVAL] debug 日志。
+     */
+    private MilvusSearchOutcome runMilvusSearch(
+            String query,
+            String filterExpression,
+            int candidateTopK,
+            String stage,
+            ProductQueryIntent intent
+    ) {
+        SearchRequest.Builder requestBuilder = SearchRequest.builder()
+                .query(query)
+                .topK(candidateTopK)
+                .similarityThreshold(ragProperties.milvus().similarityThreshold());
+        if (StringUtils.hasText(filterExpression)) {
+            requestBuilder.filterExpression(filterExpression);
+        }
+
+        long milvusStartNanos = System.nanoTime();
+        List<Document> documents = vectorStore.similaritySearch(requestBuilder.build());
+        long milvusSearchLatencyMs = (System.nanoTime() - milvusStartNanos) / 1_000_000L;
+
+        Set<String> chunkTypes = collectChunkTypes(documents);
+        int milvusHitCount = documents == null ? 0 : documents.size();
+        log.info(
+                "{} [MILVUS-RETRIEVAL] stage={} intent={} queryPreview={} vectorTopK={} milvusSearchLatencyMs={} milvusFilterExpr=[{}] hitCount={} chunkTypes={}",
+                DEBUG_PREFIX,
+                stage,
+                intent,
+                RagLogHelper.previewQuestion(query),
+                candidateTopK,
+                milvusSearchLatencyMs,
+                filterExpression == null ? "" : filterExpression,
+                milvusHitCount,
+                chunkTypes
+        );
+        return new MilvusSearchOutcome(documents, milvusSearchLatencyMs);
+    }
+
+    private record MilvusSearchOutcome(List<Document> documents, long latencyMs) {}
+
+    private Set<String> collectChunkTypes(List<Document> documents) {
+        if (documents == null || documents.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> chunkTypes = new LinkedHashSet<>();
+        for (Document document : documents) {
+            String chunkType = stringMetadata(document, "chunkType");
+            if (StringUtils.hasText(chunkType)) {
+                chunkTypes.add(chunkType);
+            }
+        }
+        return chunkTypes;
     }
 
     private List<ProductSearchHit> lookupProductsByVectorIds(

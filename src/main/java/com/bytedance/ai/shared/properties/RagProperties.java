@@ -413,12 +413,12 @@ public record RagProperties(
             @Max(50)
             int defaultTopK,
 
-            @DefaultValue("40")
+            @DefaultValue("20")
             @Min(1)
             @Max(500)
             int keywordCandidateTopK,
 
-            @DefaultValue("40")
+            @DefaultValue("20")
             @Min(1)
             @Max(500)
             int semanticCandidateTopK,
