@@ -1,7 +1,5 @@
 1. 整个项目还没做并发控制
-2. 大模型被历史记录污染的问题典型场景：添加购物车 → 添加失败 → 查询购物车，但 LLM 受历史影响，以为用户还要继续添加购物车。（高优）
-3. TODO：OrderCartSnapshotService 改成 CartView -> CartSnapshot DTO -> ObjectMapper.convertValue(...)，不要手写
-   Map.put，也不要直接 CartView 转 Map。
+2. 大模型被历史记录污染的问题典型场景：添加购物车 → 添加失败 → 查询购物车，但 LLM 受历史影响，以为用户还要继续添加购物车。（高优）[把 memory 从“历史消息列表”改成“当前任务链”。原始历史只保存，不直接喂给 LLM；active chain 才是当前会话状态。新任务取消旧 chain，continuation 才继续旧 chain，chain 完成后模板压缩并清除。]
 4.
 
 ## 🟡 可选优化（不影响功能，记一笔以后再说）

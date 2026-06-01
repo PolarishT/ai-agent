@@ -23,6 +23,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.*;
 
@@ -35,6 +38,7 @@ public class RagMilvusVectorIndexer {
 
     private static final Logger log = LoggerFactory.getLogger(RagMilvusVectorIndexer.class);
     private static final int MAX_EMBEDDING_BATCH_SIZE = 10;
+    private static final int MILVUS_DOC_ID_HASH_LENGTH = 16;
 
     private final ObjectProvider<MilvusServiceClient> milvusClientProvider;
     private final ObjectProvider<EmbeddingModel> embeddingModelProvider;
@@ -97,8 +101,8 @@ public class RagMilvusVectorIndexer {
                 throw new IllegalStateException("未找到 chunk 的 embedding: " + chunk.vectorId());
             }
 
-            ids.add(chunk.vectorId());
-            contents.add("");
+            ids.add(toMilvusDocId(chunk.vectorId()));
+            contents.add(chunk.chunkText());
             metadatas.add(gson.toJsonTree(toMetadata(document, chunk)).getAsJsonObject());
             embeddings.add(EmbeddingUtils.toList(vector));
         }
@@ -258,10 +262,31 @@ public class RagMilvusVectorIndexer {
     private String buildDeleteExpression(List<String> vectorIds) {
         String joinedIds = vectorIds.stream()
                 .filter(StringUtils::hasText)
+                .map(this::toMilvusDocId)
                 .map(this::quoteStringLiteral)
                 .reduce((left, right) -> left + "," + right)
                 .orElseThrow(() -> new IllegalArgumentException("Milvus 删除缺少 vectorIds"));
         return MilvusVectorStore.DOC_ID_FIELD_NAME + " in [" + joinedIds + "]";
+    }
+
+    private String toMilvusDocId(String vectorId) {
+        if (!StringUtils.hasText(vectorId)) {
+            throw new IllegalArgumentException("Milvus doc_id 缺少 vectorId");
+        }
+        return "v_" + sha256Hex(vectorId).substring(0, MILVUS_DOC_ID_HASH_LENGTH);
+    }
+
+    private String sha256Hex(String value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
+            StringBuilder builder = new StringBuilder(digest.length * 2);
+            for (byte b : digest) {
+                builder.append(String.format("%02x", b));
+            }
+            return builder.toString();
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 不可用", exception);
+        }
     }
 
     private String quoteStringLiteral(String value) {
