@@ -3,6 +3,9 @@ package com.bytedance.ai.graph.intent;
 import java.util.EnumMap;
 import java.util.Map;
 
+/**
+ * 主意图到工作流名称的映射表。
+ */
 public final class MainIntentWorkflowMapping {
 
     private static final Map<MainIntent, String> TARGETS = new EnumMap<>(MainIntent.class);

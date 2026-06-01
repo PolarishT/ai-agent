@@ -28,6 +28,9 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 
+/**
+ * 智能导购回合接口，负责把用户请求转换成 SSE 事件流。
+ */
 @RestController
 @Validated
 @RequestMapping("/public/agent")

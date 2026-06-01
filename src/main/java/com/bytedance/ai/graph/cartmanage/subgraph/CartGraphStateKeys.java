@@ -1,5 +1,8 @@
 package com.bytedance.ai.graph.cartmanage.subgraph;
 
+/**
+ * 购物车管理Graph 状态 key 常量集合。
+ */
 public final class CartGraphStateKeys {
 
     public static final String CART_ACTION = "cart_action";

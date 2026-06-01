@@ -37,11 +37,6 @@ public interface RagIndexJobRepository {
     int updateStage(Long documentId, String contentSha256, RagIndexStage fromStage, RagIndexStage toStage);
 
     /**
-     * 记录一次可重试失败，让作业重新回到待处理态。
-     */
-    void recordRetry(Long documentId, String contentSha256, RagIndexStage stage, String errorMessage);
-
-    /**
      * 标记作业成功完成。
      */
     int markSucceeded(Long documentId, String contentSha256, RagIndexStage fromStage, Long targetGeneration);

@@ -12,6 +12,9 @@ import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * 默认候选商品选择服务，使用 LLM 从候选列表中选择目标商品。
+ */
 @Service
 public class DefaultCandidateSelectionLlmService implements CandidateSelectionLlmService {
 

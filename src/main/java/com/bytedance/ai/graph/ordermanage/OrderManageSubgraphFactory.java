@@ -29,6 +29,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+/**
+ * 订单管理子图工厂，装配下单/确认流程的节点流转。
+ */
 @Component
 public class OrderManageSubgraphFactory {
 

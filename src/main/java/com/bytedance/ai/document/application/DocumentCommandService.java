@@ -21,6 +21,12 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+/**
+ * 文档写侧应用服务。
+ *
+ * <p>该服务只关心“文档”这一层的持久化与索引事件发布。上游可以来自 Markdown 上传、
+ * JSON API，也可以来自 catalog 离线 JSON 导入后渲染出的 Markdown 内容。
+ */
 @Service
 class DocumentCommandService implements DocumentCommandFacade {
 

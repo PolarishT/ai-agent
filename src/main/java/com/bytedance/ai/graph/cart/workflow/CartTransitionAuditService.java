@@ -9,6 +9,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * 购物车状态迁移审计服务。
+ */
 @Service
 public class CartTransitionAuditService {
 

@@ -18,6 +18,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+/**
+ * 会话仓储的 JDBC 实现。
+ */
 @Repository
 public class JdbcAgentConversationRepository implements AgentConversationRepository {
 

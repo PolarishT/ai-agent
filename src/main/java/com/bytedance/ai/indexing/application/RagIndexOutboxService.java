@@ -20,7 +20,10 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 /**
- * 负责管理索引消息 Outbox 的入队与分发。
+ * 索引消息 Outbox 应用服务。
+ *
+ * <p>负责 outbox 事件入队、查找、删除、定时分发、发送失败重试和 SENDING 超时重置。
+ * 该服务把“本地事务成功写入事件”和“异步投递 RocketMQ”解耦，避免文档落库成功但消息丢失。
  */
 @Service
 @ConditionalOnProperty(prefix = "rag.rocketmq", name = "enabled", havingValue = "true")
@@ -49,6 +52,12 @@ public class RagIndexOutboxService {
         this.indexingMetrics = indexingMetrics;
     }
 
+    /**
+     * 为指定文档版本创建索引 outbox 事件。
+     *
+     * @param documentId    文档主键
+     * @param contentSha256 文档内容 sha256
+     */
     public void enqueue(Long documentId, String contentSha256) {
         outboxRepository.enqueue(documentId, contentSha256, RagIndexOutboxEventType.INDEX_DOCUMENT);
         log.debug(
@@ -59,14 +68,31 @@ public class RagIndexOutboxService {
         );
     }
 
+    /**
+     * 查询指定文档版本的 outbox 事件。
+     *
+     * @param documentId    文档主键
+     * @param contentSha256 文档内容 sha256
+     * @return 找到时返回 outbox 记录，否则返回空
+     */
     public Optional<RagIndexOutboxRecord> findByDocumentIdAndContentSha256(Long documentId, String contentSha256) {
         return outboxRepository.findByDocumentIdAndContentSha256(documentId, contentSha256);
     }
 
+    /**
+     * 删除指定文档的所有 outbox 事件。
+     *
+     * @param documentId 文档主键
+     */
     public void deleteByDocumentId(Long documentId) {
         outboxRepository.deleteByDocumentId(documentId);
     }
 
+    /**
+     * 分发一批当前可投递的 outbox 事件。
+     *
+     * @return 成功发布并确认 SENT 的事件数量
+     */
     public int dispatchPendingBatch() {
         List<RagIndexOutboxRecord> events = outboxRepository.findDispatchable(
                 OffsetDateTime.now(),
@@ -168,6 +194,11 @@ public class RagIndexOutboxService {
         }
     }
 
+    /**
+     * 将长期停留在 SENDING 的 outbox 事件重置为可重试状态。
+     *
+     * @return 本次扫描到的 SENDING 超时事件数量
+     */
     public int resetStuckSendingEvents() {
         OffsetDateTime cutoff = OffsetDateTime.now()
                 .minusNanos(ragProperties.outbox().sendingStaleMillis() * 1_000_000L);

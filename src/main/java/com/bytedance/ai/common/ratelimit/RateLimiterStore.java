@@ -66,7 +66,7 @@ public class RateLimiterStore {
             return;
         }
         if (!lastCleanupAt.compareAndSet(last, now)) {
-            return; // 已有其它线程在清理，跳过
+            return;
         }
         buckets.forEach((key, bucket) -> {
             if (bucket.isIdle(now)) {

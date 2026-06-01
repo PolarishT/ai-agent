@@ -2,6 +2,9 @@ package com.bytedance.ai.graph.api;
 
 import java.util.Map;
 
+/**
+ * 导购节点执行结果，描述节点状态、输出和错误信息。
+ */
 public record GuideNodeExecutionResult(
         NodeRunStatus statusOverride,
         GuideGraphIntent routeIntent,

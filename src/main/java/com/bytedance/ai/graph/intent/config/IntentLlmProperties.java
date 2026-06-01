@@ -5,6 +5,9 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 
+/**
+ * 意图识别 LLM 配置属性。
+ */
 @Component
 @ConfigurationProperties(prefix = "graph.agent.intent-llm")
 public class IntentLlmProperties {

@@ -14,6 +14,9 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 import org.springframework.util.StringUtils;
 
+/**
+ * 购物车仓储的 JDBC 实现。
+ */
 @Repository
 public class JdbcCartItemRepository implements CartItemRepository {
 

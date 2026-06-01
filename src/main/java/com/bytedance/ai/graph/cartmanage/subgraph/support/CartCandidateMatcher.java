@@ -13,6 +13,9 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * 购物车候选商品匹配器。
+ */
 public class CartCandidateMatcher {
 
     private static final List<String> COLOR_WORDS = List.of(

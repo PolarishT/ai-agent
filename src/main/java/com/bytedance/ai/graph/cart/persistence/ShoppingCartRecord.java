@@ -5,6 +5,9 @@ import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.Map;
 
+/**
+ * 购物车持久化记录模型。
+ */
 public record ShoppingCartRecord(
         Long id,
         String cartId,

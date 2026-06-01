@@ -20,6 +20,9 @@ import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+/**
+ * 购物车管理子图节点，执行添加、删除或调整数量等购物车变更。
+ */
 public class CartExecuteActionNode {
 
     private static final Logger log = LoggerFactory.getLogger(CartExecuteActionNode.class);

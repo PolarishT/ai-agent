@@ -14,6 +14,9 @@ import org.springframework.util.StringUtils;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+/**
+ * 购物车管理子图节点，识别本轮购物车动作类型。
+ */
 public class CartResolveActionNode {
 
     private static final Logger log = LoggerFactory.getLogger(CartResolveActionNode.class);

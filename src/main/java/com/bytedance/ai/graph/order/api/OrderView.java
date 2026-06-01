@@ -4,6 +4,9 @@ import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
 
+/**
+ * 订单对外只读视图。
+ */
 public record OrderView(
         String orderId,
         String cartId,

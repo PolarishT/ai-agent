@@ -7,6 +7,7 @@ import com.bytedance.ai.indexing.service.RagIndexingFailureClassifier;
 import com.bytedance.ai.indexing.workflow.IndexWorkflowCommand;
 import com.bytedance.ai.indexing.workflow.IndexWorkflowService;
 import com.bytedance.ai.indexing.workflow.IndexWorkflowTriggerType;
+import com.bytedance.ai.shared.support.RagLogFields;
 import com.bytedance.ai.shared.support.RagLogHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,13 +52,18 @@ public class RagDirectIndexEventPublisher implements RagIndexEventPublisher {
                 IndexWorkflowTriggerType.API,
                 "direct-publisher"
         );
-        log.info(
-                "RocketMQ is disabled, scheduling in-process RAG indexing: documentId={}, contentSha={}",
-                documentId,
-                RagLogHelper.shortSha(contentSha256)
-        );
 
         String publishId = "direct-" + documentId + "-" + RagLogHelper.shortSha(contentSha256);
+        log.atInfo()
+                .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.direct_publish.started")
+                .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_STARTED)
+                .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, contentSha256))
+                .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(contentSha256))
+                .addKeyValue(RagLogFields.RAG_TRIGGER_TYPE, command.triggerType())
+                .addKeyValue(RagLogFields.RAG_TRIGGERED_BY, command.triggeredBy())
+                .addKeyValue("rag.publish_id", publishId)
+                .log("RocketMQ is disabled, scheduling in-process RAG indexing");
 
         try {
             ragVirtualThreadExecutor.execute(() -> executeIndexing(documentId, contentSha256, command));
@@ -69,14 +75,17 @@ public class RagDirectIndexEventPublisher implements RagIndexEventPublisher {
 
             failDirectIndexing(command, reason, errorMessage);
 
-            log.error(
-                    "Direct RAG indexing submission was rejected: documentId={}, contentSha={}, publishId={}, error={}",
-                    documentId,
-                    RagLogHelper.shortSha(contentSha256),
-                    publishId,
-                    RagLogHelper.errorSummary(exception),
-                    exception
-            );
+            log.atError()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.direct_publish.failed")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_FAILURE)
+                    .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, contentSha256))
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                    .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(contentSha256))
+                    .addKeyValue(RagLogFields.EVENT_REASON, reason)
+                    .addKeyValue("rag.publish_id", publishId)
+                    .addKeyValue(RagLogFields.RAG_ERROR_SUMMARY, RagLogHelper.errorSummary(exception))
+                    .setCause(exception)
+                    .log("Direct RAG indexing submission was rejected");
 
             throw new IllegalStateException(
                     "Failed to schedule direct RAG indexing task: executor rejected submission",
@@ -90,44 +99,56 @@ public class RagDirectIndexEventPublisher implements RagIndexEventPublisher {
             ragIndexingService.indexDocument(documentId, contentSha256, command);
         } catch (IllegalArgumentException exception) {
             ragIndexingService.deleteOrphanedIndexingState(documentId);
-            log.warn(
-                    "Direct RAG indexing skipped because document is unavailable: documentId={}, contentSha={}, error={}",
-                    documentId,
-                    RagLogHelper.shortSha(contentSha256),
-                    RagLogHelper.errorSummary(exception)
-            );
+            log.atWarn()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.direct_publish.skipped")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_SKIPPED)
+                    .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, contentSha256))
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                    .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(contentSha256))
+                    .addKeyValue(RagLogFields.EVENT_REASON, "document_unavailable")
+                    .addKeyValue(RagLogFields.RAG_ERROR_SUMMARY, RagLogHelper.errorSummary(exception))
+                    .log("Direct RAG indexing skipped because document is unavailable");
         } catch (RagIndexAttemptException exception) {
             if (isMissingDocument(exception)) {
                 ragIndexingService.deleteOrphanedIndexingState(documentId);
-                log.info(
-                        "Direct RAG indexing cancelled because document disappeared during execution: documentId={}, contentSha={}, stage={}",
-                        documentId,
-                        RagLogHelper.shortSha(contentSha256),
-                        exception.getStage()
-                );
+                log.atInfo()
+                        .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.direct_publish.skipped")
+                        .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_SKIPPED)
+                        .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, contentSha256))
+                        .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                        .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(contentSha256))
+                        .addKeyValue(RagLogFields.RAG_INDEX_STAGE, exception.getStage())
+                        .addKeyValue(RagLogFields.EVENT_REASON, "document_disappeared")
+                        .log("Direct RAG indexing cancelled because document disappeared during execution");
             } else {
                 failDirectIndexing(command, exception.getReason(), exception.getErrorMessage());
-                log.error(
-                        "Direct RAG indexing failed: documentId={}, contentSha={}, stage={}, reason={}, retryable={}",
-                        documentId,
-                        RagLogHelper.shortSha(contentSha256),
-                        exception.getStage(),
-                        exception.getReason(),
-                        exception.isRetryable(),
-                        exception
-                );
+                log.atError()
+                        .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.direct_publish.failed")
+                        .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_FAILURE)
+                        .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, contentSha256))
+                        .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                        .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(contentSha256))
+                        .addKeyValue(RagLogFields.RAG_INDEX_STAGE, exception.getStage())
+                        .addKeyValue(RagLogFields.EVENT_REASON, exception.getReason())
+                        .addKeyValue(RagLogFields.RAG_RETRYABLE, exception.isRetryable())
+                        .addKeyValue(RagLogFields.RAG_ERROR_SUMMARY, RagLogHelper.errorSummary(exception))
+                        .setCause(exception)
+                        .log("Direct RAG indexing failed");
             }
         } catch (Exception exception) {
             RagIndexFailure failure = failureClassifier.classify(exception);
             String errorMessage = "索引失败 [" + failure.reason() + "]: " + abbreviate(exception.getMessage());
             failDirectIndexing(command, failure.reason(), errorMessage);
-            log.error(
-                    "Direct RAG indexing failed unexpectedly: documentId={}, contentSha={}, reason={}",
-                    documentId,
-                    RagLogHelper.shortSha(contentSha256),
-                    failure.reason(),
-                    exception
-            );
+            log.atError()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.direct_publish.failed")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_FAILURE)
+                    .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, contentSha256))
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                    .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(contentSha256))
+                    .addKeyValue(RagLogFields.EVENT_REASON, failure.reason())
+                    .addKeyValue(RagLogFields.RAG_ERROR_SUMMARY, RagLogHelper.errorSummary(exception))
+                    .setCause(exception)
+                    .log("Direct RAG indexing failed unexpectedly");
         }
     }
 
@@ -135,13 +156,15 @@ public class RagDirectIndexEventPublisher implements RagIndexEventPublisher {
         try {
             workflowService.fail(command.withFailure(reason, errorMessage));
         } catch (Exception exception) {
-            log.warn(
-                    "Direct RAG indexing could not transition to FAILED; leaving terminal handling to logs: documentId={}, contentSha={}, reason={}, transitionError={}",
-                    command.documentId(),
-                    RagLogHelper.shortSha(command.contentSha256()),
-                    reason,
-                    RagLogHelper.errorSummary(exception)
-            );
+            log.atWarn()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.direct_publish.transition_failed")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_FAILURE)
+                    .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(command.documentId(), command.contentSha256()))
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, command.documentId())
+                    .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(command.contentSha256()))
+                    .addKeyValue(RagLogFields.EVENT_REASON, reason)
+                    .addKeyValue(RagLogFields.RAG_ERROR_SUMMARY, RagLogHelper.errorSummary(exception))
+                    .log("Direct RAG indexing could not transition to FAILED; leaving terminal handling to logs");
         }
     }
 

@@ -4,6 +4,9 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Map;
 
+/**
+ * 订单管理持久化记录模型。
+ */
 public record MockOrderRecord(
         Long id,
         String orderNo,

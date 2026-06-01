@@ -1,5 +1,8 @@
 package com.bytedance.ai.graph.ordermanage;
 
+/**
+ * 订单管理Graph 状态 key 常量集合。
+ */
 public final class OrderManageStateKeys {
 
     public static final String ORDER_ACTION = "orderAction";

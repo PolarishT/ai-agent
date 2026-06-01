@@ -19,6 +19,9 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * 购物车管理仓储的 JDBC 实现。
+ */
 @Repository
 public class JdbcPendingCartActionRepository implements PendingCartActionRepository {
 

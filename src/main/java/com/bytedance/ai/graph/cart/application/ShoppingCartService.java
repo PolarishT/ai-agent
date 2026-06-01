@@ -27,6 +27,9 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+/**
+ * 购物车应用服务，提供购物车查询和变更能力。
+ */
 @Service
 public class ShoppingCartService implements CartCommandFacade, CartQueryFacade {
 

@@ -3,6 +3,9 @@ package com.bytedance.ai.graph.catalog.persistence;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 商品目录仓储端口，隔离领域逻辑与底层持久化实现。
+ */
 public interface CatalogProductContentRepository {
 
     void saveKnowledge(Long productId, List<KnowledgeDraft> drafts);

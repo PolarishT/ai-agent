@@ -3,6 +3,9 @@ package com.bytedance.ai.graph.intent;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 主意图识别结果，包含意图、置信度和槽位。
+ */
 public record MainIntentDecision(
         MainIntent intent,
         double confidence,

@@ -19,6 +19,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
+/**
+ * 购物车管理子图节点，从检索结果和用户表达中确定最终商品候选。
+ */
 public class CartResolveCandidateNode {
 
     private static final Logger log = LoggerFactory.getLogger(CartResolveCandidateNode.class);

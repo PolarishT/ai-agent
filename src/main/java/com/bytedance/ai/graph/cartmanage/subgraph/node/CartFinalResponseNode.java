@@ -11,6 +11,9 @@ import org.slf4j.LoggerFactory;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+/**
+ * 购物车管理子图节点，根据执行结果组装最终回复和工作流状态。
+ */
 public class CartFinalResponseNode {
 
     private static final Logger log = LoggerFactory.getLogger(CartFinalResponseNode.class);

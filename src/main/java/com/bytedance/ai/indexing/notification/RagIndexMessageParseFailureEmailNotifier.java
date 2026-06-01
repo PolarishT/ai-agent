@@ -114,7 +114,9 @@ public class RagIndexMessageParseFailureEmailNotifier implements RagIndexMessage
                 "================================\n" +
                 "Message ID: " + messageId + "\n" +
                 "Topic: " + topic + "\n" +
+                "详情：" + propertiesJson + "\n" +
                 "投递次数: " + deliveryAttempt + "\n" +
+                "错误: " + failureCount + "\n" +
                 "错误详情: " + errorMessage + "\n" +
                 "Payload 预览: " + payloadPreview + "\n" +
                 "告警时间: " + getCurrentTimeStr();

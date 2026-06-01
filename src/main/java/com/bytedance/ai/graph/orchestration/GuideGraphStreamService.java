@@ -20,6 +20,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 导购 Graph 流式执行服务，负责启动工作流并转发节点事件。
+ */
 @Service
 public class GuideGraphStreamService implements GuideGraphStreamFacade {
 

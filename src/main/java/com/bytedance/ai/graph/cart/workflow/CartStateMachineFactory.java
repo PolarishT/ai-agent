@@ -6,6 +6,9 @@ import org.springframework.statemachine.StateMachine;
 import org.springframework.statemachine.config.StateMachineBuilder;
 import org.springframework.stereotype.Component;
 
+/**
+ * 购物车状态机工厂，定义购物车状态迁移和守卫。
+ */
 @Component
 public class CartStateMachineFactory {
 

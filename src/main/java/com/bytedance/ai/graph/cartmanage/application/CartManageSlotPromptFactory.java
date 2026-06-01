@@ -4,6 +4,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 
+/**
+ * 购物车管理槽位抽取提示词工厂。
+ */
 public final class CartManageSlotPromptFactory {
 
     private static final String TEMPLATE_RESOURCE = "prompts/cart-manage-slot-filling-v1.txt";

@@ -1,5 +1,8 @@
 package com.bytedance.ai.graph.ordermanage;
 
+/**
+ * 订单管理流程执行结果。
+ */
 public record OrderCreateResult(
         boolean success,
         String orderNo,

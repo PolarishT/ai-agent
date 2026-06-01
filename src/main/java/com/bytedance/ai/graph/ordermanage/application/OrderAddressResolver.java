@@ -9,6 +9,9 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * 订单地址解析器，从用户输入和历史地址中得到下单地址快照。
+ */
 @Component
 public class OrderAddressResolver {
 

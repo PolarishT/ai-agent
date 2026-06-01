@@ -6,6 +6,9 @@ import com.bytedance.ai.graph.cartmanage.subgraph.CartWorkflowStatus;
 import java.time.LocalDateTime;
 import java.util.List;
 
+/**
+ * 购物车管理持久化记录模型。
+ */
 public record PendingCartActionRecord(
         Long id,
         String userId,

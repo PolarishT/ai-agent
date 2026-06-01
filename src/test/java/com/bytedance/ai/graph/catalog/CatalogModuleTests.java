@@ -143,6 +143,35 @@ class CatalogModuleTests {
         assertThat(summary.failures()).isEmpty();
     }
 
+    @Test
+    void importBatchRollsBackSingleItemWhenLateJdbcWriteFails() {
+        String rawProductId = "p-module-rollback";
+        CatalogProductCreateRequest broken = sampleWithNullReviewContent(rawProductId);
+
+        CatalogImportSummary summary = catalogCommandFacade.importBatch(new CatalogImportRequest(List.of(broken)));
+
+        assertThat(summary.total()).isEqualTo(1);
+        assertThat(summary.succeeded()).isZero();
+        assertThat(summary.failed()).isEqualTo(1);
+        assertThat(summary.failures()).hasSize(1);
+
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM catalog_product WHERE title = ?",
+                Integer.class,
+                broken.title()
+        )).as("Product 主表写入应随单条导入事务回滚").isZero();
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM catalog_product_knowledge WHERE content = ?",
+                Integer.class,
+                rollbackKnowledgeContent(rawProductId)
+        )).as("中途失败前已写入的知识表也应回滚").isZero();
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM rag_documents WHERE title = ?",
+                Integer.class,
+                broken.title()
+        )).as("已创建的 rag_documents 应随外层导入事务回滚").isZero();
+    }
+
     private CatalogProductCreateRequest sample(String rawProductId) {
         return new CatalogProductCreateRequest(
                 "测试商品 " + rawProductId,
@@ -180,6 +209,38 @@ class CatalogModuleTests {
                 List.of(new CatalogProductCreateRequest.FaqDraft(0, "怎么用", "早晚使用。", Map.of())),
                 List.of(new CatalogProductCreateRequest.ReviewDraft(0, "alice", 5, "很好用", "POSITIVE", Map.of()))
         );
+    }
+
+    private CatalogProductCreateRequest sampleWithNullReviewContent(String rawProductId) {
+        CatalogProductCreateRequest source = sample(rawProductId);
+        return new CatalogProductCreateRequest(
+                source.title(),
+                source.brand(),
+                source.category(),
+                source.subCategory(),
+                source.basePrice(),
+                source.priceMin(),
+                source.priceMax(),
+                source.totalStock(),
+                source.imagePath(),
+                source.attributesJson(),
+                source.rawJson(),
+                source.skus(),
+                List.of(
+                        new CatalogProductCreateRequest.KnowledgeDraft(
+                                "MARKETING_DESCRIPTION",
+                                "卖点",
+                                rollbackKnowledgeContent(rawProductId),
+                                Map.of()
+                        )
+                ),
+                source.faqs(),
+                List.of(new CatalogProductCreateRequest.ReviewDraft(0, "alice", 5, null, "POSITIVE", Map.of()))
+        );
+    }
+
+    private String rollbackKnowledgeContent(String rawProductId) {
+        return "rollback-marker-" + rawProductId;
     }
 
     /**

@@ -8,6 +8,9 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
+/**
+ * 主意图路由服务，调用 LLM 判断用户本轮请求应进入哪个业务工作流。
+ */
 @Service
 public class MainIntentRouterService {
 

@@ -15,6 +15,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
+/**
+ * 购物车管理子图节点，加载当前购物车、会话输入和后续节点所需上下文。
+ */
 public class CartLoadContextNode {
 
     private static final Logger log = LoggerFactory.getLogger(CartLoadContextNode.class);

@@ -34,16 +34,6 @@ public interface RagChunkRepository {
     List<String> findVectorIdsByDocumentIdExceptGeneration(Long documentId, Long indexGeneration);
 
     /**
-     * 查询某个 generation 中最大的 chunk 序号，用于判断稳定向量 ID 的尾部删除范围。
-     */
-    Integer findMaxChunkIndexByDocumentIdAndGeneration(Long documentId, Long indexGeneration);
-
-    /**
-     * 查询除当前 generation 外最大的 chunk 序号，用于清理历史版本遗留的尾部向量。
-     */
-    Integer findMaxChunkIndexByDocumentIdExceptGeneration(Long documentId, Long indexGeneration);
-
-    /**
      * 删除文档下全部切片。
      */
     void deleteByDocumentId(Long documentId);

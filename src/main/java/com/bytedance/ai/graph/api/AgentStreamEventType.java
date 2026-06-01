@@ -2,6 +2,9 @@ package com.bytedance.ai.graph.api;
 
 import java.util.Locale;
 
+/**
+ * 智能导购流式事件类型枚举。
+ */
 public enum AgentStreamEventType {
     TURN_STARTED,
     WORKFLOW_STARTED,

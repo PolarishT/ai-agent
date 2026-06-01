@@ -19,6 +19,9 @@ import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+/**
+ * 购物车管理子图节点，解析用户要操作的商品目标和数量。
+ */
 public class CartResolveTargetNode {
 
     private static final Logger log = LoggerFactory.getLogger(CartResolveTargetNode.class);

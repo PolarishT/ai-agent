@@ -1,5 +1,7 @@
 package com.bytedance.ai.common.ratelimit;
 
+import lombok.Getter;
+import org.jspecify.annotations.NonNull;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
@@ -13,6 +15,7 @@ import org.springframework.web.server.ResponseStatusException;
  *
  * <p>同时附带 {@code Retry-After}（秒）响应头，提示客户端最早可重试时间。
  */
+@Getter
 public class RateLimitExceededException extends ResponseStatusException {
 
     private final long retryAfterSeconds;
@@ -22,12 +25,8 @@ public class RateLimitExceededException extends ResponseStatusException {
         this.retryAfterSeconds = Math.max(0, retryAfterSeconds);
     }
 
-    public long getRetryAfterSeconds() {
-        return retryAfterSeconds;
-    }
-
     @Override
-    public HttpHeaders getHeaders() {
+    public @NonNull HttpHeaders getHeaders() {
         HttpHeaders headers = new HttpHeaders();
         if (retryAfterSeconds > 0) {
             headers.add(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds));

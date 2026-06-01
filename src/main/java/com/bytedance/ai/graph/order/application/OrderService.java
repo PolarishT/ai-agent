@@ -29,6 +29,9 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+/**
+ * 订单应用服务，负责订单创建、查询和价格变更提示。
+ */
 @Service
 public class OrderService implements OrderCommandFacade, OrderQueryFacade {
 

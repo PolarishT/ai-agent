@@ -28,7 +28,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * 负责将原始文档切片并写入 PostgreSQL / Milvus。
+ * 单文档索引执行服务。
+ *
+ * <p>该服务负责一次具体索引尝试：加载文档快照、校验版本、切分文本、写入 PostgreSQL 切片、
+ * 写入 Milvus 向量、推进工作流状态，并在失败时清理未生效 generation 的残留数据。
  */
 @Service
 public class RagIndexingService {
@@ -78,6 +81,10 @@ public class RagIndexingService {
 
     /**
      * 使用指定工作流上下文执行一次索引尝试。
+     *
+     * @param documentId              文档主键
+     * @param expectedContentSha256   消息携带的期望内容 sha256，用于识别旧版本消息
+     * @param workflowCommand         本次索引尝试对应的工作流命令
      */
     public void indexDocument(Long documentId, String expectedContentSha256, IndexWorkflowCommand workflowCommand) {
         DocumentIndexingView document = loadDocument(documentId);
@@ -237,6 +244,8 @@ public class RagIndexingService {
 
     /**
      * 删除指定文档已有的切片和向量索引，供删除文档或重建前清理使用。
+     *
+     * @param documentId 文档主键
      */
     public void deleteDocumentIndex(Long documentId) {
         deleteDocumentIndex(documentId, currentMilvusVectorIndexer());
@@ -244,6 +253,8 @@ public class RagIndexingService {
 
     /**
      * 清理文档已经不存在时，索引模块内部可能遗留的孤儿状态。
+     *
+     * @param documentId 文档主键
      */
     public void deleteOrphanedIndexingState(Long documentId) {
         deleteDocumentIndex(documentId);
@@ -255,6 +266,9 @@ public class RagIndexingService {
     /**
      * 物理清理特定代际的索引状态。
      * 由孤儿清理器调用，用于回收崩溃任务留下的残留数据。
+     *
+     * @param documentId 文档主键
+     * @param generation 待清理的索引 generation
      */
     public void deleteOrphanedIndexingState(Long documentId, long generation) {
         log.info("开始物理清理孤儿代际数据: documentId={}, generation={}", documentId, generation);

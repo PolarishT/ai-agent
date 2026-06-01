@@ -3,6 +3,9 @@ package com.bytedance.ai.graph.cart.persistence;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 
+/**
+ * 购物车持久化记录模型。
+ */
 public record CartItemRecord(
         Long id,
         Long cartId,

@@ -7,6 +7,9 @@ import org.springframework.util.StringUtils;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * 购物车条目查找工具。
+ */
 public class CartItemLookup {
 
     public boolean hasTarget(Integer itemIndex, String productName, String productId, String skuId) {

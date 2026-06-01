@@ -3,6 +3,9 @@ package com.bytedance.ai.graph.api
 
 import java.util.List;
 
+/**
+ * 导购 Graph 结束摘要工厂，统一把执行状态转换成面向前端的最终摘要。
+ */
 public final class GuideGraphFinalSummaryFactory {
 
     private GuideGraphFinalSummaryFactory() {

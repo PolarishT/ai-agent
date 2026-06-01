@@ -41,6 +41,9 @@ public class RagIndexTimelineService {
 
     /**
      * 查询当前文档版本的完整索引时间线。
+     *
+     * @param documentId 文档主键
+     * @return 文档、job、outbox 与状态转移审计组成的时间线视图
      */
     public RagIndexTimelineView getTimeline(Long documentId) {
         DocumentIndexingView document = documentIndexingSpi.findById(documentId)

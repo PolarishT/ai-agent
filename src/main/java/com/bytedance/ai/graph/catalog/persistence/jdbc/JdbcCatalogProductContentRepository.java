@@ -11,6 +11,9 @@ import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 商品目录仓储的 JDBC 实现。
+ */
 @Repository
 public class JdbcCatalogProductContentRepository implements CatalogProductContentRepository {
 

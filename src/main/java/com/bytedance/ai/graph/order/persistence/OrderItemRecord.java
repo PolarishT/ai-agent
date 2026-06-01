@@ -3,6 +3,9 @@ package com.bytedance.ai.graph.order.persistence;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 
+/**
+ * 订单持久化记录模型。
+ */
 public record OrderItemRecord(
         Long id,
         Long orderId,

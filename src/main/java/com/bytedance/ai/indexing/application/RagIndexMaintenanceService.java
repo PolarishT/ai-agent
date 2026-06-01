@@ -16,6 +16,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.OffsetDateTime;
 import java.util.List;
 
+/**
+ * 索引维护服务。
+ *
+ * <p>用于发现并修复工作流/job 状态与实际索引数据不一致的异常情况，
+ * 例如进程崩溃后长期停留在运行态、但已经没有可继续消费载体的孤儿任务。
+ */
 @Service
 public class RagIndexMaintenanceService {
     private static final Logger log = LoggerFactory.getLogger(RagIndexMaintenanceService.class);

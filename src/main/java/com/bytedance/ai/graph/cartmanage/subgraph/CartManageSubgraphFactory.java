@@ -27,6 +27,9 @@ import org.springframework.stereotype.Component;
 
 import java.util.Map;
 
+/**
+ * 购物车管理子图工厂，装配识别动作、检索商品、校验库存和执行变更节点。
+ */
 @Component
 public class CartManageSubgraphFactory {
 

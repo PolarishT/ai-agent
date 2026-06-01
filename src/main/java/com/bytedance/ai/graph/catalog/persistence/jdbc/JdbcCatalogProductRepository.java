@@ -22,6 +22,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+/**
+ * 商品目录仓储的 JDBC 实现。
+ */
 @Repository
 public class JdbcCatalogProductRepository implements CatalogProductRepository {
 

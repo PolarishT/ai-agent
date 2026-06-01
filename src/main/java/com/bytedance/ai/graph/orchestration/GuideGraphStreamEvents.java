@@ -15,6 +15,9 @@ import com.bytedance.ai.graph.api.GuideGraphRequest;
 import java.util.Map;
 import java.util.UUID;
 
+/**
+ * 导购 Graph 流式事件构造工具。
+ */
 public final class GuideGraphStreamEvents {
 
     private GuideGraphStreamEvents() {

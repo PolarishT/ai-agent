@@ -27,7 +27,10 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
- * 宏观补偿任务：恢复长期停留在 PENDING / PROCESSING / FAILED 的文档。
+ * 索引补偿定时任务。
+ *
+ * <p>周期性扫描长期停留在 PENDING / PROCESSING / FAILED / DELETING 的文档，
+ * 修复卡住的 outbox、孤儿 job 和删除清理残留，尽量把离线索引链路恢复到可继续推进的状态。
  */
 @Component
 @ConditionalOnProperty(prefix = "rag.rocketmq", name = "enabled", havingValue = "true")
@@ -68,6 +71,12 @@ public class RagIndexRecoveryTask {
         this.ragIndexMaintenanceService = ragIndexMaintenanceService;
     }
 
+    /**
+     * 执行一次补偿扫描。
+     *
+     * <p>该方法由 Spring 调度器周期性触发，会先修复卡住的 outbox 与孤儿 job，
+     * 再按文档状态分类重新投递或完成删除清理。
+     */
     @Scheduled(fixedDelayString = "${rag.recovery.fixed-delay-millis:6000000}")
     public void recoverStaleDocuments() {
         int resetOutboxCount = outboxService.resetStuckSendingEvents();
@@ -161,7 +170,7 @@ public class RagIndexRecoveryTask {
                     .withNote(reason);
             try {
 
-                transactionTemplate.executeWithoutResult((status) -> {
+                transactionTemplate.executeWithoutResult((_) -> {
                     workflowService.queue(command);
                     workflowService.dispatch(command);
                     outboxService.enqueue(document.id(), document.contentSha256());

@@ -22,6 +22,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.Map;
 import java.util.UUID;
 
+/**
+ * 订单管理写入服务，负责创建模拟订单并记录待确认动作。
+ */
 @Service
 public class OrderCommandService {
 

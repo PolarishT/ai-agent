@@ -12,6 +12,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 基于商品检索能力的购物车商品候选解析器。
+ */
 @Service
 public class ProductSearchCatalogResolver implements ProductCatalogResolver {
 

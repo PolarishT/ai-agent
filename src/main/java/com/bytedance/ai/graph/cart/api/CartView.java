@@ -4,6 +4,9 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 购物车对外只读视图。
+ */
 public record CartView(
         String cartId,
         String userId,

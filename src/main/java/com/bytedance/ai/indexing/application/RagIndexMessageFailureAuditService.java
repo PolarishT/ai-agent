@@ -12,7 +12,10 @@ import org.apache.rocketmq.client.apis.message.MessageView;
 import org.springframework.stereotype.Service;
 
 /**
- * 审计离线索引消息失败，尤其是反序列化失败等无法进入正常工作流的异常。
+ * 审计离线索引消息失败。
+ *
+ * <p>该服务处理无法进入正常索引工作流的消息异常，尤其是 RocketMQ 消息反序列化失败。
+ * 它会保存原始 payload 摘要、消息属性和失败次数，并给告警逻辑提供阈值判断结果。
  */
 @Service
 public class RagIndexMessageFailureAuditService {
@@ -34,6 +37,14 @@ public class RagIndexMessageFailureAuditService {
         this.jsonCodec = jsonCodec;
     }
 
+    /**
+     * 记录一次消息解析失败并返回告警判断结果。
+     *
+     * @param messageView RocketMQ 消息视图
+     * @param payload     原始消息体
+     * @param exception   解析异常
+     * @return 解析失败审计结果
+     */
     public ParseFailureAuditResult recordParseFailure(MessageView messageView, byte[] payload, Exception exception) {
         String messageId = String.valueOf(messageView.getMessageId());
         String failureType = "parse";

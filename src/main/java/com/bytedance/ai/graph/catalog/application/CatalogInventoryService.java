@@ -6,6 +6,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * 商品库存服务，封装库存校验和扣减查询能力。
+ */
 @Service
 class CatalogInventoryService implements CatalogInventoryFacade {
 

@@ -5,6 +5,9 @@ import org.springframework.util.StringUtils;
 
 import java.util.Locale;
 
+/**
+ * 购物车动作解析器，把用户意图归一化成可执行动作。
+ */
 public final class CartActionParser {
 
     private CartActionParser() {

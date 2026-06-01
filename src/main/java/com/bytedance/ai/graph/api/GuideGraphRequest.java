@@ -4,6 +4,9 @@ import org.springframework.util.StringUtils;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * 导购 Graph 执行请求，携带用户输入、会话信息和前端上下文。
+ */
 public record GuideGraphRequest(
         String userId,
         String conversationId,

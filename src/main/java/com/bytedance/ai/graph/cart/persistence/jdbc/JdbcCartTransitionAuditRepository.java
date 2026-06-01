@@ -9,6 +9,9 @@ import java.util.Map;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+/**
+ * 购物车仓储的 JDBC 实现。
+ */
 @Repository
 public class JdbcCartTransitionAuditRepository implements CartTransitionAuditRepository {
 

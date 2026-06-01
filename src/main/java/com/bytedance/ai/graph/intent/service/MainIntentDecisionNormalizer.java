@@ -11,6 +11,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 主意图识别结果归一化器，兜底处理 LLM 输出中的别名和非法值。
+ */
 @Component
 public class MainIntentDecisionNormalizer {
 

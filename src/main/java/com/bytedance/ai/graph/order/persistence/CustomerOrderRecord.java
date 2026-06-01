@@ -5,6 +5,9 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 订单持久化记录模型。
+ */
 public record CustomerOrderRecord(
         Long id,
         String orderId,

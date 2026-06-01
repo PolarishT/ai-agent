@@ -5,6 +5,9 @@ import org.springframework.util.StringUtils;
 import java.util.Locale;
 import java.util.Optional;
 
+/**
+ * 导购 Graph 顶层意图枚举，用于路由到不同业务工作流。
+ */
 public enum GuideGraphIntent {
     PRODUCT_RECOMMEND,
     PRODUCT_SEARCH,

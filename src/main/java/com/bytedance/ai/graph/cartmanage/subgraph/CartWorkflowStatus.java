@@ -1,5 +1,8 @@
 package com.bytedance.ai.graph.cartmanage.subgraph;
 
+/**
+ * 购物车管理流程状态枚举。
+ */
 public enum CartWorkflowStatus {
     ADD_SUCCESS,
     REMOVE_SUCCESS,

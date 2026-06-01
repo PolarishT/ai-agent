@@ -7,6 +7,9 @@ import com.bytedance.ai.graph.api.GuideGraphIntent;
 import java.util.EnumMap;
 import java.util.Map;
 
+/**
+ * 导购工作流名称常量。
+ */
 public final class GuideGraphWorkflows {
 
     private static final Map<GuideGraphIntent, String> TARGETS = new EnumMap<>(GuideGraphIntent.class);

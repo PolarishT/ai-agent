@@ -17,6 +17,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
+/**
+ * 导购节点模板，封装节点启动、成功、失败事件的通用包装逻辑。
+ */
 final class GuideGraphNodeTemplate {
 
     private static final Logger log = LoggerFactory.getLogger(GuideGraphNodeTemplate.class);

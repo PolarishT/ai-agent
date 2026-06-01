@@ -1,25 +1,22 @@
 package com.bytedance.ai.document.persistence.jdbc;
 
-import com.bytedance.ai.document.persistence.RagDocumentRepository;
 import com.bytedance.ai.document.persistence.RagDocumentRecord;
+import com.bytedance.ai.document.persistence.RagDocumentRepository;
 import com.bytedance.ai.shared.model.RagDocumentStatus;
 import com.bytedance.ai.shared.support.RagJsonCodec;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.Statement;
-import java.sql.Timestamp;
-import java.sql.Types;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.sql.*;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * 基于 Spring JDBC 的 RAG 文档仓储实现。
@@ -35,7 +32,12 @@ public class JdbcRagDocumentRepository implements RagDocumentRepository {
         this.jsonCodec = jsonCodec;
     }
 
+    private static OffsetDateTime toOffsetDateTime(Timestamp timestamp) {
+        return timestamp == null ? null : timestamp.toInstant().atOffset(ZoneOffset.UTC);
+    }
+
     @Override
+    @Transactional
     public RagDocumentRecord save(
             String sourceType,
             String sourceUri,
@@ -68,6 +70,7 @@ public class JdbcRagDocumentRepository implements RagDocumentRepository {
     }
 
     @Override
+    @Transactional
     public RagDocumentRecord update(
             Long id,
             String sourceType,
@@ -112,12 +115,12 @@ public class JdbcRagDocumentRepository implements RagDocumentRepository {
     public List<RagDocumentRecord> findPendingBefore(OffsetDateTime cutoff, int limit) {
         return jdbc.query(
                 """
-                SELECT * FROM rag_documents
-                 WHERE status = ?
-                   AND updated_at <= ?
-                 ORDER BY updated_at
-                 LIMIT ?
-                """,
+                        SELECT * FROM rag_documents
+                         WHERE status = ?
+                           AND updated_at <= ?
+                         ORDER BY updated_at
+                         LIMIT ?
+                        """,
                 rowMapper(),
                 RagDocumentStatus.PENDING.name(),
                 Timestamp.from(cutoff.toInstant()),
@@ -129,12 +132,12 @@ public class JdbcRagDocumentRepository implements RagDocumentRepository {
     public List<RagDocumentRecord> findProcessingBefore(OffsetDateTime cutoff, int limit) {
         return jdbc.query(
                 """
-                SELECT * FROM rag_documents
-                 WHERE status = ?
-                   AND COALESCE(last_attempted_at, updated_at) <= ?
-                 ORDER BY COALESCE(last_attempted_at, updated_at)
-                 LIMIT ?
-                """,
+                        SELECT * FROM rag_documents
+                         WHERE status = ?
+                           AND COALESCE(last_attempted_at, updated_at) <= ?
+                         ORDER BY COALESCE(last_attempted_at, updated_at)
+                         LIMIT ?
+                        """,
                 rowMapper(),
                 RagDocumentStatus.PROCESSING.name(),
                 Timestamp.from(cutoff.toInstant()),
@@ -146,12 +149,12 @@ public class JdbcRagDocumentRepository implements RagDocumentRepository {
     public List<RagDocumentRecord> findFailedBefore(OffsetDateTime cutoff, int limit) {
         return jdbc.query(
                 """
-                SELECT * FROM rag_documents
-                 WHERE status = ?
-                   AND updated_at <= ?
-                 ORDER BY updated_at
-                 LIMIT ?
-                """,
+                        SELECT * FROM rag_documents
+                         WHERE status = ?
+                           AND updated_at <= ?
+                         ORDER BY updated_at
+                         LIMIT ?
+                        """,
                 rowMapper(),
                 RagDocumentStatus.FAILED.name(),
                 Timestamp.from(cutoff.toInstant()),
@@ -163,12 +166,12 @@ public class JdbcRagDocumentRepository implements RagDocumentRepository {
     public List<RagDocumentRecord> findDeletingBefore(OffsetDateTime cutoff, int limit) {
         return jdbc.query(
                 """
-                SELECT * FROM rag_documents
-                 WHERE status = ?
-                   AND updated_at <= ?
-                 ORDER BY updated_at
-                 LIMIT ?
-                """,
+                        SELECT * FROM rag_documents
+                         WHERE status = ?
+                           AND updated_at <= ?
+                         ORDER BY updated_at
+                         LIMIT ?
+                        """,
                 rowMapper(),
                 RagDocumentStatus.DELETING.name(),
                 Timestamp.from(cutoff.toInstant()),
@@ -177,15 +180,16 @@ public class JdbcRagDocumentRepository implements RagDocumentRepository {
     }
 
     @Override
+    @Transactional
     public void markPending(Long id) {
         // 重新排队时清空上次尝试痕迹，避免旧错误误导补偿逻辑。
         updateUnlessDeleting(
                 """
-                UPDATE rag_documents
-                   SET status = ?, attempt_count = 0, last_error = NULL,
-                       last_attempted_at = NULL, updated_at = now()
-                 WHERE id = ? AND status <> ?
-                """,
+                        UPDATE rag_documents
+                           SET status = ?, attempt_count = 0, last_error = NULL,
+                               last_attempted_at = NULL, updated_at = now()
+                         WHERE id = ? AND status <> ?
+                        """,
                 id,
                 RagDocumentStatus.PENDING.name(),
                 id,
@@ -194,13 +198,14 @@ public class JdbcRagDocumentRepository implements RagDocumentRepository {
     }
 
     @Override
+    @Transactional
     public void requeue(Long id, String note) {
         updateUnlessDeleting(
                 """
-                UPDATE rag_documents
-                   SET status = ?, last_error = ?, updated_at = now()
-                 WHERE id = ? AND status <> ?
-                """,
+                        UPDATE rag_documents
+                           SET status = ?, last_error = ?, updated_at = now()
+                         WHERE id = ? AND status <> ?
+                        """,
                 id,
                 RagDocumentStatus.PENDING.name(),
                 note,
@@ -210,15 +215,16 @@ public class JdbcRagDocumentRepository implements RagDocumentRepository {
     }
 
     @Override
+    @Transactional
     public void markProcessing(Long id) {
         // 每次真正开始处理时才递增 attempt_count，便于统计真实索引尝试次数。
         updateUnlessDeleting(
                 """
-                UPDATE rag_documents
-                   SET status = ?, attempt_count = attempt_count + 1, last_error = NULL,
-                       last_attempted_at = now(), updated_at = now()
-                 WHERE id = ? AND status <> ?
-                """,
+                        UPDATE rag_documents
+                           SET status = ?, attempt_count = attempt_count + 1, last_error = NULL,
+                               last_attempted_at = now(), updated_at = now()
+                         WHERE id = ? AND status <> ?
+                        """,
                 id,
                 RagDocumentStatus.PROCESSING.name(),
                 id,
@@ -227,14 +233,15 @@ public class JdbcRagDocumentRepository implements RagDocumentRepository {
     }
 
     @Override
+    @Transactional
     public void markIndexed(Long id, Long indexedGeneration, int chunkCount, OffsetDateTime indexedAt) {
         // 只有完整索引成功后，才切换当前生效 generation 并清空错误信息。
         updateUnlessDeleting(
                 """
-                UPDATE rag_documents
-                   SET status = ?, indexed_generation = ?, chunk_count = ?, indexed_at = ?, last_error = NULL, updated_at = now()
-                 WHERE id = ? AND status <> ?
-                """,
+                        UPDATE rag_documents
+                           SET status = ?, indexed_generation = ?, chunk_count = ?, indexed_at = ?, last_error = NULL, updated_at = now()
+                         WHERE id = ? AND status <> ?
+                        """,
                 id,
                 RagDocumentStatus.INDEXED.name(),
                 indexedGeneration,
@@ -246,13 +253,14 @@ public class JdbcRagDocumentRepository implements RagDocumentRepository {
     }
 
     @Override
+    @Transactional
     public void markFailed(Long id, String errorMessage) {
         updateUnlessDeleting(
                 """
-                UPDATE rag_documents
-                   SET status = ?, last_error = ?, updated_at = now()
-                 WHERE id = ? AND status <> ?
-                """,
+                        UPDATE rag_documents
+                           SET status = ?, last_error = ?, updated_at = now()
+                         WHERE id = ? AND status <> ?
+                        """,
                 id,
                 RagDocumentStatus.FAILED.name(),
                 errorMessage,
@@ -262,13 +270,14 @@ public class JdbcRagDocumentRepository implements RagDocumentRepository {
     }
 
     @Override
+    @Transactional
     public void markDeleting(Long id, String note) {
         updateRequired(
                 """
-                UPDATE rag_documents
-                   SET status = ?, last_error = ?, updated_at = now()
-                 WHERE id = ?
-                """,
+                        UPDATE rag_documents
+                           SET status = ?, last_error = ?, updated_at = now()
+                         WHERE id = ?
+                        """,
                 id,
                 RagDocumentStatus.DELETING.name(),
                 note,
@@ -288,10 +297,6 @@ public class JdbcRagDocumentRepository implements RagDocumentRepository {
         if (deletedRows == 0) {
             throw new IllegalArgumentException("RAG 文档不存在: " + id);
         }
-    }
-
-    private static OffsetDateTime toOffsetDateTime(Timestamp timestamp) {
-        return timestamp == null ? null : timestamp.toInstant().atOffset(ZoneOffset.UTC);
     }
 
     private String insertSql(Connection connection) throws java.sql.SQLException {
@@ -361,7 +366,7 @@ public class JdbcRagDocumentRepository implements RagDocumentRepository {
     }
 
     private RowMapper<RagDocumentRecord> rowMapper() {
-        return (rs, rowNum) -> new RagDocumentRecord(
+        return (rs, _) -> new RagDocumentRecord(
                 rs.getLong("id"),
                 rs.getString("source_type"),
                 rs.getString("source_uri"),

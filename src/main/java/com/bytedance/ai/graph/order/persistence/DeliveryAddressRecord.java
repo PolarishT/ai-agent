@@ -2,6 +2,9 @@ package com.bytedance.ai.graph.order.persistence;
 
 import java.time.OffsetDateTime;
 
+/**
+ * 订单持久化记录模型。
+ */
 public record DeliveryAddressRecord(
         Long id,
         String userId,

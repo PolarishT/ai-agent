@@ -20,6 +20,9 @@ import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
 
+/**
+ * 订单仓储的 JDBC 实现。
+ */
 @Repository
 public class JdbcCustomerOrderRepository implements CustomerOrderRepository {
 

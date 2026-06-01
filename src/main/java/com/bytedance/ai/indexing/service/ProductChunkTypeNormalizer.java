@@ -25,23 +25,25 @@ public final class ProductChunkTypeNormalizer {
     private ProductChunkTypeNormalizer() {
     }
 
+    /**
+     * 根据文档来源、标题路径和显式 chunk 类型归一化 chunkType。
+     *
+     * @param sourceType  文档来源类型
+     * @param headingPath 当前 chunk 所在 Markdown 标题路径
+     * @param explicit    上游显式指定的 chunk 类型，存在时优先生效
+     * @return {@link RagChunkType} 的枚举名
+     */
     public static String normalize(String sourceType, List<String> headingPath, RagChunkType explicit) {
         if (explicit != null) {
             return explicit.name();
         }
-        if ("PRODUCT_PROFILE".equals(sourceType)) {
-            return RagChunkType.PRODUCT_PROFILE.name();
-        }
-        if ("PRODUCT_FAQ".equals(sourceType)) {
-            return classifyFaqChunk(headingPath).name();
-        }
-        if ("PRODUCT_REVIEW".equals(sourceType)) {
-            return RagChunkType.REVIEW.name();
-        }
-        if ("PRODUCT_REVIEW_SUMMARY".equals(sourceType) || "PRODUCT_KNOWLEDGE".equals(sourceType)) {
-            return RagChunkType.MARKETING.name();
-        }
-        return RagChunkType.PRODUCT_PROFILE.name();
+        return switch (sourceType) {
+            case "PRODUCT_PROFILE" -> RagChunkType.PRODUCT_PROFILE.name();
+            case "PRODUCT_FAQ" -> classifyFaqChunk(headingPath).name();
+            case "PRODUCT_REVIEW" -> RagChunkType.REVIEW.name();
+            case "PRODUCT_REVIEW_SUMMARY", "PRODUCT_KNOWLEDGE" -> RagChunkType.MARKETING.name();
+            case null, default -> RagChunkType.PRODUCT_PROFILE.name();
+        };
     }
 
     private static RagChunkType classifyFaqChunk(List<String> headingPath) {

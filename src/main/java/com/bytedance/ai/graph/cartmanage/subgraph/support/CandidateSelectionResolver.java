@@ -10,6 +10,9 @@ import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * 候选商品选择协调器，结合规则匹配和 LLM 选择结果。
+ */
 public class CandidateSelectionResolver {
 
     private static final Pattern SELECTION_PATTERN = Pattern.compile(

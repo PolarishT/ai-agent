@@ -1,5 +1,8 @@
 package com.bytedance.ai.graph.orchestration;
 
+/**
+ * 导购 Graph 状态 key 常量。
+ */
 public final class GuideGraphStateKeys {
 
     public static final String USER_ID = "userId";

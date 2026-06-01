@@ -1,5 +1,8 @@
 package com.bytedance.ai.graph.intent;
 
+/**
+ * 智能导购支持的主意图枚举。
+ */
 public enum MainIntent {
 
     PRODUCT_RECOMMEND,

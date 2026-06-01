@@ -9,6 +9,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+/**
+ * 购物车状态机守卫，校验状态迁移所需的业务条件。
+ */
 @Component
 public class CartGuard {
 

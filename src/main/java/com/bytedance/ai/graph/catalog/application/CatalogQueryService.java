@@ -11,6 +11,9 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 
+/**
+ * 商品目录查询服务，负责组装商品、SKU 和内容视图。
+ */
 @Service
 class CatalogQueryService implements CatalogQueryFacade {
 

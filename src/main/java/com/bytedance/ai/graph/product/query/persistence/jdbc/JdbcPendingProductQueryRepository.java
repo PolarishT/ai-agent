@@ -19,6 +19,9 @@ import org.springframework.stereotype.Repository;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * 商品查询仓储的 JDBC 实现。
+ */
 @Repository
 public class JdbcPendingProductQueryRepository implements PendingProductQueryRepository {
 

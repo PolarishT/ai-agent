@@ -8,6 +8,9 @@ import org.springframework.util.StringUtils;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
+/**
+ * 主意图识别提示词工厂。
+ */
 @Component
 public class MainIntentPromptFactory {
 

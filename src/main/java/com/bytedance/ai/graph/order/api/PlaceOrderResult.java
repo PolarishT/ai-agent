@@ -2,6 +2,9 @@ package com.bytedance.ai.graph.order.api;
 
 import java.util.List;
 
+/**
+ * 订单流程执行结果。
+ */
 public record PlaceOrderResult(
         boolean placed,
         boolean confirmationRequired,

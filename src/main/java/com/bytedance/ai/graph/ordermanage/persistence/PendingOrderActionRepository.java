@@ -4,6 +4,9 @@ import java.math.BigDecimal;
 import java.util.Map;
 import java.util.Optional;
 
+/**
+ * 订单管理仓储端口，隔离领域逻辑与底层持久化实现。
+ */
 public interface PendingOrderActionRepository {
 
     Optional<PendingOrderActionRecord> findActiveByUserIdAndConversationId(String userId, String conversationId);

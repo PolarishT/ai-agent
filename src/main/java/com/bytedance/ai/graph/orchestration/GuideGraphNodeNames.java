@@ -1,5 +1,8 @@
 package com.bytedance.ai.graph.orchestration;
 
+/**
+ * 导购 Graph 节点名称常量。
+ */
 public final class GuideGraphNodeNames {
 
     public static final String CHECK_CONVERSATION = "check_conversation";

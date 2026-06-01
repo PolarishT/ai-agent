@@ -5,6 +5,9 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Map;
 
+/**
+ * 订单管理持久化记录模型。
+ */
 public record PendingOrderActionRecord(
         Long id,
         String userId,

@@ -3,6 +3,9 @@ package com.bytedance.ai.graph.ordermanage;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+/**
+ * 下单地址快照，固定一次订单确认时使用的收货人和地址信息。
+ */
 public record AddressSnapshot(
         String receiverName,
         String phone,

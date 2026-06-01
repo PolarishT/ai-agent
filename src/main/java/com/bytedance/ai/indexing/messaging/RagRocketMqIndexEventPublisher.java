@@ -2,6 +2,7 @@ package com.bytedance.ai.indexing.messaging;
 
 import com.bytedance.ai.shared.properties.RagProperties;
 import com.bytedance.ai.shared.support.RagJsonCodec;
+import com.bytedance.ai.shared.support.RagLogFields;
 import com.bytedance.ai.shared.support.RagLogHelper;
 import org.apache.rocketmq.client.apis.producer.SendReceipt;
 import org.apache.rocketmq.client.core.RocketMQClientTemplate;
@@ -43,13 +44,15 @@ public class RagRocketMqIndexEventPublisher implements RagIndexEventPublisher {
     @Override
     public String publish(Long documentId, String contentSha256) {
         try {
-            log.info(
-                    "Publishing RAG index message to RocketMQ: documentId={}, contentSha={}, topic={}, tag={}",
-                    documentId,
-                    RagLogHelper.shortSha(contentSha256),
-                    topic,
-                    tag
-            );
+            log.atInfo()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.message.publish.started")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_STARTED)
+                    .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, contentSha256))
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                    .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(contentSha256))
+                    .addKeyValue("rag.rocketmq_topic", topic)
+                    .addKeyValue("rag.rocketmq_tag", tag)
+                    .log("Publishing RAG index message to RocketMQ");
             String payload = jsonCodec.write(
                     new RagIndexMessage(documentId, contentSha256, OffsetDateTime.now())
             );
@@ -60,9 +63,30 @@ public class RagRocketMqIndexEventPublisher implements RagIndexEventPublisher {
                             .setHeader(RocketMQHeaders.KEYS, "rag-doc-" + documentId)
                             .build(), "involutionhell-doc-index" + documentId
             );
-            log.debug("RAG index message published to RocketMQ: documentId={}, contentSha={}, topic={}", documentId, RagLogHelper.shortSha(contentSha256), topic);
-            return receipt == null || receipt.getMessageId() == null ? null : receipt.getMessageId().toString();
+            String messageId = receipt == null || receipt.getMessageId() == null ? null : receipt.getMessageId().toString();
+            log.atInfo()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.message.publish.completed")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_SUCCESS)
+                    .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, contentSha256))
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                    .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(contentSha256))
+                    .addKeyValue(RagLogFields.RAG_MESSAGE_ID, messageId)
+                    .addKeyValue("rag.rocketmq_topic", topic)
+                    .addKeyValue("rag.rocketmq_tag", tag)
+                    .log("RAG index message published to RocketMQ");
+            return messageId;
         } catch (Exception exception) {
+            log.atError()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "rag.index.message.publish.failed")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_FAILURE)
+                    .addKeyValue(RagLogFields.RAG_CORRELATION_ID, RagLogFields.documentCorrelationId(documentId, contentSha256))
+                    .addKeyValue(RagLogFields.RAG_DOCUMENT_ID, documentId)
+                    .addKeyValue(RagLogFields.RAG_CONTENT_SHA, RagLogHelper.shortSha(contentSha256))
+                    .addKeyValue("rag.rocketmq_topic", topic)
+                    .addKeyValue("rag.rocketmq_tag", tag)
+                    .addKeyValue(RagLogFields.RAG_ERROR_SUMMARY, RagLogHelper.errorSummary(exception))
+                    .setCause(exception)
+                    .log("RAG index message publish to RocketMQ failed");
             throw new IllegalStateException("RocketMQ 索引消息发送失败: " + exception.getMessage(), exception);
         }
     }

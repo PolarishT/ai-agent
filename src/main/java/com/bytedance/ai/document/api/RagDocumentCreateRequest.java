@@ -10,6 +10,11 @@ import java.util.Map;
 /**
  * 文档导入请求。
  *
+ * <p>离线商品 JSON 导入不会直接写入向量库；catalog 模块会先把商品、FAQ、评价等 JSON 字段
+ * 渲染成多篇 Markdown 文档，再通过 {@link DocumentCommandFacade#createDocument(RagDocumentCreateRequest)}
+ * 进入 document/indexing 链路。因此该请求对象同时服务于手工 JSON API、Markdown 文件上传和
+ * catalog 离线导入生成的 Markdown 文档。
+ *
  * @param sourceType  文档来源类型
  * @param sourceUri   文档来源 URI
  * @param externalRef 外部引用标识

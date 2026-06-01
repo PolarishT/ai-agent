@@ -7,6 +7,9 @@ import com.bytedance.ai.graph.api.NodeRunStatus;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * 导购 Graph 状态值常量。
+ */
 final class GuideGraphStateValues {
 
     private GuideGraphStateValues() {

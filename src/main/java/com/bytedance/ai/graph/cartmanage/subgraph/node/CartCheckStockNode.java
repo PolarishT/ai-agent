@@ -13,6 +13,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
+/**
+ * 购物车管理子图节点，在执行变更前校验目标商品库存是否满足需求。
+ */
 public class CartCheckStockNode {
 
     private static final Logger log = LoggerFactory.getLogger(CartCheckStockNode.class);

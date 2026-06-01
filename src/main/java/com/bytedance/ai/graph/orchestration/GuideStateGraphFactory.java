@@ -43,6 +43,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
 
+/**
+ * 导购 StateGraph 工厂，集中装配主流程节点和状态流转。
+ */
 @Component
 public class GuideStateGraphFactory {
 

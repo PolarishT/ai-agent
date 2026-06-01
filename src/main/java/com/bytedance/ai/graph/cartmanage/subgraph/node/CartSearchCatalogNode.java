@@ -23,6 +23,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 购物车管理子图节点，根据用户目标商品描述检索目录候选商品。
+ */
 public class CartSearchCatalogNode {
 
     private static final Logger log = LoggerFactory.getLogger(CartSearchCatalogNode.class);

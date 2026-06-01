@@ -4,6 +4,9 @@ import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+/**
+ * 购物车命令对象。
+ */
 public record CartCommand(
         String userId,
         String conversationId,

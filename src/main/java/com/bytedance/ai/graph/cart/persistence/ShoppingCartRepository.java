@@ -5,6 +5,9 @@ import java.math.BigDecimal;
 import java.util.Map;
 import java.util.Optional;
 
+/**
+ * 购物车仓储端口，隔离领域逻辑与底层持久化实现。
+ */
 public interface ShoppingCartRepository {
 
     ShoppingCartRecord create(String userId, String conversationId);

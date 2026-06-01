@@ -22,6 +22,12 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.util.concurrent.Executor;
 
+/**
+ * 索引写侧用例编排服务。
+ *
+ * <p>该服务接收 document 模块提交的索引/清理请求，负责创建工作流命令、
+ * 按配置选择直接投递或 outbox 投递，并保证投递状态与工作流状态在本地事务内保持一致。
+ */
 @Service
 class IndexingCommandService implements IndexingCommandFacade {
 
@@ -56,6 +62,12 @@ class IndexingCommandService implements IndexingCommandFacade {
         this.indexingMetrics = indexingMetrics;
     }
 
+    /**
+     * 提交一次文档索引请求。
+     *
+     * <p>outbox 开启时，本方法只写入 outbox 并推进到 DISPATCHING，实际 MQ 投递由 dispatcher 完成；
+     * outbox 关闭时，会在当前事务提交后直接发送索引事件。
+     */
     @Transactional(propagation = Propagation.REQUIRED, rollbackFor = Exception.class)
     @Override
     public void requestIndexing(Long documentId, String contentSha256, String triggeredBy) {
@@ -128,6 +140,11 @@ class IndexingCommandService implements IndexingCommandFacade {
         }
     }
 
+    /**
+     * 清理文档删除前后的待投递索引状态。
+     *
+     * <p>消息模式下删除 outbox 中的待投递事件；直连模式下异步执行索引数据和文档记录清理。
+     */
     @Override
     public void cleanupPendingIndexing(Long documentId) {
         if (!ragProperties.rocketMq().enabled() || !ragProperties.outbox().enabled()) {

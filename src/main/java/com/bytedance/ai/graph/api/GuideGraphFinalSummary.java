@@ -2,6 +2,9 @@ package com.bytedance.ai.graph.api;
 
 import java.time.Instant;
 
+/**
+ * 导购 Graph 单次回合的最终摘要。
+ */
 public record GuideGraphFinalSummary(
         String runId,
         String requestId,

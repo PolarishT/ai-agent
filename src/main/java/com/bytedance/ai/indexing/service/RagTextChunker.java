@@ -37,6 +37,9 @@ public class RagTextChunker {
 
     /**
      * 将原始 Markdown 全文切分为多个标题感知片段。
+     *
+     * @param content 原始 Markdown 正文
+     * @return 保留标题路径、块类型、代码语言和元数据的文本切片列表
      */
     public List<RagTextChunk> chunk(String content) {
         MarkdownDocumentParser.MarkdownDocument document = markdownDocumentParser.parse(content);

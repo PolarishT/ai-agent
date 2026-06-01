@@ -27,12 +27,22 @@ public class RagIndexTerminalStateService {
         this.outboxRepository = outboxRepository;
     }
 
+    /**
+     * 将索引任务推进到失败终态，并在同一事务中确认对应 outbox 已消费。
+     *
+     * @param command 携带文档版本、消息 ID 和失败上下文的工作流命令
+     */
     @Transactional(rollbackFor = Exception.class)
     public void failAndConfirmConsumed(IndexWorkflowCommand command) {
         workflowService.fail(command);
         confirmConsumed(command);
     }
 
+    /**
+     * 将索引任务推进到跳过终态，并在同一事务中确认对应 outbox 已消费。
+     *
+     * @param command 携带文档版本、消息 ID 和跳过原因的工作流命令
+     */
     @Transactional(rollbackFor = Exception.class)
     public void skipAndConfirmConsumed(IndexWorkflowCommand command) {
         workflowService.skip(command);

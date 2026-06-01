@@ -3,6 +3,9 @@ package com.bytedance.ai.graph.conversation.persistence;
 import com.bytedance.ai.graph.conversation.ConversationMessage;
 import java.util.List;
 
+/**
+ * 会话仓储端口，隔离领域逻辑与底层持久化实现。
+ */
 public interface AgentConversationRepository {
 
     boolean existsConversation(String userId, String conversationId);

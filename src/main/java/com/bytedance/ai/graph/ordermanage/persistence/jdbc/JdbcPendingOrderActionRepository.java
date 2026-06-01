@@ -17,6 +17,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+/**
+ * 订单管理仓储的 JDBC 实现。
+ */
 @Repository
 public class JdbcPendingOrderActionRepository implements PendingOrderActionRepository {
 

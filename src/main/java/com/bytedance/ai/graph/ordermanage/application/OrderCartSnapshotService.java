@@ -12,6 +12,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 订单购物车快照服务，生成下单前的商品、价格和库存快照。
+ */
 @Component
 public class OrderCartSnapshotService {
 

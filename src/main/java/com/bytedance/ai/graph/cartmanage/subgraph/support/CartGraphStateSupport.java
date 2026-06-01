@@ -12,6 +12,9 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * 购物车子图状态读写辅助工具。
+ */
 public final class CartGraphStateSupport {
 
     private static final List<Pattern> PRICE_PATTERNS = List.of(

@@ -13,6 +13,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Map;
 
+/**
+ * 订单管理仓储的 JDBC 实现。
+ */
 @Repository
 public class JdbcMockOrderRepository implements MockOrderRepository {
 

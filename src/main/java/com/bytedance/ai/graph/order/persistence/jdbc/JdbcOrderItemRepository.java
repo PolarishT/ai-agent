@@ -11,6 +11,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
+/**
+ * 订单仓储的 JDBC 实现。
+ */
 @Repository
 public class JdbcOrderItemRepository implements OrderItemRepository {
 

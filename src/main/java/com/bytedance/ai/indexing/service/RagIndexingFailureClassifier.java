@@ -7,6 +7,7 @@ import java.net.ConnectException;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.net.http.HttpTimeoutException;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeoutException;
 import org.springframework.dao.DataAccessException;
@@ -15,69 +16,91 @@ import org.springframework.dao.TransientDataAccessException;
 import org.springframework.stereotype.Component;
 
 /**
- * 将索引异常归类为可重试或不可重试，避免把配置错误反复重试。
+ * 索引失败分类器。
+ *
+ * <p>把底层异常统一归类为可重试/不可重试和稳定 reason，供工作流状态、结构化日志、
+ * 指标和告警共同使用，避免配置错误、鉴权错误等永久失败被无限重试。
  */
 @Component
 public class RagIndexingFailureClassifier {
 
+    private static final RagIndexFailure STALE_MESSAGE = new RagIndexFailure(false, "stale-message");
+    private static final RagIndexFailure INTERRUPTED = new RagIndexFailure(false, "interrupted");
+    private static final RagIndexFailure DATABASE_TRANSIENT = new RagIndexFailure(true, "database-transient");
+    private static final RagIndexFailure DATABASE = new RagIndexFailure(false, "database");
+    private static final RagIndexFailure TIMEOUT = new RagIndexFailure(true, "timeout");
+    private static final RagIndexFailure NETWORK = new RagIndexFailure(true, "network");
+    private static final RagIndexFailure INVALID_REQUEST = new RagIndexFailure(false, "invalid-request");
+    private static final RagIndexFailure EMPTY_DOCUMENT = new RagIndexFailure(false, "empty-document");
+    private static final RagIndexFailure AUTHENTICATION = new RagIndexFailure(false, "authentication");
+    private static final RagIndexFailure NOT_FOUND = new RagIndexFailure(false, "not-found");
+    private static final RagIndexFailure CONFIGURATION = new RagIndexFailure(false, "configuration");
+    private static final RagIndexFailure UNKNOWN = new RagIndexFailure(true, "unknown");
+
+    private static final List<CauseRule> CAUSE_RULES = List.of(
+            new CauseRule(INTERRUPTED, InterruptedException.class),
+            new CauseRule(DATABASE_TRANSIENT, RecoverableDataAccessException.class, TransientDataAccessException.class),
+            new CauseRule(DATABASE, DataAccessException.class),
+            new CauseRule(TIMEOUT, HttpTimeoutException.class, SocketTimeoutException.class, TimeoutException.class),
+            new CauseRule(NETWORK, ConnectException.class, SocketException.class, IOException.class)
+    );
+
+    private static final List<MessageRule> MESSAGE_RULES = List.of(
+            new MessageRule(EMPTY_DOCUMENT, "文档内容为空", "content is empty"),
+            new MessageRule(
+                    AUTHENTICATION,
+                    "api key",
+                    "authentication",
+                    "unauthorized",
+                    "forbidden",
+                    "permission denied",
+                    "鉴权",
+                    "认证"
+            ),
+            new MessageRule(NOT_FOUND, "http 404", "404 - no response body available", "not found"),
+            new MessageRule(
+                    CONFIGURATION,
+                    "must configure",
+                    "invalid configuration",
+                    "embedding dimension",
+                    "vector dimension",
+                    "schema",
+                    "参数错误",
+                    "配置错误"
+            ),
+            new MessageRule(TIMEOUT, "timeout", "deadline exceeded", "temporarily unavailable"),
+            new MessageRule(NETWORK, "connection reset", "connection refused", "broken pipe", "network")
+    );
+
+    /**
+     * 按异常类型链和消息关键词判定失败分类。
+     *
+     * @param throwable 索引链路抛出的异常
+     * @return 失败分类结果
+     */
     public RagIndexFailure classify(Throwable throwable) {
         if (isTerminalWorkflowGuardFailure(throwable)) {
-            return new RagIndexFailure(false, "stale-message");
+            return STALE_MESSAGE;
         }
-        if (containsCause(throwable, InterruptedException.class)) {
-            return new RagIndexFailure(false, "interrupted");
-        }
-        if (containsCause(throwable, RecoverableDataAccessException.class)
-                || containsCause(throwable, TransientDataAccessException.class)) {
-            return new RagIndexFailure(true, "database-transient");
-        }
-        if (containsCause(throwable, DataAccessException.class)) {
-            return new RagIndexFailure(false, "database");
-        }
-        if (containsCause(throwable, HttpTimeoutException.class)
-                || containsCause(throwable, SocketTimeoutException.class)
-                || containsCause(throwable, TimeoutException.class)) {
-            return new RagIndexFailure(true, "timeout");
-        }
-        if (containsCause(throwable, ConnectException.class)
-                || containsCause(throwable, SocketException.class)
-                || containsCause(throwable, IOException.class)) {
-            return new RagIndexFailure(true, "network");
+        for (CauseRule rule : CAUSE_RULES) {
+            if (rule.matches(throwable)) {
+                return rule.failure();
+            }
         }
         if (throwable instanceof IllegalArgumentException) {
-            return new RagIndexFailure(false, "invalid-request");
+            return INVALID_REQUEST;
         }
 
         String message = messageOf(throwable);
-        if (message.contains("文档内容为空") || message.contains("content is empty")) {
-            return new RagIndexFailure(false, "empty-document");
+        for (MessageRule rule : MESSAGE_RULES) {
+            if (rule.matches(message)) {
+                return rule.failure();
+            }
         }
-        if (message.contains("api key") || message.contains("authentication") || message.contains("unauthorized")
-                || message.contains("forbidden") || message.contains("permission denied")
-                || message.contains("鉴权") || message.contains("认证")) {
-            return new RagIndexFailure(false, "authentication");
-        }
-        if (message.contains("http 404") || message.contains("404 - no response body available")
-                || message.contains("not found")) {
-            return new RagIndexFailure(false, "not-found");
-        }
-        if (message.contains("must configure") || message.contains("invalid configuration")
-                || message.contains("embedding dimension") || message.contains("vector dimension")
-                || message.contains("schema") || message.contains("参数错误") || message.contains("配置错误")) {
-            return new RagIndexFailure(false, "configuration");
-        }
-        if (message.contains("timeout") || message.contains("deadline exceeded")
-                || message.contains("temporarily unavailable")) {
-            return new RagIndexFailure(true, "timeout");
-        }
-        if (message.contains("connection reset") || message.contains("connection refused")
-                || message.contains("broken pipe") || message.contains("network")) {
-            return new RagIndexFailure(true, "network");
-        }
-        return new RagIndexFailure(true, "unknown");
+        return UNKNOWN;
     }
 
-    private boolean isTerminalWorkflowGuardFailure(Throwable throwable) {
+    private static boolean isTerminalWorkflowGuardFailure(Throwable throwable) {
         Throwable current = throwable;
         while (current != null) {
             if (current instanceof IndexWorkflowTransitionException) {
@@ -89,7 +112,7 @@ public class RagIndexingFailureClassifier {
         return false;
     }
 
-    private boolean containsCause(Throwable throwable, Class<? extends Throwable> type) {
+    private static boolean containsCause(Throwable throwable, Class<? extends Throwable> type) {
         Throwable current = throwable;
         while (current != null) {
             if (type.isInstance(current)) {
@@ -100,7 +123,7 @@ public class RagIndexingFailureClassifier {
         return false;
     }
 
-    private String messageOf(Throwable throwable) {
+    private static String messageOf(Throwable throwable) {
         Throwable current = throwable;
         while (current != null) {
             if (current.getMessage() != null && !current.getMessage().isBlank()) {
@@ -109,5 +132,38 @@ public class RagIndexingFailureClassifier {
             current = current.getCause();
         }
         return "";
+    }
+
+    private record CauseRule(RagIndexFailure failure, List<Class<? extends Throwable>> types) {
+
+        @SafeVarargs
+        CauseRule(RagIndexFailure failure, Class<? extends Throwable>... types) {
+            this(failure, List.of(types));
+        }
+
+        boolean matches(Throwable throwable) {
+            for (Class<? extends Throwable> type : types) {
+                if (containsCause(throwable, type)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    private record MessageRule(RagIndexFailure failure, List<String> markers) {
+
+        MessageRule(RagIndexFailure failure, String... markers) {
+            this(failure, List.of(markers));
+        }
+
+        boolean matches(String message) {
+            for (String marker : markers) {
+                if (message.contains(marker)) {
+                    return true;
+                }
+            }
+            return false;
+        }
     }
 }
