@@ -9,7 +9,7 @@ import com.bytedance.ai.graph.cartmanage.CartManageAction;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.bytedance.ai.graph.cart.api.CartItemView;
 import com.bytedance.ai.graph.cart.api.CartView;
-import com.bytedance.ai.graph.GuideGraphStateKeys;
+import com.bytedance.ai.graph.orchestration.GuideGraphStateKeys;
 import com.bytedance.ai.graph.api.GuideNodeExecutionResult;
 import com.bytedance.ai.graph.api.NodeRunStatus;
 import com.bytedance.ai.graph.conversation.ConversationMessage;

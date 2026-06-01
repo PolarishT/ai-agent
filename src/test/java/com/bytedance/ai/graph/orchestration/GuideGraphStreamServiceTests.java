@@ -1,4 +1,4 @@
-package com.bytedance.ai.graph;
+package com.bytedance.ai.graph.orchestration;
 
 import com.bytedance.ai.graph.api.AgentStreamEvent;
 import com.bytedance.ai.graph.api.AgentTurnRequest;

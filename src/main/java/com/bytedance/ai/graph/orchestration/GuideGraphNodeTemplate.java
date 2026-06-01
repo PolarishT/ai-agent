@@ -1,4 +1,4 @@
-package com.bytedance.ai.graph;
+package com.bytedance.ai.graph.orchestration;
 
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.bytedance.ai.graph.api.AgentStreamEvent;

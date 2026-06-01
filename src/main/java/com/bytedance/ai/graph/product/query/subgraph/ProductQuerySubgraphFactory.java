@@ -7,7 +7,7 @@ import com.alibaba.cloud.ai.graph.StateGraph;
 import com.alibaba.cloud.ai.graph.action.AsyncEdgeAction;
 import com.alibaba.cloud.ai.graph.action.AsyncNodeAction;
 import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
-import com.bytedance.ai.graph.GuideGraphStateKeys;
+import com.bytedance.ai.graph.orchestration.GuideGraphStateKeys;
 import com.bytedance.ai.graph.conversation.ConversationMessage;
 import com.bytedance.ai.graph.intent.MainIntent;
 import com.bytedance.ai.graph.product.query.persistence.PendingProductQueryAction;

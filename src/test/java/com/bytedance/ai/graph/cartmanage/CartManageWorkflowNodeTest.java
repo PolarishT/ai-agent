@@ -10,7 +10,7 @@ import com.alibaba.cloud.ai.graph.OverAllState;
 import com.bytedance.ai.graph.cart.api.CartItemView;
 import com.bytedance.ai.graph.cart.api.CartState;
 import com.bytedance.ai.graph.cart.api.CartView;
-import com.bytedance.ai.graph.GuideGraphStateKeys;
+import com.bytedance.ai.graph.orchestration.GuideGraphStateKeys;
 import com.bytedance.ai.graph.api.GuideNodeExecutionResult;
 import com.bytedance.ai.graph.api.NodeRunStatus;
 import org.junit.jupiter.api.Test;

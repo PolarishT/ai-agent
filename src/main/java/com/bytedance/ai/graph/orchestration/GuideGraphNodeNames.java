@@ -1,4 +1,4 @@
-package com.bytedance.ai.graph;
+package com.bytedance.ai.graph.orchestration;
 
 public final class GuideGraphNodeNames {
 

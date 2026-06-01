@@ -12,7 +12,7 @@ import com.bytedance.ai.graph.cart.api.CartQueryFacade;
 import com.bytedance.ai.graph.cart.api.CartView;
 import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
-import com.bytedance.ai.graph.GuideGraphStateKeys;
+import com.bytedance.ai.graph.orchestration.GuideGraphStateKeys;
 import com.bytedance.ai.graph.cartmanage.persistence.PendingCartActionRepository;
 import com.bytedance.ai.graph.ordermanage.application.OrderAddressResolver;
 import com.bytedance.ai.graph.ordermanage.application.OrderCartSnapshotService;
