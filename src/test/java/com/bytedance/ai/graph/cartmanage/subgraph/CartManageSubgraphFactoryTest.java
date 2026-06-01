@@ -14,6 +14,7 @@ import com.bytedance.ai.graph.cartmanage.application.ProductCatalogResolver;
 import com.bytedance.ai.graph.cartmanage.StockResult;
 import com.bytedance.ai.graph.cartmanage.persistence.PendingCartActionRecord;
 import com.bytedance.ai.graph.cartmanage.persistence.PendingCartActionRepository;
+import com.bytedance.ai.graph.cartmanage.subgraph.support.CandidateSelectionResolver;
 import com.bytedance.ai.graph.intent.support.SlotKeys;
 import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
@@ -793,38 +794,38 @@ class CartManageSubgraphFactoryTest {
 
     @Test
     void parseSelectionIndexSupportsChineseAndArabicOrdinalExpressions() {
-        CartManageSubgraphFactory factory = factoryForSelectionParsing(StubCandidateSelectionLlm.unmatched());
+        CandidateSelectionResolver resolver = new CandidateSelectionResolver(StubCandidateSelectionLlm.unmatched());
 
-        assertThat(factory.parseSelectionIndex("我选择第一个", 2)).isEqualTo(1);
-        assertThat(factory.parseSelectionIndex("我要第二个", 3)).isEqualTo(2);
-        assertThat(factory.parseSelectionIndex("选第 1 个", 2)).isEqualTo(1);
-        assertThat(factory.parseSelectionIndex("1", 2)).isEqualTo(1);
-        assertThat(factory.parseSelectionIndex("就这个", 1)).isEqualTo(1);
-        assertThat(factory.parseSelectionIndex("就这个", 2)).isEqualTo(-1);
+        assertThat(resolver.parseSelectionIndex("我选择第一个", 2)).isEqualTo(1);
+        assertThat(resolver.parseSelectionIndex("我要第二个", 3)).isEqualTo(2);
+        assertThat(resolver.parseSelectionIndex("选第 1 个", 2)).isEqualTo(1);
+        assertThat(resolver.parseSelectionIndex("1", 2)).isEqualTo(1);
+        assertThat(resolver.parseSelectionIndex("就这个", 1)).isEqualTo(1);
+        assertThat(resolver.parseSelectionIndex("就这个", 2)).isEqualTo(-1);
     }
 
     @Test
     void attributeMatchSelectsUniqueCandidateByColor() {
-        CartManageSubgraphFactory factory = factoryForSelectionParsing(StubCandidateSelectionLlm.unmatched());
+        CandidateSelectionResolver resolver = new CandidateSelectionResolver(StubCandidateSelectionLlm.unmatched());
         List<ProductCandidate> candidates = List.of(
                 candidate("101", "SKU-1", "通勤包", "NorthFace", "color=黑色", "SPU-101"),
                 candidate("102", "SKU-2", "通勤包", "NorthFace", "color=藏青", "SPU-102")
         );
 
-        assertThat(factory.attributeMatch("我要黑色的", candidates).selectedIndex()).isEqualTo(1);
-        assertThat(factory.attributeMatch("藏青色那个", candidates).selectedIndex()).isEqualTo(2);
+        assertThat(resolver.attributeMatch("我要黑色的", candidates).selectedIndex()).isEqualTo(1);
+        assertThat(resolver.attributeMatch("藏青色那个", candidates).selectedIndex()).isEqualTo(2);
     }
 
     @Test
     void attributeMatchReportsAmbiguousWhenMultipleCandidatesMatch() {
-        CartManageSubgraphFactory factory = factoryForSelectionParsing(StubCandidateSelectionLlm.unmatched());
+        CandidateSelectionResolver resolver = new CandidateSelectionResolver(StubCandidateSelectionLlm.unmatched());
         List<ProductCandidate> candidates = List.of(
                 candidate("101", "SKU-1", "通勤包", "NorthFace", "color=黑色", "SPU-101"),
                 candidate("102", "SKU-2", "通勤包", "NorthFace", "color=藏青", "SPU-102")
         );
 
-        assertThat(factory.attributeMatch("NorthFace 那个", candidates).status())
-                .isEqualTo(CartManageSubgraphFactory.CandidateSelectionStatus.AMBIGUOUS);
+        assertThat(resolver.attributeMatch("NorthFace 那个", candidates).status())
+                .isEqualTo(CandidateSelectionResolver.CandidateSelectionStatus.AMBIGUOUS);
     }
 
     @Test
@@ -1010,18 +1011,6 @@ class CartManageSubgraphFactoryTest {
 
     private static ProductCandidate candidate(String productId, String skuId, String name) {
         return new ProductCandidate(productId, skuId, name, new BigDecimal("9.90"), "brand", "spec", "SPU-" + productId);
-    }
-
-    private CartManageSubgraphFactory factoryForSelectionParsing(CandidateSelectionLlmService candidateSelectionLlmService) {
-        return new CartManageSubgraphFactory(
-                (userId, conversationId) -> cart(),
-                new StubCartCommand(),
-                (productId, skuId, requested) -> StockResult.inStock(productId, skuId, requested),
-                ProductCatalogResolver.empty(),
-                new StubPendingRepository(),
-                new StubSlotFilling(CartManageSlots.unknown("unused")),
-                candidateSelectionLlmService
-        );
     }
 
     private static ProductCandidate candidate(
