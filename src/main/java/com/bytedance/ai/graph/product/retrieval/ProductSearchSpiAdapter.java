@@ -10,7 +10,6 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -93,7 +92,7 @@ class ProductSearchSpiAdapter implements ProductSearchSpi {
             semanticFuture = CompletableFuture.completedFuture(List.of());
         } else {
             semanticFuture = CompletableFuture
-                    .supplyAsync(() -> semanticRetriever.search(semanticQuery, condition, semanticCandidateTopK),
+                    .supplyAsync(() -> semanticRetriever.search(semanticQuery, condition, intent, semanticCandidateTopK),
                             ragVirtualThreadExecutor);
             long semanticTimeout = ragProperties.productQuery().semanticTimeoutMillis();
             if (semanticTimeout > 0) {

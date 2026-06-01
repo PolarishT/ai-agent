@@ -8,22 +8,21 @@ import com.bytedance.ai.graph.api.GuideGraphIntent;
 import com.bytedance.ai.graph.api.GuideGraphRequest;
 import com.bytedance.ai.graph.api.GuideNodeExecutionResult;
 import com.bytedance.ai.graph.api.NodeRunStatus;
-import com.bytedance.ai.graph.cartmanage.CartCommandService;
+import com.bytedance.ai.graph.cartmanage.application.CartCommandService;
 import com.bytedance.ai.graph.cartmanage.CartManageAction;
-import com.bytedance.ai.graph.cartmanage.CartManageSlotFillingService;
+import com.bytedance.ai.graph.cartmanage.application.CartManageSlotFillingService;
 import com.bytedance.ai.graph.cartmanage.CartManageSlots;
-import com.bytedance.ai.graph.cartmanage.CartManageWorkflowNode;
+import com.bytedance.ai.graph.cartmanage.application.CartManageWorkflowNode;
 import com.bytedance.ai.graph.cartmanage.CartMutationResult;
 import com.bytedance.ai.graph.cartmanage.ProductCandidate;
-import com.bytedance.ai.graph.cartmanage.ProductCatalogResolver;
+import com.bytedance.ai.graph.cartmanage.application.ProductCatalogResolver;
 import com.bytedance.ai.graph.cartmanage.StockResult;
 import com.bytedance.ai.graph.cartmanage.subgraph.CartGraphStateKeys;
-import com.bytedance.ai.graph.conversation.AgentConversationRepository;
+import com.bytedance.ai.graph.conversation.persistence.AgentConversationRepository;
 import com.bytedance.ai.graph.conversation.ConversationMessage;
 import com.bytedance.ai.graph.intent.MainIntentDecision;
-import com.bytedance.ai.graph.intent.MainIntentRouterService;
+import com.bytedance.ai.graph.intent.service.MainIntentRouterService;
 import org.junit.jupiter.api.Test;
-
 import java.math.BigDecimal;
 import java.net.SocketTimeoutException;
 import java.time.OffsetDateTime;
@@ -34,7 +33,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-
 import static org.assertj.core.api.Assertions.assertThat;
 
 class GuideGraphStreamServiceTests {

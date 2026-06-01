@@ -1,8 +1,8 @@
 package com.bytedance.ai.graph.intent;
 
+import com.bytedance.ai.graph.intent.service.MainIntentPromptFactory;
 import com.bytedance.ai.graph.intent.config.IntentLlmProperties;
 import org.junit.jupiter.api.Test;
-
 import static org.assertj.core.api.Assertions.assertThat;
 
 class MainIntentPromptFactoryTest {

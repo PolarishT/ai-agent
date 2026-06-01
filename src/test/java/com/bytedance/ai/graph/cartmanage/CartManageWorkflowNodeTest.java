@@ -1,5 +1,11 @@
 package com.bytedance.ai.graph.cartmanage;
 
+import com.bytedance.ai.graph.cartmanage.application.CartManageWorkflowNode;
+import com.bytedance.ai.graph.cartmanage.application.CartManageSlotFillingService;
+import com.bytedance.ai.graph.cartmanage.application.ProductCatalogResolver;
+import com.bytedance.ai.graph.cartmanage.application.InventoryQueryService;
+import com.bytedance.ai.graph.cartmanage.application.CartQueryService;
+import com.bytedance.ai.graph.cartmanage.application.CartCommandService;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.bytedance.ai.graph.cart.api.CartItemView;
 import com.bytedance.ai.graph.cart.api.CartState;
@@ -8,13 +14,11 @@ import com.bytedance.ai.graph.GuideGraphStateKeys;
 import com.bytedance.ai.graph.api.GuideNodeExecutionResult;
 import com.bytedance.ai.graph.api.NodeRunStatus;
 import org.junit.jupiter.api.Test;
-
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-
 import static org.assertj.core.api.Assertions.assertThat;
 
 class CartManageWorkflowNodeTest {

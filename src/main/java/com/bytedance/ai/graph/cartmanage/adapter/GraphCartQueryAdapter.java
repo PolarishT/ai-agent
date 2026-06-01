@@ -2,7 +2,7 @@ package com.bytedance.ai.graph.cartmanage.adapter;
 
 import com.bytedance.ai.graph.cart.api.CartQueryFacade;
 import com.bytedance.ai.graph.cart.api.CartView;
-import com.bytedance.ai.graph.cartmanage.CartQueryService;
+import com.bytedance.ai.graph.cartmanage.application.CartQueryService;
 import org.springframework.stereotype.Service;
 
 /**

@@ -9,12 +9,18 @@ import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
 import com.bytedance.ai.graph.GuideGraphStateKeys;
-import com.bytedance.ai.graph.cartmanage.CartCommandService;
+import com.bytedance.ai.graph.cartmanage.application.CartCommandService;
 import com.bytedance.ai.graph.cartmanage.CartMutationResult;
-import com.bytedance.ai.graph.cartmanage.subgraph.PendingCartActionRepository;
+import com.bytedance.ai.graph.cartmanage.persistence.PendingCartActionRepository;
+import com.bytedance.ai.graph.ordermanage.application.OrderAddressResolver;
+import com.bytedance.ai.graph.ordermanage.application.OrderCartSnapshotService;
+import com.bytedance.ai.graph.ordermanage.application.OrderCommandService;
+import com.bytedance.ai.graph.ordermanage.persistence.MockOrderRecord;
+import com.bytedance.ai.graph.ordermanage.persistence.MockOrderRepository;
+import com.bytedance.ai.graph.ordermanage.persistence.PendingOrderActionRecord;
+import com.bytedance.ai.graph.ordermanage.persistence.PendingOrderActionRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
-
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
@@ -22,7 +28,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-
 import static org.assertj.core.api.Assertions.assertThat;
 
 class OrderManageSubgraphFactoryTest {

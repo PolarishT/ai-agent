@@ -10,9 +10,9 @@ import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
 import com.bytedance.ai.graph.GuideGraphStateKeys;
 import com.bytedance.ai.graph.conversation.ConversationMessage;
 import com.bytedance.ai.graph.intent.MainIntent;
-import com.bytedance.ai.graph.product.query.PendingProductQueryAction;
-import com.bytedance.ai.graph.product.query.PendingProductQueryRepository;
-import com.bytedance.ai.graph.product.query.PendingProductQueryStatus;
+import com.bytedance.ai.graph.product.query.persistence.PendingProductQueryAction;
+import com.bytedance.ai.graph.product.query.persistence.PendingProductQueryRepository;
+import com.bytedance.ai.graph.product.query.persistence.PendingProductQueryStatus;
 import com.bytedance.ai.graph.product.query.ProductComparisonResult;
 import com.bytedance.ai.graph.product.query.ProductHydrationOptions;
 import com.bytedance.ai.graph.product.query.ProductQueryCondition;
@@ -244,7 +244,7 @@ public class ProductQuerySubgraphFactory {
         );
         // 调试观测：slot / PG hard-filter / Milvus filter / 意图决定的 hydrate 范围
         debugLogger.logSlots(condition);
-        debugLogger.logFilters(condition);
+        debugLogger.logFilters(condition, intent);
         debugLogger.logIntent(intent, hydrationOptions);
         Map<String, Object> updates = new LinkedHashMap<>();
         updates.put(ProductQueryGraphStateKeys.PRODUCT_SEARCH_FILTER, filter);

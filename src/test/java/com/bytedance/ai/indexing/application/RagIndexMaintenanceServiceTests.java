@@ -4,7 +4,7 @@ import com.bytedance.ai.indexing.model.RagIndexJobStatus;
 import com.bytedance.ai.indexing.model.RagIndexStage;
 import com.bytedance.ai.indexing.persistence.RagIndexJobRecord;
 import com.bytedance.ai.indexing.persistence.RagIndexJobRepository;
-import com.bytedance.ai.indexing.persistence.jdbcImpl.JdbcRagIndexJobRepository;
+import com.bytedance.ai.indexing.persistence.jdbc.JdbcRagIndexJobRepository;
 import com.bytedance.ai.indexing.workflow.IndexWorkflowCommand;
 import com.bytedance.ai.indexing.workflow.IndexWorkflowService;
 import com.bytedance.ai.shared.properties.RagProperties;
@@ -21,7 +21,6 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
-
 import static org.assertj.core.api.Assertions.assertThat;
 
 class RagIndexMaintenanceServiceTests {

@@ -3,11 +3,10 @@ package com.bytedance.ai.graph.cartmanage.adapter;
 import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
-import com.bytedance.ai.graph.cartmanage.InventoryQueryService;
+import com.bytedance.ai.graph.cartmanage.application.InventoryQueryService;
 import com.bytedance.ai.graph.cartmanage.StockResult;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
-
 import java.util.List;
 
 /**

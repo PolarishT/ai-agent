@@ -4,10 +4,9 @@ import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
 import com.bytedance.ai.graph.cartmanage.ProductCandidate;
-import com.bytedance.ai.graph.cartmanage.ProductCatalogResolver;
+import com.bytedance.ai.graph.cartmanage.application.ProductCatalogResolver;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
-
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;

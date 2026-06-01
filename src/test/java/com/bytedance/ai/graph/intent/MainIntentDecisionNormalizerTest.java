@@ -1,10 +1,9 @@
 package com.bytedance.ai.graph.intent;
 
+import com.bytedance.ai.graph.intent.service.MainIntentDecisionNormalizer;
 import org.junit.jupiter.api.Test;
-
 import java.util.List;
 import java.util.Map;
-
 import static org.assertj.core.api.Assertions.assertThat;
 
 class MainIntentDecisionNormalizerTest {

@@ -6,7 +6,7 @@ import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.bytedance.ai.graph.api.AgentStreamEvent;
 import com.bytedance.ai.graph.api.*;
 import com.bytedance.ai.graph.cartmanage.subgraph.CartGraphStateKeys;
-import com.bytedance.ai.graph.conversation.AgentConversationRepository;
+import com.bytedance.ai.graph.conversation.persistence.AgentConversationRepository;
 import com.bytedance.ai.graph.product.query.ProductQueryGraphStateKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,7 +15,6 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
-
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;

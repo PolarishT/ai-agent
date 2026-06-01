@@ -5,16 +5,17 @@ import com.bytedance.ai.graph.cart.api.CartItemView;
 import com.bytedance.ai.graph.cart.api.CartState;
 import com.bytedance.ai.graph.cart.api.CartView;
 import com.bytedance.ai.graph.GuideGraphStateKeys;
-import com.bytedance.ai.graph.cartmanage.CartCommandService;
-import com.bytedance.ai.graph.cartmanage.CartManageSlotFillingService;
+import com.bytedance.ai.graph.cartmanage.application.CartCommandService;
+import com.bytedance.ai.graph.cartmanage.application.CartManageSlotFillingService;
 import com.bytedance.ai.graph.cartmanage.CartManageSlots;
 import com.bytedance.ai.graph.cartmanage.CartMutationResult;
 import com.bytedance.ai.graph.cartmanage.ProductCandidate;
-import com.bytedance.ai.graph.cartmanage.ProductCatalogResolver;
+import com.bytedance.ai.graph.cartmanage.application.ProductCatalogResolver;
 import com.bytedance.ai.graph.cartmanage.StockResult;
+import com.bytedance.ai.graph.cartmanage.persistence.PendingCartActionRecord;
+import com.bytedance.ai.graph.cartmanage.persistence.PendingCartActionRepository;
 import com.bytedance.ai.graph.intent.support.SlotKeys;
 import org.junit.jupiter.api.Test;
-
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -22,7 +23,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-
 import static org.assertj.core.api.Assertions.assertThat;
 
 class CartManageSubgraphFactoryTest {

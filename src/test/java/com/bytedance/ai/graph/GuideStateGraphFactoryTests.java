@@ -9,26 +9,26 @@ import com.bytedance.ai.graph.catalog.api.CatalogInventoryFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
-import com.bytedance.ai.graph.cartmanage.CartCommandService;
+import com.bytedance.ai.graph.cartmanage.application.CartCommandService;
 import com.bytedance.ai.graph.cartmanage.CartMutationResult;
-import com.bytedance.ai.graph.cartmanage.subgraph.PendingCartActionRepository;
+import com.bytedance.ai.graph.cartmanage.persistence.PendingCartActionRepository;
 import com.bytedance.ai.graph.api.GuideGraphIntent;
 import com.bytedance.ai.graph.api.GuideNodeExecutionResult;
 import com.bytedance.ai.graph.api.GuideNodeResult;
 import com.bytedance.ai.graph.cartmanage.subgraph.CartGraphStateKeys;
 import com.bytedance.ai.graph.cartmanage.subgraph.CartWorkflowStatus;
-import com.bytedance.ai.graph.conversation.AgentConversationRepository;
-import com.bytedance.ai.graph.conversation.JdbcAgentConversationRepository;
+import com.bytedance.ai.graph.conversation.persistence.AgentConversationRepository;
+import com.bytedance.ai.graph.conversation.persistence.jdbc.JdbcAgentConversationRepository;
 import com.bytedance.ai.graph.ordermanage.AddressSnapshot;
-import com.bytedance.ai.graph.ordermanage.MockOrderRecord;
-import com.bytedance.ai.graph.ordermanage.MockOrderRepository;
-import com.bytedance.ai.graph.ordermanage.OrderCartSnapshotService;
-import com.bytedance.ai.graph.ordermanage.OrderCommandService;
+import com.bytedance.ai.graph.ordermanage.persistence.MockOrderRecord;
+import com.bytedance.ai.graph.ordermanage.persistence.MockOrderRepository;
+import com.bytedance.ai.graph.ordermanage.application.OrderCartSnapshotService;
+import com.bytedance.ai.graph.ordermanage.application.OrderCommandService;
 import com.bytedance.ai.graph.ordermanage.OrderManageStateKeys;
 import com.bytedance.ai.graph.ordermanage.OrderManageStatus;
 import com.bytedance.ai.graph.ordermanage.OrderManageSubgraphFactory;
-import com.bytedance.ai.graph.ordermanage.PendingOrderActionRecord;
-import com.bytedance.ai.graph.ordermanage.PendingOrderActionRepository;
+import com.bytedance.ai.graph.ordermanage.persistence.PendingOrderActionRecord;
+import com.bytedance.ai.graph.ordermanage.persistence.PendingOrderActionRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -36,14 +36,12 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
-
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-
 import static org.assertj.core.api.Assertions.assertThat;
 
 class GuideStateGraphFactoryTests {
@@ -460,7 +458,7 @@ class GuideStateGraphFactoryTests {
                     (userId, conversationId) -> this.cart,
                     catalog,
                     pending,
-                    new com.bytedance.ai.graph.ordermanage.OrderAddressResolver(),
+                    new com.bytedance.ai.graph.ordermanage.application.OrderAddressResolver(),
                     snapshots,
                     commandService,
                     provider((PendingCartActionRepository) null)
