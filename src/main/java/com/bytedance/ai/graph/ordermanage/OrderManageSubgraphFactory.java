@@ -12,14 +12,13 @@ import com.bytedance.ai.graph.cart.api.CartQueryFacade;
 import com.bytedance.ai.graph.cart.api.CartView;
 import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
+import com.bytedance.ai.graph.conversation.context.ConversationContextItemStatus;
+import com.bytedance.ai.graph.conversation.context.ConversationContextManager;
+import com.bytedance.ai.graph.conversation.context.ConversationRuntimeContext;
 import com.bytedance.ai.graph.orchestration.GuideGraphStateKeys;
-import com.bytedance.ai.graph.cartmanage.persistence.PendingCartActionRepository;
 import com.bytedance.ai.graph.ordermanage.application.OrderAddressResolver;
 import com.bytedance.ai.graph.ordermanage.application.OrderCartSnapshotService;
 import com.bytedance.ai.graph.ordermanage.application.OrderCommandService;
-import com.bytedance.ai.graph.ordermanage.persistence.PendingOrderActionRecord;
-import com.bytedance.ai.graph.ordermanage.persistence.PendingOrderActionRepository;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import java.math.BigDecimal;
@@ -37,28 +36,25 @@ public class OrderManageSubgraphFactory {
 
     private final CartQueryFacade cartQueryFacade;
     private final CatalogQueryFacade catalogQueryFacade;
-    private final PendingOrderActionRepository pendingRepository;
+    private final ConversationContextManager conversationContextManager;
     private final OrderAddressResolver addressResolver;
     private final OrderCartSnapshotService snapshotService;
     private final OrderCommandService orderCommandService;
-    private final PendingCartActionRepository pendingCartActionRepository;
 
     public OrderManageSubgraphFactory(
             CartQueryFacade cartQueryFacade,
             CatalogQueryFacade catalogQueryFacade,
-            PendingOrderActionRepository pendingRepository,
+            ConversationContextManager conversationContextManager,
             OrderAddressResolver addressResolver,
             OrderCartSnapshotService snapshotService,
-            OrderCommandService orderCommandService,
-            ObjectProvider<PendingCartActionRepository> pendingCartActionRepositoryProvider
+            OrderCommandService orderCommandService
     ) {
         this.cartQueryFacade = cartQueryFacade;
         this.catalogQueryFacade = catalogQueryFacade;
-        this.pendingRepository = pendingRepository;
+        this.conversationContextManager = conversationContextManager;
         this.addressResolver = addressResolver;
         this.snapshotService = snapshotService;
         this.orderCommandService = orderCommandService;
-        this.pendingCartActionRepository = pendingCartActionRepositoryProvider.getIfAvailable();
     }
 
     public StateGraph build() {
@@ -115,29 +111,36 @@ public class OrderManageSubgraphFactory {
         Map<String, Object> updates = new LinkedHashMap<>();
         clearTransientState(updates);
 
-        Optional<PendingOrderActionRecord> pending = pendingRepository
-                .findActiveByUserIdAndConversationId(userId, conversationId);
-        if (pending.isPresent()) {
-            PendingOrderActionRecord record = pending.get();
-            if (record.expireAt() != null && record.expireAt().isBefore(LocalDateTime.now())) {
-                pendingRepository.markExpired(record.id());
+        ConversationRuntimeContext context = state.value(
+                GuideGraphStateKeys.CONVERSATION_CONTEXT,
+                ConversationRuntimeContext.class
+        ).orElse(null);
+        ConversationRuntimeContext.OrderContext order = context == null ? null : context.order();
+        if (order != null) {
+            if (order.expiresAt() != null && order.expiresAt().isBefore(LocalDateTime.now())) {
+                conversationContextManager.markContextItemStatus(
+                        order.contextItemId(),
+                        ConversationContextItemStatus.EXPIRED
+                );
                 updates.put(OrderManageStateKeys.ORDER_STATUS, OrderManageStatus.EXPIRED.name());
                 updates.put(OrderManageStateKeys.NODE_MESSAGE, "本次下单确认已过期，请重新发送‘结算购物车’。");
                 updates.put(OrderManageStateKeys.NEED_USER_INPUT, false);
             } else {
-                writePending(updates, record);
+                writeOrderContext(updates, order);
             }
         }
-        if (pendingCartActionRepository != null && looksLikeCheckout(message)) {
-            pendingCartActionRepository.findActiveByUserIdAndConversationId(userId, conversationId)
-                    .ifPresent(record -> pendingCartActionRepository.markCancelled(record.id()));
+        if (context != null && context.pendingClarification() != null && looksLikeCheckout(message)) {
+            conversationContextManager.markContextItemStatus(
+                    context.pendingClarification().contextItemId(),
+                    ConversationContextItemStatus.CANCELLED
+            );
         }
         return updates;
     }
 
     private Map<String, Object> orderResolveAction(OverAllState state) {
         String message = state.value(GuideGraphStateKeys.MESSAGE, "");
-        boolean hasPending = state.value(OrderManageStateKeys.PENDING_ORDER_ACTION_ID).isPresent();
+        boolean hasPending = state.value(OrderManageStateKeys.ORDER_CONTEXT_ITEM_ID).isPresent();
         OrderManageStatus status = parseStatus(state.value(OrderManageStateKeys.ORDER_STATUS, ""));
         OrderManageAction action;
         if (hasPending && looksLikeCancel(message)) {
@@ -177,23 +180,26 @@ public class OrderManageSubgraphFactory {
         Map<String, Object> cartSnapshot = snapshotService.snapshot(cart);
         String cartSnapshotHash = snapshotService.hash(cartSnapshot);
         BigDecimal amount = snapshotService.amount(cart);
-        LocalDateTime now = LocalDateTime.now();
-        PendingOrderActionRecord pending = pendingRepository.save(new PendingOrderActionRecord(
-                null,
+        ConversationRuntimeContext.OrderContext orderContext = conversationContextManager.updateOrderContext(
                 userId,
                 conversationId,
-                cartSnapshot,
-                cartSnapshotHash,
-                Map.of(),
-                amount,
-                OrderManageStatus.WAITING_ADDRESS,
-                null,
-                null,
-                now,
-                now,
-                now.plusMinutes(30)
-        ));
-        writePending(updates, pending);
+                state.value(GuideGraphStateKeys.RUN_ID, ""),
+                "order_manage_workflow",
+                new ConversationRuntimeContext.OrderContext(
+                        null,
+                        cartSnapshot,
+                        cartSnapshotHash,
+                        Map.of(),
+                        amount,
+                        OrderManageStatus.WAITING_ADDRESS.name(),
+                        null,
+                        null,
+                        LocalDateTime.now().plusMinutes(30),
+                        Map.of()
+                ),
+                LocalDateTime.now().plusMinutes(30)
+        );
+        writeOrderContext(updates, orderContext);
         updates.put("orderLoadCartRoute", "HAS_CART");
         return updates;
     }
@@ -208,7 +214,10 @@ public class OrderManageSubgraphFactory {
         Map<String, Object> updates = new LinkedHashMap<>();
         String stockError = validateStock(cartQueryFacade.getActiveCart(userId, conversationId));
         if (stockError != null) {
-            pendingId(state).ifPresent(id -> pendingRepository.markFailed(id, stockError));
+            pendingId(state).ifPresent(id -> conversationContextManager.markContextItemStatus(
+                    id,
+                    ConversationContextItemStatus.FAILED
+            ));
             updates.put(OrderManageStateKeys.ORDER_STATUS, OrderManageStatus.FAILED.name());
             updates.put(OrderManageStateKeys.ERROR_REASON, stockError);
             updates.put(OrderManageStateKeys.NODE_MESSAGE, "部分商品库存不足，暂时无法下单：" + stockError);
@@ -242,7 +251,6 @@ public class OrderManageSubgraphFactory {
         }
         AddressParseResult parsed = addressResolver.parse(state.value(GuideGraphStateKeys.MESSAGE, ""));
         if (!parsed.complete()) {
-            pendingRepository.markWaitingAddress(pendingId.get());
             updates.put(OrderManageStateKeys.ORDER_STATUS, OrderManageStatus.WAITING_ADDRESS.name());
             updates.put(OrderManageStateKeys.NODE_MESSAGE, addressResolver.missingFieldsMessage(parsed.missingFields()));
             updates.put(OrderManageStateKeys.NEED_USER_INPUT, true);
@@ -250,7 +258,15 @@ public class OrderManageSubgraphFactory {
             return updates;
         }
         Map<String, Object> address = parsed.snapshot().toMap();
-        pendingRepository.updateAddress(pendingId.get(), address);
+        ConversationRuntimeContext.OrderContext updated = conversationContextManager.updateOrderContext(
+                requiredString(state, GuideGraphStateKeys.USER_ID),
+                requiredString(state, GuideGraphStateKeys.CONVERSATION_ID),
+                state.value(GuideGraphStateKeys.RUN_ID, ""),
+                "order_manage_workflow",
+                orderContextFromState(state, OrderManageStatus.WAITING_ADDRESS.name(), address, null, null),
+                LocalDateTime.now().plusMinutes(30)
+        );
+        updates.put(OrderManageStateKeys.ORDER_CONTEXT_ITEM_ID, updated.contextItemId());
         updates.put(OrderManageStateKeys.ADDRESS_SNAPSHOT, address);
         updates.put("orderResolveAddressRoute", "ADDRESS_READY");
         return updates;
@@ -263,14 +279,32 @@ public class OrderManageSubgraphFactory {
     private Map<String, Object> orderBuildSummary(OverAllState state) {
         String userId = requiredString(state, GuideGraphStateKeys.USER_ID);
         String conversationId = requiredString(state, GuideGraphStateKeys.CONVERSATION_ID);
-        Long pendingId = pendingId(state).orElseThrow();
         CartView cart = cartQueryFacade.getActiveCart(userId, conversationId);
         Map<String, Object> cartSnapshot = snapshotService.snapshot(cart);
         String cartSnapshotHash = snapshotService.hash(cartSnapshot);
         BigDecimal amount = snapshotService.amount(cart);
         Map<String, Object> address = state.value(OrderManageStateKeys.ADDRESS_SNAPSHOT, Map.<String, Object>of());
-        pendingRepository.markWaitingConfirmation(pendingId, cartSnapshot, cartSnapshotHash, address, amount);
+        ConversationRuntimeContext.OrderContext updated = conversationContextManager.updateOrderContext(
+                userId,
+                conversationId,
+                state.value(GuideGraphStateKeys.RUN_ID, ""),
+                "order_manage_workflow",
+                new ConversationRuntimeContext.OrderContext(
+                        null,
+                        cartSnapshot,
+                        cartSnapshotHash,
+                        address,
+                        amount,
+                        OrderManageStatus.WAITING_CONFIRMATION.name(),
+                        null,
+                        null,
+                        LocalDateTime.now().plusMinutes(30),
+                        Map.of()
+                ),
+                LocalDateTime.now().plusMinutes(30)
+        );
         return Map.of(
+                OrderManageStateKeys.ORDER_CONTEXT_ITEM_ID, updated.contextItemId(),
                 OrderManageStateKeys.ORDER_STATUS, OrderManageStatus.WAITING_CONFIRMATION.name(),
                 OrderManageStateKeys.CART_SNAPSHOT, cartSnapshot,
                 OrderManageStateKeys.CART_SNAPSHOT_HASH, cartSnapshotHash,
@@ -300,10 +334,10 @@ public class OrderManageSubgraphFactory {
             updates.put(OrderManageStateKeys.NODE_MESSAGE, "当前没有等待确认的订单，不能直接确认下单。");
             return updates;
         }
-        OrderCreateResult result = orderCommandService.createMockOrderFromPending(
+        OrderCreateResult result = orderCommandService.createMockOrderFromContext(
                 requiredString(state, GuideGraphStateKeys.USER_ID),
                 requiredString(state, GuideGraphStateKeys.CONVERSATION_ID),
-                pendingId.get()
+                orderContextFromState(state, OrderManageStatus.WAITING_CONFIRMATION.name(), null, null, null)
         );
         updates.put(OrderManageStateKeys.ORDER_STATUS, result.status().name());
         updates.put(OrderManageStateKeys.NODE_MESSAGE, result.message());
@@ -319,7 +353,10 @@ public class OrderManageSubgraphFactory {
         if (pendingId.isEmpty()) {
             return Map.of(OrderManageStateKeys.NODE_MESSAGE, "当前没有待处理订单，无需取消。");
         }
-        pendingRepository.markCancelled(pendingId.get());
+        conversationContextManager.markContextItemStatus(
+                pendingId.get(),
+                ConversationContextItemStatus.CANCELLED
+        );
         return Map.of(
                 OrderManageStateKeys.ORDER_STATUS, OrderManageStatus.CANCELLED.name(),
                 OrderManageStateKeys.NODE_MESSAGE, "已取消这次待确认订单，没有扣减库存，也没有创建订单。",
@@ -342,7 +379,7 @@ public class OrderManageSubgraphFactory {
     private void clearTransientState(Map<String, Object> updates) {
         for (String key : List.of(
                 OrderManageStateKeys.ORDER_ACTION,
-                OrderManageStateKeys.PENDING_ORDER_ACTION_ID,
+                OrderManageStateKeys.ORDER_CONTEXT_ITEM_ID,
                 OrderManageStateKeys.ORDER_STATUS,
                 OrderManageStateKeys.CART_SNAPSHOT,
                 OrderManageStateKeys.CART_SNAPSHOT_HASH,
@@ -360,13 +397,13 @@ public class OrderManageSubgraphFactory {
         }
     }
 
-    private void writePending(Map<String, Object> updates, PendingOrderActionRecord record) {
-        updates.put(OrderManageStateKeys.PENDING_ORDER_ACTION_ID, record.id());
-        updates.put(OrderManageStateKeys.ORDER_STATUS, record.status().name());
-        updates.put(OrderManageStateKeys.CART_SNAPSHOT, record.cartSnapshot());
-        updates.put(OrderManageStateKeys.CART_SNAPSHOT_HASH, record.cartSnapshotHash());
-        updates.put(OrderManageStateKeys.ADDRESS_SNAPSHOT, record.addressSnapshot());
-        updates.put(OrderManageStateKeys.AMOUNT_SNAPSHOT, record.amountSnapshot());
+    private void writeOrderContext(Map<String, Object> updates, ConversationRuntimeContext.OrderContext order) {
+        updates.put(OrderManageStateKeys.ORDER_CONTEXT_ITEM_ID, order.contextItemId());
+        updates.put(OrderManageStateKeys.ORDER_STATUS, order.orderStatus());
+        updates.put(OrderManageStateKeys.CART_SNAPSHOT, order.cartSnapshot());
+        updates.put(OrderManageStateKeys.CART_SNAPSHOT_HASH, order.cartSnapshotHash());
+        updates.put(OrderManageStateKeys.ADDRESS_SNAPSHOT, order.addressSnapshot());
+        updates.put(OrderManageStateKeys.AMOUNT_SNAPSHOT, order.amountSnapshot());
     }
 
     private boolean looksLikeCheckout(String message) {
@@ -436,12 +473,59 @@ public class OrderManageSubgraphFactory {
     }
 
     private Optional<Long> pendingId(OverAllState state) {
-        return state.value(OrderManageStateKeys.PENDING_ORDER_ACTION_ID).map(value -> {
+        return state.value(OrderManageStateKeys.ORDER_CONTEXT_ITEM_ID).map(value -> {
             if (value instanceof Number number) {
                 return number.longValue();
             }
             return Long.parseLong(value.toString());
         });
+    }
+
+    private ConversationRuntimeContext.OrderContext orderContextFromState(
+            OverAllState state,
+            String status,
+            Map<String, Object> addressOverride,
+            String failReason,
+            String orderNo
+    ) {
+        ConversationRuntimeContext context = state.value(
+                GuideGraphStateKeys.CONVERSATION_CONTEXT,
+                ConversationRuntimeContext.class
+        ).orElse(null);
+        ConversationRuntimeContext.OrderContext existing = context == null ? null : context.order();
+        Long id = pendingId(state).orElse(existing == null ? null : existing.contextItemId());
+        Map<String, Object> cartSnapshot = state.value(OrderManageStateKeys.CART_SNAPSHOT, Map.<String, Object>of());
+        String cartSnapshotHash = state.value(OrderManageStateKeys.CART_SNAPSHOT_HASH, "");
+        Map<String, Object> address = addressOverride == null
+                ? state.value(OrderManageStateKeys.ADDRESS_SNAPSHOT, Map.<String, Object>of())
+                : addressOverride;
+        BigDecimal amount = state.value(OrderManageStateKeys.AMOUNT_SNAPSHOT, BigDecimal.class).orElse(null);
+        if (existing != null) {
+            if (cartSnapshot.isEmpty()) {
+                cartSnapshot = existing.cartSnapshot();
+            }
+            if (!StringUtils.hasText(cartSnapshotHash)) {
+                cartSnapshotHash = existing.cartSnapshotHash();
+            }
+            if (address.isEmpty()) {
+                address = existing.addressSnapshot();
+            }
+            if (amount == null) {
+                amount = existing.amountSnapshot();
+            }
+        }
+        return new ConversationRuntimeContext.OrderContext(
+                id,
+                cartSnapshot,
+                cartSnapshotHash,
+                address,
+                amount,
+                status,
+                failReason,
+                orderNo,
+                existing == null ? LocalDateTime.now().plusMinutes(30) : existing.expiresAt(),
+                existing == null ? Map.of() : existing.payload()
+        );
     }
 
     private OrderManageStatus parseStatus(String value) {

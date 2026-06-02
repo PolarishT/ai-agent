@@ -4,7 +4,7 @@ import java.math.BigDecimal;
 
 /**
  * cart_manage_workflow 的商品候选条目；由 {@code ProductCatalogResolver} 生成，
- * 持久化到 {@code pending_cart_actions.candidates} 让下一轮"我要第 N 个"能解析。
+ * 持久化到中央 {@code agent_context_items} 让下一轮"我要第 N 个"能解析。
  *
  * @param productId   商品主键字符串（{@code catalog_product.id}）
  * @param skuId       SKU 主键字符串（{@code catalog_sku.id}），无 SKU 时为 null

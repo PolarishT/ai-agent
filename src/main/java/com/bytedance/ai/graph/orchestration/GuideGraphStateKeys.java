@@ -44,6 +44,7 @@ public final class GuideGraphStateKeys {
     public static final String NEED_USER_INPUT = "need_user_input";
     public static final String NODE_MESSAGE = "node_message";
     public static final String RECENT_MESSAGES = "recentMessages";
+    public static final String CONVERSATION_CONTEXT = "conversationContext";
     public static final String MESSAGE_COUNT = "messageCount";
 
     private GuideGraphStateKeys() {

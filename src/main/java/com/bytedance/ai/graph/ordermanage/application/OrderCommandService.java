@@ -1,11 +1,12 @@
 package com.bytedance.ai.graph.ordermanage.application;
 
-import com.bytedance.ai.graph.ordermanage.persistence.PendingOrderActionRepository;
-import com.bytedance.ai.graph.ordermanage.persistence.PendingOrderActionRecord;
 import com.bytedance.ai.graph.ordermanage.persistence.MockOrderRepository;
 import com.bytedance.ai.graph.ordermanage.OrderManageStatus;
 import com.bytedance.ai.graph.ordermanage.OrderCreateResult;
 import com.bytedance.ai.graph.ordermanage.AddressSnapshot;
+import com.bytedance.ai.graph.conversation.context.ConversationContextItemStatus;
+import com.bytedance.ai.graph.conversation.context.ConversationContextManager;
+import com.bytedance.ai.graph.conversation.context.ConversationRuntimeContext;
 import com.bytedance.ai.graph.cart.api.CartItemView;
 import com.bytedance.ai.graph.cart.api.CartQueryFacade;
 import com.bytedance.ai.graph.cart.api.CartView;
@@ -28,7 +29,7 @@ import java.util.UUID;
 @Service
 public class OrderCommandService {
 
-    private final PendingOrderActionRepository pendingRepository;
+    private final ConversationContextManager conversationContextManager;
     private final CartQueryFacade cartQueryFacade;
     private final CatalogQueryFacade catalogQueryFacade;
     private final CatalogInventoryFacade inventoryFacade;
@@ -37,7 +38,7 @@ public class OrderCommandService {
     private final OrderCartSnapshotService snapshotService;
 
     public OrderCommandService(
-            PendingOrderActionRepository pendingRepository,
+            ConversationContextManager conversationContextManager,
             CartQueryFacade cartQueryFacade,
             CatalogQueryFacade catalogQueryFacade,
             CatalogInventoryFacade inventoryFacade,
@@ -45,7 +46,7 @@ public class OrderCommandService {
             MockOrderRepository mockOrderRepository,
             OrderCartSnapshotService snapshotService
     ) {
-        this.pendingRepository = pendingRepository;
+        this.conversationContextManager = conversationContextManager;
         this.cartQueryFacade = cartQueryFacade;
         this.catalogQueryFacade = catalogQueryFacade;
         this.inventoryFacade = inventoryFacade;
@@ -55,38 +56,59 @@ public class OrderCommandService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public OrderCreateResult createMockOrderFromPending(String userId, String conversationId, Long pendingId) {
-        if (!pendingRepository.markCreatingIfWaitingConfirmation(pendingId)) {
+    public OrderCreateResult createMockOrderFromContext(
+            String userId,
+            String conversationId,
+            ConversationRuntimeContext.OrderContext orderContext
+    ) {
+        if (orderContext == null || orderContext.contextItemId() == null) {
             return OrderCreateResult.failure("当前没有等待确认的订单，不能重复创建订单。", OrderManageStatus.FAILED);
         }
-        PendingOrderActionRecord pending = pendingRepository.findById(pendingId)
-                .orElseThrow(() -> new IllegalStateException("pending order action not found: " + pendingId));
-        if (pending.expireAt() != null && pending.expireAt().isBefore(LocalDateTime.now())) {
-            pendingRepository.markExpired(pending.id());
+        ConversationRuntimeContext.OrderContext creating = copyOrder(
+                orderContext,
+                OrderManageStatus.CREATING,
+                null,
+                null
+        );
+        if (!conversationContextManager.transitionOrderContextStatus(
+                orderContext.contextItemId(),
+                OrderManageStatus.WAITING_CONFIRMATION.name(),
+                creating,
+                ConversationContextItemStatus.ACTIVE
+        )) {
+            return OrderCreateResult.failure("当前没有等待确认的订单，不能重复创建订单。", OrderManageStatus.FAILED);
+        }
+        if (orderContext.expiresAt() != null && orderContext.expiresAt().isBefore(LocalDateTime.now())) {
+            conversationContextManager.transitionOrderContextStatus(
+                    orderContext.contextItemId(),
+                    OrderManageStatus.CREATING.name(),
+                    copyOrder(orderContext, OrderManageStatus.EXPIRED, "order context expired", null),
+                    ConversationContextItemStatus.EXPIRED
+            );
             return OrderCreateResult.failure("本次下单确认已过期，请重新发送‘结算购物车’。", OrderManageStatus.EXPIRED);
         }
-        AddressSnapshot address = AddressSnapshot.fromMap(pending.addressSnapshot());
+        AddressSnapshot address = AddressSnapshot.fromMap(orderContext.addressSnapshot());
         if (!StringUtils.hasText(address.receiverName())
                 || !StringUtils.hasText(address.phone())
                 || !StringUtils.hasText(address.addressText())) {
-            pendingRepository.markFailed(pending.id(), "address incomplete");
+            markOrderFailed(orderContext, "address incomplete");
             return OrderCreateResult.failure("请先提供完整收货地址后再确认下单。", OrderManageStatus.FAILED);
         }
 
         CartView currentCart = cartQueryFacade.getActiveCart(userId, conversationId);
         if (currentCart == null || currentCart.items() == null || currentCart.items().isEmpty()) {
-            pendingRepository.markFailed(pending.id(), "cart empty");
+            markOrderFailed(orderContext, "cart empty");
             return OrderCreateResult.failure("购物车内容已变化，请重新发送‘结算购物车’。", OrderManageStatus.FAILED);
         }
         String currentHash = snapshotService.hash(currentCart);
-        if (!currentHash.equals(pending.cartSnapshotHash())) {
-            pendingRepository.markFailed(pending.id(), "cart snapshot changed");
+        if (!currentHash.equals(orderContext.cartSnapshotHash())) {
+            markOrderFailed(orderContext, "cart snapshot changed");
             return OrderCreateResult.failure("购物车内容已变化，请重新发送‘结算购物车’。", OrderManageStatus.FAILED);
         }
 
         String stockError = validateProductsAndDeductStock(currentCart);
         if (stockError != null) {
-            pendingRepository.markFailed(pending.id(), stockError);
+            markOrderFailed(orderContext, stockError);
             return OrderCreateResult.failure("部分商品库存不足，本次订单已失效，请调整购物车后重新结算。", OrderManageStatus.FAILED);
         }
 
@@ -96,15 +118,49 @@ public class OrderCommandService {
                 userId,
                 conversationId,
                 Map.of("items", snapshotService.snapshot(currentCart).get("items")),
-                pending.addressSnapshot(),
+                orderContext.addressSnapshot(),
                 snapshotService.amount(currentCart)
         );
         CartMutationResult clearResult = cartCommandService.clearCart(userId, conversationId);
         if (!clearResult.success()) {
             throw new IllegalStateException(clearResult.errorMessage());
         }
-        pendingRepository.markCreated(pending.id(), orderNo);
+        conversationContextManager.transitionOrderContextStatus(
+                orderContext.contextItemId(),
+                OrderManageStatus.CREATING.name(),
+                copyOrder(orderContext, OrderManageStatus.ORDER_CREATED, null, orderNo),
+                ConversationContextItemStatus.COMPLETED
+        );
         return OrderCreateResult.success(orderNo);
+    }
+
+    private void markOrderFailed(ConversationRuntimeContext.OrderContext orderContext, String reason) {
+        conversationContextManager.transitionOrderContextStatus(
+                orderContext.contextItemId(),
+                OrderManageStatus.CREATING.name(),
+                copyOrder(orderContext, OrderManageStatus.FAILED, reason, null),
+                ConversationContextItemStatus.FAILED
+        );
+    }
+
+    private ConversationRuntimeContext.OrderContext copyOrder(
+            ConversationRuntimeContext.OrderContext orderContext,
+            OrderManageStatus status,
+            String failReason,
+            String orderNo
+    ) {
+        return new ConversationRuntimeContext.OrderContext(
+                orderContext.contextItemId(),
+                orderContext.cartSnapshot(),
+                orderContext.cartSnapshotHash(),
+                orderContext.addressSnapshot(),
+                orderContext.amountSnapshot(),
+                status.name(),
+                failReason,
+                orderNo == null ? orderContext.orderNo() : orderNo,
+                orderContext.expiresAt(),
+                orderContext.payload()
+        );
     }
 
     private String validateProductsAndDeductStock(CartView cart) {

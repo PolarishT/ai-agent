@@ -402,7 +402,7 @@ public record RagProperties(
      * @param rrfK                   RRF 融合参数 K
      * @param keywordTimeoutMillis   关键词分支超时，单位毫秒；≤0 表示不启用超时
      * @param semanticTimeoutMillis  语义分支超时，单位毫秒；≤0 表示不启用超时
-     * @param pendingTtlHours        pending_product_query_actions 行的存活时间（小时）
+     * @param pendingTtlHours        商品查询上下文在 agent_context_items 中的存活时间（小时）
      * @param mustHaveStockDefault   未显式表达时是否默认要求有库存
      * @param rankWeights            基础排序权重 + condition 二次排序权重
      * @param comparison             对比节点配置

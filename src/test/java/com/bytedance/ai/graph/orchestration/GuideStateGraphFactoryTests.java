@@ -11,7 +11,6 @@ import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
 import com.bytedance.ai.graph.cartmanage.application.CartCommandService;
 import com.bytedance.ai.graph.cartmanage.CartMutationResult;
-import com.bytedance.ai.graph.cartmanage.persistence.PendingCartActionRepository;
 import com.bytedance.ai.graph.api.GuideGraphIntent;
 import com.bytedance.ai.graph.api.GuideNodeExecutionResult;
 import com.bytedance.ai.graph.api.GuideNodeResult;
@@ -19,6 +18,9 @@ import com.bytedance.ai.graph.cartmanage.subgraph.CartGraphStateKeys;
 import com.bytedance.ai.graph.cartmanage.subgraph.CartWorkflowStatus;
 import com.bytedance.ai.graph.conversation.persistence.AgentConversationRepository;
 import com.bytedance.ai.graph.conversation.persistence.jdbc.JdbcAgentConversationRepository;
+import com.bytedance.ai.graph.conversation.context.ConversationContextItemStatus;
+import com.bytedance.ai.graph.conversation.context.ConversationContextManager;
+import com.bytedance.ai.graph.conversation.context.ConversationRuntimeContext;
 import com.bytedance.ai.graph.ordermanage.AddressSnapshot;
 import com.bytedance.ai.graph.ordermanage.persistence.MockOrderRecord;
 import com.bytedance.ai.graph.ordermanage.persistence.MockOrderRepository;
@@ -27,8 +29,6 @@ import com.bytedance.ai.graph.ordermanage.application.OrderCommandService;
 import com.bytedance.ai.graph.ordermanage.OrderManageStateKeys;
 import com.bytedance.ai.graph.ordermanage.OrderManageStatus;
 import com.bytedance.ai.graph.ordermanage.OrderManageSubgraphFactory;
-import com.bytedance.ai.graph.ordermanage.persistence.PendingOrderActionRecord;
-import com.bytedance.ai.graph.ordermanage.persistence.PendingOrderActionRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -89,14 +89,14 @@ class GuideStateGraphFactoryTests {
     }
 
     @Test
-    void secondRequestLoadsMemoryThenSavesUserMessage() throws Exception {
+    void secondRequestLoadsConversationContextThenSavesUserMessage() throws Exception {
         invoke(Map.of(), "conversation-repeat", "run-first");
 
         OverAllState state = invoke(Map.of(), "conversation-repeat", "run-second");
 
         assertThat(state.value(GuideGraphStateKeys.CONVERSATION_EXISTS, false)).isTrue();
         assertThat(state.value(GuideGraphStateKeys.MESSAGE_COUNT, 0)).isGreaterThanOrEqualTo(1);
-        assertTraceOrder(state, GuideGraphNodeNames.LOAD_MEMORY, GuideGraphNodeNames.CLARIFY_WORKFLOW);
+        assertTraceOrder(state, GuideGraphNodeNames.LOAD_CONVERSATION_CONTEXT, GuideGraphNodeNames.CLARIFY_WORKFLOW);
     }
 
     @ParameterizedTest
@@ -210,8 +210,8 @@ class GuideStateGraphFactoryTests {
                 null,
                 null,
                 rig.factory,
-                rig.pending,
-                null
+                null,
+                rig.pending
         );
         CompiledGraph graph = orderFactory.compile(event -> {
         });
@@ -333,15 +333,26 @@ class GuideStateGraphFactoryTests {
 
     private void assertTraceOrder(OverAllState state, String conversationBranchNode, String workflowNode) {
         List<GuideNodeResult> nodeResults = state.value(GuideGraphStateKeys.NODE_RESULTS, List.<GuideNodeResult>of());
-        assertThat(nodeResults).extracting(GuideNodeResult::nodeName)
-                .containsExactly(
+        List<String> expectedNodes = conversationBranchNode.equals(GuideGraphNodeNames.LOAD_CONVERSATION_CONTEXT)
+                ? List.of(
+                        GuideGraphNodeNames.CHECK_CONVERSATION,
+                        GuideGraphNodeNames.LOAD_CONVERSATION_CONTEXT,
+                        GuideGraphNodeNames.SAVE_USER_MESSAGE,
+                        GuideGraphNodeNames.MAIN_INTENT_ROUTER,
+                        workflowNode,
+                        GuideGraphNodeNames.BUILD_ANSWER_CONTEXT
+                )
+                : List.of(
                         GuideGraphNodeNames.CHECK_CONVERSATION,
                         conversationBranchNode,
+                        GuideGraphNodeNames.LOAD_CONVERSATION_CONTEXT,
                         GuideGraphNodeNames.SAVE_USER_MESSAGE,
                         GuideGraphNodeNames.MAIN_INTENT_ROUTER,
                         workflowNode,
                         GuideGraphNodeNames.BUILD_ANSWER_CONTEXT
                 );
+        assertThat(nodeResults).extracting(GuideNodeResult::nodeName)
+                .containsExactlyElementsOf(expectedNodes);
         assertThat(nodeResults).extracting(GuideNodeResult::nodeName)
                 .doesNotHaveDuplicates();
     }
@@ -435,7 +446,7 @@ class GuideStateGraphFactoryTests {
 
     private static final class OrderGraphRig {
         CartView cart;
-        final StubPendingOrderActionRepository pending = new StubPendingOrderActionRepository();
+        final StubContextManager pending = new StubContextManager();
         final StubCatalog catalog = new StubCatalog();
         final StubInventory inventory = new StubInventory();
         final StubCartCommand cartCommand = new StubCartCommand();
@@ -460,91 +471,149 @@ class GuideStateGraphFactoryTests {
                     pending,
                     new com.bytedance.ai.graph.ordermanage.application.OrderAddressResolver(),
                     snapshots,
-                    commandService,
-                    provider((PendingCartActionRepository) null)
+                    commandService
             );
         }
     }
 
-    private static final class StubPendingOrderActionRepository implements PendingOrderActionRepository {
-        Optional<PendingOrderActionRecord> active = Optional.empty();
+    private record TestPending(
+            Long id,
+            Map<String, Object> cartSnapshot,
+            String cartSnapshotHash,
+            Map<String, Object> addressSnapshot,
+            BigDecimal amountSnapshot,
+            OrderManageStatus status,
+            String failReason,
+            String orderNo,
+            LocalDateTime expireAt
+    ) {
+    }
+
+    private static final class StubContextManager implements ConversationContextManager {
+        Optional<TestPending> active = Optional.empty();
         long nextId = 1L;
 
         @Override
-        public Optional<PendingOrderActionRecord> findActiveByUserIdAndConversationId(String userId, String conversationId) {
-            return active.filter(record -> record.status() == OrderManageStatus.WAITING_ADDRESS
-                    || record.status() == OrderManageStatus.WAITING_CONFIRMATION
-                    || record.status() == OrderManageStatus.CREATING);
+        public ConversationRuntimeContext load(String userId, String conversationId) {
+            ConversationRuntimeContext.OrderContext order = active.map(this::toOrderContext).orElse(null);
+            return new ConversationRuntimeContext(
+                    1L, userId, conversationId, List.of(), null, List.of(), null,
+                    order, null, null, Map.of(), Map.of(), List.of());
         }
 
         @Override
-        public Optional<PendingOrderActionRecord> findById(Long id) {
-            return active.filter(record -> record.id().equals(id));
+        public void saveProductCandidates(String userId, String conversationId, String sourceTurnId,
+                                          String sourceWorkflow,
+                                          List<ConversationRuntimeContext.ProductCandidateItem> candidates,
+                                          LocalDateTime expiresAt) {
         }
 
         @Override
-        public PendingOrderActionRecord save(PendingOrderActionRecord record) {
-            PendingOrderActionRecord saved = copy(record, nextId++, record.status(), record.addressSnapshot(),
-                    record.cartSnapshot(), record.cartSnapshotHash(), record.amountSnapshot(), null);
+        public void saveTaskChain(String userId, String conversationId, String sourceTurnId,
+                                  String sourceWorkflow,
+                                  ConversationRuntimeContext.TaskChain taskChain,
+                                  LocalDateTime expiresAt) {
+        }
+
+        @Override
+        public ConversationRuntimeContext.TaskChain loadTaskChain(String userId, String conversationId,
+                                                                  String taskChainId) {
+            return null;
+        }
+
+        @Override
+        public boolean markChainStep(String userId, String conversationId, String taskChainId, int stepNo,
+                                     String newStepStatus, ConversationRuntimeContext.StepOutput output,
+                                     String turnId) {
+            return false;
+        }
+
+        @Override
+        public boolean transitionChainStatus(String userId, String conversationId, String taskChainId,
+                                             String newChainStatus, String turnId) {
+            return false;
+        }
+
+        @Override
+        public void updateFocus(String userId, String conversationId, String sourceTurnId, String sourceWorkflow,
+                                ConversationRuntimeContext.Focus focus, LocalDateTime expiresAt) {
+        }
+
+        @Override
+        public ConversationRuntimeContext.PendingClarification savePendingClarification(
+                String userId,
+                String conversationId,
+                String sourceTurnId,
+                String sourceWorkflow,
+                ConversationRuntimeContext.PendingClarification clarification,
+                LocalDateTime expiresAt
+        ) {
+            return clarification;
+        }
+
+        @Override
+        public void consumePendingClarification(Long contextItemId) {
+        }
+
+        @Override
+        public void updateCartSnapshot(String userId, String conversationId, String sourceTurnId, String sourceWorkflow,
+                                       ConversationRuntimeContext.CartSnapshot cartSnapshot, LocalDateTime expiresAt) {
+        }
+
+        @Override
+        public ConversationRuntimeContext.OrderContext updateOrderContext(
+                String userId,
+                String conversationId,
+                String sourceTurnId,
+                String sourceWorkflow,
+                ConversationRuntimeContext.OrderContext orderContext,
+                LocalDateTime expiresAt
+        ) {
+            TestPending saved = new TestPending(nextId++, orderContext.cartSnapshot(), orderContext.cartSnapshotHash(),
+                    orderContext.addressSnapshot(), orderContext.amountSnapshot(),
+                    OrderManageStatus.valueOf(orderContext.orderStatus()), orderContext.failReason(),
+                    orderContext.orderNo(), expiresAt);
             active = Optional.of(saved);
-            return saved;
+            return toOrderContext(saved);
         }
 
         @Override
-        public void updateAddress(Long id, Map<String, Object> addressSnapshot) {
-            active = active.map(record -> copy(record, record.id(), record.status(), addressSnapshot,
-                    record.cartSnapshot(), record.cartSnapshotHash(), record.amountSnapshot(), null));
+        public void updateLastTurn(String userId, String conversationId, String sourceTurnId, String sourceWorkflow,
+                                   ConversationRuntimeContext.LastTurn lastTurn, LocalDateTime expiresAt) {
         }
 
         @Override
-        public void markWaitingAddress(Long id) {
-            active = active.map(record -> copy(record, record.id(), OrderManageStatus.WAITING_ADDRESS,
-                    record.addressSnapshot(), record.cartSnapshot(), record.cartSnapshotHash(), record.amountSnapshot(), null));
-        }
-
-        @Override
-        public void markWaitingConfirmation(Long id, Map<String, Object> cartSnapshot, String cartSnapshotHash,
-                                            Map<String, Object> addressSnapshot, BigDecimal amount) {
-            active = active.map(record -> copy(record, record.id(), OrderManageStatus.WAITING_CONFIRMATION,
-                    addressSnapshot, cartSnapshot, cartSnapshotHash, amount, null));
-        }
-
-        @Override
-        public boolean markCreatingIfWaitingConfirmation(Long id) {
-            if (active.isEmpty() || active.get().status() != OrderManageStatus.WAITING_CONFIRMATION) {
+        public boolean transitionOrderContextStatus(Long contextItemId, String expectedOrderStatus,
+                                                    ConversationRuntimeContext.OrderContext orderContext,
+                                                    ConversationContextItemStatus itemStatus) {
+            if (active.isEmpty()
+                    || !active.get().id().equals(contextItemId)
+                    || !active.get().status().name().equals(expectedOrderStatus)) {
                 return false;
             }
-            active = active.map(record -> copy(record, record.id(), OrderManageStatus.CREATING,
-                    record.addressSnapshot(), record.cartSnapshot(), record.cartSnapshotHash(), record.amountSnapshot(), null));
+            if (itemStatus == ConversationContextItemStatus.COMPLETED
+                    || itemStatus == ConversationContextItemStatus.FAILED
+                    || itemStatus == ConversationContextItemStatus.CANCELLED
+                    || itemStatus == ConversationContextItemStatus.EXPIRED) {
+                active = Optional.empty();
+            } else {
+                active = Optional.of(new TestPending(contextItemId, orderContext.cartSnapshot(),
+                        orderContext.cartSnapshotHash(), orderContext.addressSnapshot(), orderContext.amountSnapshot(),
+                        OrderManageStatus.valueOf(orderContext.orderStatus()), orderContext.failReason(),
+                        orderContext.orderNo(), orderContext.expiresAt()));
+            }
             return true;
         }
 
         @Override
-        public void markCreated(Long id, String orderNo) {
+        public void markContextItemStatus(Long contextItemId, ConversationContextItemStatus status) {
             active = Optional.empty();
         }
 
-        @Override
-        public void markCancelled(Long id) {
-            active = Optional.empty();
-        }
-
-        @Override
-        public void markFailed(Long id, String reason) {
-            active = Optional.empty();
-        }
-
-        @Override
-        public void markExpired(Long id) {
-            active = Optional.empty();
-        }
-
-        private PendingOrderActionRecord copy(PendingOrderActionRecord record, Long id, OrderManageStatus status,
-                                              Map<String, Object> address, Map<String, Object> cartSnapshot,
-                                              String cartSnapshotHash, BigDecimal amount, String orderNo) {
-            return new PendingOrderActionRecord(id, record.userId(), record.conversationId(), cartSnapshot,
-                    cartSnapshotHash, address, amount, status, record.failReason(), orderNo,
-                    record.createdAt(), LocalDateTime.now(), record.expireAt());
+        private ConversationRuntimeContext.OrderContext toOrderContext(TestPending pending) {
+            return new ConversationRuntimeContext.OrderContext(pending.id(), pending.cartSnapshot(),
+                    pending.cartSnapshotHash(), pending.addressSnapshot(), pending.amountSnapshot(),
+                    pending.status().name(), pending.failReason(), pending.orderNo(), pending.expireAt(), Map.of());
         }
     }
 

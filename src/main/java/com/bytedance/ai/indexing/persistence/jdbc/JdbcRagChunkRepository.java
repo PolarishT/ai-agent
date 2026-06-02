@@ -109,21 +109,6 @@ public class JdbcRagChunkRepository implements RagChunkRepository {
     }
 
     @Override
-    public Integer findMaxChunkIndexByDocumentIdAndGeneration(Long documentId, Long indexGeneration) {
-        return jdbc.queryForObject(
-                """
-                SELECT MAX(chunk_index)
-                  FROM rag_chunks
-                 WHERE document_id = ?
-                   AND index_generation = ?
-                """,
-                Integer.class,
-                documentId,
-                indexGeneration
-        );
-    }
-
-    @Override
     public Integer findMaxChunkIndexByDocumentIdExceptGeneration(Long documentId, Long indexGeneration) {
         return jdbc.queryForObject(
                 """

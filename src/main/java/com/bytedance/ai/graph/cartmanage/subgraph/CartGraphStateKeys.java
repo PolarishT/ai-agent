@@ -16,7 +16,7 @@ public final class CartGraphStateKeys {
     public static final String CONTEXTUAL_REFERENCE = "contextual_reference";
     public static final String PRODUCT_CANDIDATES = "product_candidates";
     public static final String SELECTED_CANDIDATE = "selected_candidate";
-    public static final String PENDING_CART_ACTION_ID = "pending_cart_action_id";
+    public static final String PENDING_CLARIFICATION_ID = "pending_clarification_id";
     public static final String STOCK_RESULT = "stock_result";
     public static final String CART_RESULT = "cart_result";
     public static final String WORKFLOW_STATUS = "workflow_status";

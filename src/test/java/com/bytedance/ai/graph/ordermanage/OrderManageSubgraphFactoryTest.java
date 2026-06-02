@@ -8,19 +8,18 @@ import com.bytedance.ai.graph.catalog.api.CatalogInventoryFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
+import com.bytedance.ai.graph.conversation.context.ConversationContextItemStatus;
+import com.bytedance.ai.graph.conversation.context.ConversationContextManager;
+import com.bytedance.ai.graph.conversation.context.ConversationRuntimeContext;
 import com.bytedance.ai.graph.orchestration.GuideGraphStateKeys;
 import com.bytedance.ai.graph.cartmanage.application.CartCommandService;
 import com.bytedance.ai.graph.cartmanage.CartMutationResult;
-import com.bytedance.ai.graph.cartmanage.persistence.PendingCartActionRepository;
 import com.bytedance.ai.graph.ordermanage.application.OrderAddressResolver;
 import com.bytedance.ai.graph.ordermanage.application.OrderCartSnapshotService;
 import com.bytedance.ai.graph.ordermanage.application.OrderCommandService;
 import com.bytedance.ai.graph.ordermanage.persistence.MockOrderRecord;
 import com.bytedance.ai.graph.ordermanage.persistence.MockOrderRepository;
-import com.bytedance.ai.graph.ordermanage.persistence.PendingOrderActionRecord;
-import com.bytedance.ai.graph.ordermanage.persistence.PendingOrderActionRepository;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.ObjectProvider;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
@@ -191,33 +190,9 @@ class OrderManageSubgraphFactoryTest {
                 amount, itemCount, Map.of(), itemList);
     }
 
-    private static <T> ObjectProvider<T> provider(T instance) {
-        return new ObjectProvider<>() {
-            @Override
-            public T getObject(Object... args) {
-                return instance;
-            }
-
-            @Override
-            public T getIfAvailable() {
-                return instance;
-            }
-
-            @Override
-            public T getIfUnique() {
-                return instance;
-            }
-
-            @Override
-            public T getObject() {
-                return instance;
-            }
-        };
-    }
-
     private static final class TestRig {
         CartView cart;
-        final StubPendingOrderActionRepository pending = new StubPendingOrderActionRepository();
+        final StubContextManager pending = new StubContextManager();
         final StubCatalog catalog = new StubCatalog();
         final StubInventory inventory = new StubInventory();
         final StubCartCommand cartCommand = new StubCartCommand();
@@ -242,8 +217,7 @@ class OrderManageSubgraphFactoryTest {
                     pending,
                     new OrderAddressResolver(),
                     snapshots,
-                    commandService,
-                    provider((PendingCartActionRepository) null)
+                    commandService
             );
         }
 
@@ -252,15 +226,14 @@ class OrderManageSubgraphFactoryTest {
             initialState.put(GuideGraphStateKeys.USER_ID, USER_ID);
             initialState.put(GuideGraphStateKeys.CONVERSATION_ID, CONVERSATION_ID);
             initialState.put(GuideGraphStateKeys.MESSAGE, message);
+            initialState.put(GuideGraphStateKeys.CONVERSATION_CONTEXT, pending.load(USER_ID, CONVERSATION_ID));
             return factory.build().compile().invoke(initialState).orElseThrow();
         }
 
-        PendingOrderActionRecord pendingRecord(OrderManageStatus status, Map<String, Object> address) {
+        TestPending pendingRecord(OrderManageStatus status, Map<String, Object> address) {
             Map<String, Object> snapshot = snapshots.snapshot(cart);
-            return new PendingOrderActionRecord(
+            return new TestPending(
                     1L,
-                    USER_ID,
-                    CONVERSATION_ID,
                     snapshot,
                     snapshots.hash(snapshot),
                     address,
@@ -268,96 +241,199 @@ class OrderManageSubgraphFactoryTest {
                     status,
                     null,
                     null,
-                    LocalDateTime.now(),
-                    LocalDateTime.now(),
                     LocalDateTime.now().plusMinutes(30)
             );
         }
     }
 
-    private static final class StubPendingOrderActionRepository implements PendingOrderActionRepository {
-        Optional<PendingOrderActionRecord> active = Optional.empty();
+    private record TestPending(
+            Long id,
+            Map<String, Object> cartSnapshot,
+            String cartSnapshotHash,
+            Map<String, Object> addressSnapshot,
+            BigDecimal amountSnapshot,
+            OrderManageStatus status,
+            String failReason,
+            String orderNo,
+            LocalDateTime expireAt
+    ) {
+    }
+
+    private static final class StubContextManager implements ConversationContextManager {
+        Optional<TestPending> active = Optional.empty();
         long nextId = 1L;
         boolean cancelled;
         String createdOrderNo;
 
         @Override
-        public Optional<PendingOrderActionRecord> findActiveByUserIdAndConversationId(String userId, String conversationId) {
-            return active.filter(record -> record.status() == OrderManageStatus.WAITING_ADDRESS
-                    || record.status() == OrderManageStatus.WAITING_CONFIRMATION
-                    || record.status() == OrderManageStatus.CREATING);
+        public ConversationRuntimeContext load(String userId, String conversationId) {
+            ConversationRuntimeContext.OrderContext order = active
+                    .map(this::toOrderContext)
+                    .orElse(null);
+            return new ConversationRuntimeContext(
+                    1L,
+                    userId,
+                    conversationId,
+                    List.of(),
+                    null,
+                    List.of(),
+                    null,
+                    order,
+                    null,
+                    null,
+                    Map.of(),
+                    Map.of(),
+                    List.of()
+            );
         }
 
         @Override
-        public Optional<PendingOrderActionRecord> findById(Long id) {
-            return active.filter(record -> record.id().equals(id));
+        public void saveProductCandidates(String userId, String conversationId, String sourceTurnId,
+                                          String sourceWorkflow,
+                                          List<ConversationRuntimeContext.ProductCandidateItem> candidates,
+                                          LocalDateTime expiresAt) {
         }
 
         @Override
-        public PendingOrderActionRecord save(PendingOrderActionRecord record) {
-            PendingOrderActionRecord saved = copy(record, nextId++, record.status(), record.addressSnapshot(),
-                    record.cartSnapshot(), record.cartSnapshotHash(), record.amountSnapshot(), null);
+        public void saveTaskChain(String userId, String conversationId, String sourceTurnId,
+                                  String sourceWorkflow,
+                                  ConversationRuntimeContext.TaskChain taskChain,
+                                  LocalDateTime expiresAt) {
+        }
+
+        @Override
+        public ConversationRuntimeContext.TaskChain loadTaskChain(String userId, String conversationId,
+                                                                  String taskChainId) {
+            return null;
+        }
+
+        @Override
+        public boolean markChainStep(String userId, String conversationId, String taskChainId, int stepNo,
+                                     String newStepStatus, ConversationRuntimeContext.StepOutput output,
+                                     String turnId) {
+            return false;
+        }
+
+        @Override
+        public boolean transitionChainStatus(String userId, String conversationId, String taskChainId,
+                                             String newChainStatus, String turnId) {
+            return false;
+        }
+
+        @Override
+        public void updateFocus(String userId, String conversationId, String sourceTurnId, String sourceWorkflow,
+                                ConversationRuntimeContext.Focus focus, LocalDateTime expiresAt) {
+        }
+
+        @Override
+        public ConversationRuntimeContext.PendingClarification savePendingClarification(
+                String userId,
+                String conversationId,
+                String sourceTurnId,
+                String sourceWorkflow,
+                ConversationRuntimeContext.PendingClarification clarification,
+                LocalDateTime expiresAt
+        ) {
+            return clarification;
+        }
+
+        @Override
+        public void consumePendingClarification(Long contextItemId) {
+        }
+
+        @Override
+        public void updateCartSnapshot(String userId, String conversationId, String sourceTurnId, String sourceWorkflow,
+                                       ConversationRuntimeContext.CartSnapshot cartSnapshot, LocalDateTime expiresAt) {
+        }
+
+        @Override
+        public ConversationRuntimeContext.OrderContext updateOrderContext(
+                String userId,
+                String conversationId,
+                String sourceTurnId,
+                String sourceWorkflow,
+                ConversationRuntimeContext.OrderContext orderContext,
+                LocalDateTime expiresAt
+        ) {
+            Long id = nextId++;
+            TestPending saved = new TestPending(
+                    id,
+                    orderContext.cartSnapshot(),
+                    orderContext.cartSnapshotHash(),
+                    orderContext.addressSnapshot(),
+                    orderContext.amountSnapshot(),
+                    OrderManageStatus.valueOf(orderContext.orderStatus()),
+                    orderContext.failReason(),
+                    orderContext.orderNo(),
+                    expiresAt
+            );
             active = Optional.of(saved);
-            return saved;
+            return toOrderContext(saved);
         }
 
         @Override
-        public void updateAddress(Long id, Map<String, Object> addressSnapshot) {
-            active = active.map(record -> copy(record, record.id(), record.status(), addressSnapshot,
-                    record.cartSnapshot(), record.cartSnapshotHash(), record.amountSnapshot(), null));
+        public void updateLastTurn(String userId, String conversationId, String sourceTurnId, String sourceWorkflow,
+                                   ConversationRuntimeContext.LastTurn lastTurn, LocalDateTime expiresAt) {
         }
 
         @Override
-        public void markWaitingAddress(Long id) {
-            active = active.map(record -> copy(record, record.id(), OrderManageStatus.WAITING_ADDRESS,
-                    record.addressSnapshot(), record.cartSnapshot(), record.cartSnapshotHash(), record.amountSnapshot(), null));
-        }
-
-        @Override
-        public void markWaitingConfirmation(Long id, Map<String, Object> cartSnapshot, String cartSnapshotHash,
-                                            Map<String, Object> addressSnapshot, BigDecimal amount) {
-            active = active.map(record -> copy(record, record.id(), OrderManageStatus.WAITING_CONFIRMATION,
-                    addressSnapshot, cartSnapshot, cartSnapshotHash, amount, null));
-        }
-
-        @Override
-        public boolean markCreatingIfWaitingConfirmation(Long id) {
-            if (active.isEmpty() || active.get().status() != OrderManageStatus.WAITING_CONFIRMATION) {
+        public boolean transitionOrderContextStatus(
+                Long contextItemId,
+                String expectedOrderStatus,
+                ConversationRuntimeContext.OrderContext orderContext,
+                ConversationContextItemStatus itemStatus
+        ) {
+            if (active.isEmpty()
+                    || !active.get().id().equals(contextItemId)
+                    || !active.get().status().name().equals(expectedOrderStatus)) {
                 return false;
             }
-            active = active.map(record -> copy(record, record.id(), OrderManageStatus.CREATING,
-                    record.addressSnapshot(), record.cartSnapshot(), record.cartSnapshotHash(), record.amountSnapshot(), null));
+            OrderManageStatus status = OrderManageStatus.valueOf(orderContext.orderStatus());
+            if (status == OrderManageStatus.ORDER_CREATED) {
+                createdOrderNo = orderContext.orderNo();
+            }
+            if (itemStatus == ConversationContextItemStatus.COMPLETED
+                    || itemStatus == ConversationContextItemStatus.FAILED
+                    || itemStatus == ConversationContextItemStatus.CANCELLED
+                    || itemStatus == ConversationContextItemStatus.EXPIRED) {
+                active = Optional.empty();
+            } else {
+                active = Optional.of(new TestPending(
+                        contextItemId,
+                        orderContext.cartSnapshot(),
+                        orderContext.cartSnapshotHash(),
+                        orderContext.addressSnapshot(),
+                        orderContext.amountSnapshot(),
+                        status,
+                        orderContext.failReason(),
+                        orderContext.orderNo(),
+                        orderContext.expiresAt()
+                ));
+            }
             return true;
         }
 
         @Override
-        public void markCreated(Long id, String orderNo) {
-            createdOrderNo = orderNo;
+        public void markContextItemStatus(Long contextItemId, ConversationContextItemStatus status) {
+            if (status == ConversationContextItemStatus.CANCELLED) {
+                cancelled = true;
+            }
             active = Optional.empty();
         }
 
-        @Override
-        public void markCancelled(Long id) {
-            cancelled = true;
-            active = Optional.empty();
-        }
-
-        @Override
-        public void markFailed(Long id, String reason) {
-            active = Optional.empty();
-        }
-
-        @Override
-        public void markExpired(Long id) {
-            active = Optional.empty();
-        }
-
-        private PendingOrderActionRecord copy(PendingOrderActionRecord record, Long id, OrderManageStatus status,
-                                              Map<String, Object> address, Map<String, Object> cartSnapshot,
-                                              String cartSnapshotHash, BigDecimal amount, String orderNo) {
-            return new PendingOrderActionRecord(id, record.userId(), record.conversationId(), cartSnapshot,
-                    cartSnapshotHash, address, amount, status, record.failReason(), orderNo,
-                    record.createdAt(), LocalDateTime.now(), record.expireAt());
+        private ConversationRuntimeContext.OrderContext toOrderContext(TestPending pending) {
+            return new ConversationRuntimeContext.OrderContext(
+                    pending.id(),
+                    pending.cartSnapshot(),
+                    pending.cartSnapshotHash(),
+                    pending.addressSnapshot(),
+                    pending.amountSnapshot(),
+                    pending.status().name(),
+                    pending.failReason(),
+                    pending.orderNo(),
+                    pending.expireAt(),
+                    Map.of()
+            );
         }
     }
 

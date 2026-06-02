@@ -6,6 +6,8 @@ import com.bytedance.ai.graph.cart.api.CartView;
 import com.bytedance.ai.graph.cartmanage.CartMutationResult;
 import com.bytedance.ai.graph.cartmanage.application.CartCommandService;
 import com.bytedance.ai.graph.cartmanage.application.CartQueryService;
+import com.bytedance.ai.graph.conversation.context.ConversationContextManager;
+import com.bytedance.ai.graph.conversation.context.ConversationRuntimeContext;
 import com.bytedance.ai.graph.cartmanage.subgraph.CartAction;
 import com.bytedance.ai.graph.cartmanage.subgraph.CartGraphStateKeys;
 import com.bytedance.ai.graph.cartmanage.subgraph.CartWorkflowStatus;
@@ -17,6 +19,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -30,15 +33,18 @@ public class CartExecuteActionNode {
     private final CartQueryService cartQueryService;
     private final CartCommandService cartCommandService;
     private final CartItemLookup cartItemLookup;
+    private final ConversationContextManager conversationContextManager;
 
     public CartExecuteActionNode(
             CartQueryService cartQueryService,
             CartCommandService cartCommandService,
-            CartItemLookup cartItemLookup
+            CartItemLookup cartItemLookup,
+            ConversationContextManager conversationContextManager
     ) {
         this.cartQueryService = cartQueryService;
         this.cartCommandService = cartCommandService;
         this.cartItemLookup = cartItemLookup;
+        this.conversationContextManager = conversationContextManager;
     }
 
     public Map<String, Object> apply(OverAllState state) {
@@ -134,7 +140,57 @@ public class CartExecuteActionNode {
 
         log.info("Executed cart action: {}, status: {}", action,
                 updates.get(CartGraphStateKeys.WORKFLOW_STATUS));
+        persistCartContext(state, userId, conversationId, action, updates);
         return updates;
+    }
+
+    private void persistCartContext(
+            OverAllState state,
+            String userId,
+            String conversationId,
+            CartAction action,
+            Map<String, Object> updates
+    ) {
+        if (conversationContextManager == null || action == CartAction.UNKNOWN) {
+            return;
+        }
+        try {
+            String turnId = state.value(GuideGraphStateKeys.RUN_ID, "");
+            String workflow = "cart_manage_workflow";
+            CartView latestCart = cartQueryService.getUserCart(userId, conversationId);
+            Map<String, Object> cartPayload = new LinkedHashMap<>();
+            cartPayload.put("cart", latestCart);
+            cartPayload.put("action", action.name());
+            cartPayload.put("status", updates.get(CartGraphStateKeys.WORKFLOW_STATUS));
+            conversationContextManager.updateCartSnapshot(
+                    userId,
+                    conversationId,
+                    turnId,
+                    workflow,
+                    new ConversationRuntimeContext.CartSnapshot(null, cartPayload),
+                    null
+            );
+
+            Map<String, Object> lastPayload = new LinkedHashMap<>();
+            lastPayload.put("action", action.name());
+            lastPayload.put("status", updates.get(CartGraphStateKeys.WORKFLOW_STATUS));
+            lastPayload.put("message", updates.get(CartGraphStateKeys.NODE_MESSAGE));
+            conversationContextManager.updateLastTurn(
+                    userId,
+                    conversationId,
+                    turnId,
+                    workflow,
+                    new ConversationRuntimeContext.LastTurn(
+                            null,
+                            workflow,
+                            String.valueOf(updates.get(CartGraphStateKeys.WORKFLOW_STATUS)),
+                            lastPayload
+                    ),
+                    LocalDateTime.now().plusHours(24)
+            );
+        } catch (RuntimeException exception) {
+            log.warn("Failed to persist cart context", exception);
+        }
     }
 
     private boolean putMutationFailure(Map<String, Object> updates, CartMutationResult mutation) {

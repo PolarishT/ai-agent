@@ -33,6 +33,8 @@ public interface RagChunkRepository {
      */
     List<String> findVectorIdsByDocumentIdExceptGeneration(Long documentId, Long indexGeneration);
 
+    Integer findMaxChunkIndexByDocumentIdExceptGeneration(Long documentId, Long indexGeneration);
+
     /**
      * 删除文档下全部切片。
      */

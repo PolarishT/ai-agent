@@ -6,7 +6,7 @@ package com.bytedance.ai.graph.ordermanage;
 public final class OrderManageStateKeys {
 
     public static final String ORDER_ACTION = "orderAction";
-    public static final String PENDING_ORDER_ACTION_ID = "pendingOrderActionId";
+    public static final String ORDER_CONTEXT_ITEM_ID = "orderContextItemId";
     public static final String ORDER_STATUS = "orderStatus";
     public static final String CART_SNAPSHOT = "cartSnapshot";
     public static final String CART_SNAPSHOT_HASH = "cartSnapshotHash";

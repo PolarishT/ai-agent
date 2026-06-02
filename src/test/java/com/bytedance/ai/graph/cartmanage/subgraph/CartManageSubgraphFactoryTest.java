@@ -4,6 +4,12 @@ import com.alibaba.cloud.ai.graph.OverAllState;
 import com.bytedance.ai.graph.cart.api.CartItemView;
 import com.bytedance.ai.graph.cart.api.CartState;
 import com.bytedance.ai.graph.cart.api.CartView;
+import com.bytedance.ai.graph.catalog.api.CatalogProductView;
+import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
+import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
+import com.bytedance.ai.graph.conversation.context.ConversationContextItemStatus;
+import com.bytedance.ai.graph.conversation.context.ConversationContextManager;
+import com.bytedance.ai.graph.conversation.context.ConversationRuntimeContext;
 import com.bytedance.ai.graph.orchestration.GuideGraphStateKeys;
 import com.bytedance.ai.graph.cartmanage.application.CartCommandService;
 import com.bytedance.ai.graph.cartmanage.application.CartManageSlotFillingService;
@@ -12,12 +18,11 @@ import com.bytedance.ai.graph.cartmanage.CartMutationResult;
 import com.bytedance.ai.graph.cartmanage.ProductCandidate;
 import com.bytedance.ai.graph.cartmanage.application.ProductCatalogResolver;
 import com.bytedance.ai.graph.cartmanage.StockResult;
-import com.bytedance.ai.graph.cartmanage.persistence.PendingCartActionRecord;
-import com.bytedance.ai.graph.cartmanage.persistence.PendingCartActionRepository;
 import com.bytedance.ai.graph.cartmanage.subgraph.support.CandidateSelectionResolver;
 import com.bytedance.ai.graph.intent.support.SlotKeys;
 import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
+import java.time.OffsetDateTime;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -42,7 +47,7 @@ class CartManageSubgraphFactoryTest {
                 cart(item(1L, 101L, "SKU-1", "苹果", 1)),
                 ProductCatalogResolver.empty(),
                 StockMode.IN_STOCK,
-                new StubPendingRepository(),
+                new StubContextManager(),
                 command
         );
 
@@ -63,7 +68,7 @@ class CartManageSubgraphFactoryTest {
                 cart(item(1L, 101L, "SKU-1", "苹果", 1)),
                 ProductCatalogResolver.empty(),
                 StockMode.IN_STOCK,
-                new StubPendingRepository(),
+                new StubContextManager(),
                 command
         );
 
@@ -88,7 +93,7 @@ class CartManageSubgraphFactoryTest {
                 cart(),
                 ProductCatalogResolver.empty(),
                 StockMode.IN_STOCK,
-                new StubPendingRepository(),
+                new StubContextManager(),
                 command
         );
 
@@ -116,7 +121,7 @@ class CartManageSubgraphFactoryTest {
                 cart(),
                 ProductCatalogResolver.empty(),
                 StockMode.IN_STOCK,
-                new StubPendingRepository(),
+                new StubContextManager(),
                 command
         );
 
@@ -138,7 +143,7 @@ class CartManageSubgraphFactoryTest {
                 cart(),
                 new StubCatalog(candidate("101", "SKU-1", "红富士苹果")),
                 StockMode.IN_STOCK,
-                new StubPendingRepository(),
+                new StubContextManager(),
                 command
         );
 
@@ -150,7 +155,7 @@ class CartManageSubgraphFactoryTest {
 
     @Test
     void addByNameWithMultipleCandidatesWaitsForSelection() throws Exception {
-        StubPendingRepository pending = new StubPendingRepository();
+        StubContextManager pending = new StubContextManager();
 
         OverAllState state = invoke(
                 "加苹果",
@@ -183,7 +188,7 @@ class CartManageSubgraphFactoryTest {
                 cart(),
                 new StubCatalog(),
                 StockMode.IN_STOCK,
-                new StubPendingRepository(),
+                new StubContextManager(),
                 new StubCartCommand()
         );
 
@@ -196,7 +201,7 @@ class CartManageSubgraphFactoryTest {
 
     @Test
     void addByNameWithExpectedPriceMismatchDoesNotOfferInvalidCandidates() throws Exception {
-        StubPendingRepository pending = new StubPendingRepository();
+        StubContextManager pending = new StubContextManager();
         StubCartCommand command = new StubCartCommand();
 
         OverAllState state = invoke(
@@ -229,7 +234,7 @@ class CartManageSubgraphFactoryTest {
 
     @Test
     void testConstraintMismatchDoesNotCreatePending() throws Exception {
-        StubPendingRepository pending = new StubPendingRepository();
+        StubContextManager pending = new StubContextManager();
 
         OverAllState state = invoke(
                 "加苹果，价格199",
@@ -262,7 +267,7 @@ class CartManageSubgraphFactoryTest {
                         candidate("102", "SKU-2", "青苹果", "299.00", "brand", "spec", "SPU-102")
                 ),
                 StockMode.IN_STOCK,
-                new StubPendingRepository(),
+                new StubContextManager(),
                 new StubCartCommand()
         );
 
@@ -276,7 +281,7 @@ class CartManageSubgraphFactoryTest {
 
     @Test
     void addByNameWithExpectedPriceUniqueMatchAutoAdds() throws Exception {
-        StubPendingRepository pending = new StubPendingRepository();
+        StubContextManager pending = new StubContextManager();
         StubCartCommand command = new StubCartCommand();
 
         OverAllState state = invoke(
@@ -315,7 +320,7 @@ class CartManageSubgraphFactoryTest {
                         candidate("102", "SKU-2", "青苹果", "299.00", "brand", "spec", "SPU-102")
                 ),
                 StockMode.IN_STOCK,
-                new StubPendingRepository(),
+                new StubContextManager(),
                 command
         );
 
@@ -338,7 +343,7 @@ class CartManageSubgraphFactoryTest {
                         candidate("102", "SKU-2", "通勤包", "299.00", "brand", "color=黑色", "SPU-102")
                 ),
                 StockMode.IN_STOCK,
-                new StubPendingRepository(),
+                new StubContextManager(),
                 command
         );
 
@@ -363,7 +368,7 @@ class CartManageSubgraphFactoryTest {
                         candidate("103", "SKU-3", "通勤包", "299.00", "brand", "color=灰色", "SPU-103")
                 ),
                 StockMode.IN_STOCK,
-                new StubPendingRepository(),
+                new StubContextManager(),
                 command
         );
 
@@ -376,7 +381,7 @@ class CartManageSubgraphFactoryTest {
 
     @Test
     void testMultipleMatchedCandidatesCreatePendingWithMatchedOnly() throws Exception {
-        StubPendingRepository pending = new StubPendingRepository();
+        StubContextManager pending = new StubContextManager();
 
         OverAllState state = invoke(
                 "加黑色通勤包",
@@ -403,7 +408,7 @@ class CartManageSubgraphFactoryTest {
 
     @Test
     void testSelectionIndexUsesMatchedCandidatesOnly() throws Exception {
-        StubPendingRepository pending = new StubPendingRepository();
+        StubContextManager pending = new StubContextManager();
         invoke(
                 "加黑色通勤包",
                 Map.of(SlotKeys.CART_ACTION, "ADD", SlotKeys.PRODUCT_NAME, "通勤包"),
@@ -439,7 +444,7 @@ class CartManageSubgraphFactoryTest {
 
     @Test
     void testPriceConstraint199DoesNotReturn259Or299AsSelectable() throws Exception {
-        StubPendingRepository pending = new StubPendingRepository();
+        StubContextManager pending = new StubContextManager();
 
         OverAllState state = invoke(
                 "请把商品添加到购物车城市通勤双肩包 15 寸大容量数量为1，商品价格为199的那个",
@@ -466,7 +471,7 @@ class CartManageSubgraphFactoryTest {
 
     @Test
     void selectionByIndexResolvesCandidateChecksStockThenExecutes() throws Exception {
-        StubPendingRepository pending = pendingRepository(List.of(
+        StubContextManager pending = contextManager(List.of(
                 candidate("101", "SKU-1", "红富士苹果"),
                 candidate("102", "SKU-2", "青苹果")
         ));
@@ -493,7 +498,7 @@ class CartManageSubgraphFactoryTest {
 
     @Test
     void selectionByIndexDoesNotUseCandidatePriceAsExpectedPrice() throws Exception {
-        StubPendingRepository pending = pendingRepository(List.of(
+        StubContextManager pending = contextManager(List.of(
                 new ProductCandidate("101", "SKU-1", "红富士苹果", new BigDecimal("999.00"), "brand", "spec", "SPU-101"),
                 new ProductCandidate("102", "SKU-2", "青苹果", new BigDecimal("888.00"), "brand", "spec", "SPU-102")
         ));
@@ -519,7 +524,7 @@ class CartManageSubgraphFactoryTest {
 
     @Test
     void selectionByIndexAddFailureReturnsFailurePromptNotSuccess() throws Exception {
-        StubPendingRepository pending = pendingRepository(List.of(
+        StubContextManager pending = contextManager(List.of(
                 candidate("101", "SKU-1", "红富士苹果"),
                 candidate("102", "SKU-2", "青苹果")
         ));
@@ -547,7 +552,7 @@ class CartManageSubgraphFactoryTest {
 
     @Test
     void implicitThisDoesNotSelectFirstWhenMultipleCandidatesArePending() throws Exception {
-        StubPendingRepository pending = pendingRepository(List.of(
+        StubContextManager pending = contextManager(List.of(
                 candidate("101", "SKU-1", "红富士苹果"),
                 candidate("102", "SKU-2", "青苹果")
         ));
@@ -574,7 +579,7 @@ class CartManageSubgraphFactoryTest {
 
     @Test
     void implicitThisSelectsOnlyCandidateWhenSingleCandidateIsPending() throws Exception {
-        StubPendingRepository pending = pendingRepository(List.of(
+        StubContextManager pending = contextManager(List.of(
                 candidate("101", "SKU-1", "红富士苹果")
         ));
         StubCartCommand command = new StubCartCommand();
@@ -607,7 +612,7 @@ class CartManageSubgraphFactoryTest {
                 cart(item(11L, 101L, "SKU-1", "苹果", 1)),
                 ProductCatalogResolver.empty(),
                 StockMode.IN_STOCK,
-                new StubPendingRepository(),
+                new StubContextManager(),
                 command
         );
 
@@ -628,7 +633,7 @@ class CartManageSubgraphFactoryTest {
                 cart(item(11L, 101L, "SKU-1", "苹果", 1)),
                 ProductCatalogResolver.empty(),
                 StockMode.IN_STOCK,
-                new StubPendingRepository(),
+                new StubContextManager(),
                 command
         );
 
@@ -649,7 +654,7 @@ class CartManageSubgraphFactoryTest {
                 cart(item(11L, 101L, "SKU-1", "红富士苹果", 1)),
                 ProductCatalogResolver.empty(),
                 StockMode.IN_STOCK,
-                new StubPendingRepository(),
+                new StubContextManager(),
                 command
         );
 
@@ -672,7 +677,7 @@ class CartManageSubgraphFactoryTest {
                 ),
                 ProductCatalogResolver.empty(),
                 StockMode.IN_STOCK,
-                new StubPendingRepository(),
+                new StubContextManager(),
                 command
         );
 
@@ -694,7 +699,7 @@ class CartManageSubgraphFactoryTest {
                 cart(item(11L, 101L, "SKU-1", "苹果", 1)),
                 ProductCatalogResolver.empty(),
                 StockMode.IN_STOCK,
-                new StubPendingRepository(),
+                new StubContextManager(),
                 command
         );
 
@@ -716,7 +721,7 @@ class CartManageSubgraphFactoryTest {
                 cart(item(1L, 101L, "SKU-1", "苹果", 1)),
                 ProductCatalogResolver.empty(),
                 StockMode.IN_STOCK,
-                new StubPendingRepository(),
+                new StubContextManager(),
                 command
         );
 
@@ -735,7 +740,7 @@ class CartManageSubgraphFactoryTest {
                 cart(item(11L, 101L, "SKU-1", "苹果", 1)),
                 ProductCatalogResolver.empty(),
                 StockMode.IN_STOCK,
-                new StubPendingRepository(),
+                new StubContextManager(),
                 new StubCartCommand()
         );
 
@@ -755,7 +760,7 @@ class CartManageSubgraphFactoryTest {
                 cart(),
                 ProductCatalogResolver.empty(),
                 StockMode.OUT_OF_STOCK,
-                new StubPendingRepository(),
+                new StubContextManager(),
                 new StubCartCommand()
         );
 
@@ -780,7 +785,7 @@ class CartManageSubgraphFactoryTest {
                 cart(),
                 ProductCatalogResolver.empty(),
                 StockMode.IN_STOCK,
-                new StubPendingRepository(),
+                new StubContextManager(),
                 command,
                 staleState
         );
@@ -830,7 +835,7 @@ class CartManageSubgraphFactoryTest {
 
     @Test
     void selectionByChineseOrdinalResolvesCandidateChecksStockThenExecutes() throws Exception {
-        StubPendingRepository pending = pendingRepository(List.of(
+        StubContextManager pending = contextManager(List.of(
                 candidate("101", "SKU-1", "红富士苹果"),
                 candidate("102", "SKU-2", "青苹果")
         ));
@@ -856,7 +861,7 @@ class CartManageSubgraphFactoryTest {
 
     @Test
     void selectionByCandidateAttributeChecksStockThenExecutes() throws Exception {
-        StubPendingRepository pending = pendingRepository(List.of(
+        StubContextManager pending = contextManager(List.of(
                 candidate("101", "SKU-1", "轻量通勤双肩包", "NorthFace", "color=黑色", "SPU-101"),
                 candidate("102", "SKU-2", "轻量通勤双肩包", "NorthFace", "color=藏青", "SPU-102")
         ));
@@ -882,7 +887,7 @@ class CartManageSubgraphFactoryTest {
 
     @Test
     void llmFallbackValidIndexChecksStockThenExecutes() throws Exception {
-        StubPendingRepository pending = pendingRepository(List.of(
+        StubContextManager pending = contextManager(List.of(
                 candidate("101", "SKU-1", "红富士苹果"),
                 candidate("102", "SKU-2", "青苹果")
         ));
@@ -909,7 +914,7 @@ class CartManageSubgraphFactoryTest {
 
     @Test
     void llmFallbackNegativeIndexWaitsForClarification() throws Exception {
-        StubPendingRepository pending = pendingRepository(List.of(
+        StubContextManager pending = contextManager(List.of(
                 candidate("101", "SKU-1", "红富士苹果"),
                 candidate("102", "SKU-2", "青苹果")
         ));
@@ -942,7 +947,7 @@ class CartManageSubgraphFactoryTest {
             CartView cart,
             ProductCatalogResolver catalogResolver,
             StockMode stockMode,
-            StubPendingRepository pendingRepository,
+            StubContextManager pendingRepository,
             StubCartCommand command
     ) throws Exception {
         return invoke(message, slots, filledSlots, cart, catalogResolver, stockMode, pendingRepository, command, Map.of());
@@ -955,7 +960,7 @@ class CartManageSubgraphFactoryTest {
             CartView cart,
             ProductCatalogResolver catalogResolver,
             StockMode stockMode,
-            StubPendingRepository pendingRepository,
+            StubContextManager pendingRepository,
             StubCartCommand command,
             Map<String, Object> extraState
     ) throws Exception {
@@ -970,7 +975,7 @@ class CartManageSubgraphFactoryTest {
             CartView cart,
             ProductCatalogResolver catalogResolver,
             StockMode stockMode,
-            StubPendingRepository pendingRepository,
+            StubContextManager pendingRepository,
             StubCartCommand command,
             CandidateSelectionLlmService candidateSelectionLlmService
     ) throws Exception {
@@ -985,7 +990,7 @@ class CartManageSubgraphFactoryTest {
             CartView cart,
             ProductCatalogResolver catalogResolver,
             StockMode stockMode,
-            StubPendingRepository pendingRepository,
+            StubContextManager pendingRepository,
             StubCartCommand command,
             Map<String, Object> extraState,
             CandidateSelectionLlmService candidateSelectionLlmService
@@ -997,6 +1002,7 @@ class CartManageSubgraphFactoryTest {
                         ? StockResult.inStock(productId, skuId, requested)
                         : StockResult.outOfStock(productId, skuId, 0),
                 catalogResolver,
+                new StubCatalogQueryFacade(),
                 pendingRepository,
                 new StubSlotFilling(filledSlots),
                 candidateSelectionLlmService
@@ -1006,6 +1012,7 @@ class CartManageSubgraphFactoryTest {
         initialState.put(GuideGraphStateKeys.CONVERSATION_ID, CONVERSATION_ID);
         initialState.put(GuideGraphStateKeys.MESSAGE, message);
         initialState.put(GuideGraphStateKeys.INTENT_SLOTS, slots);
+        initialState.put(GuideGraphStateKeys.CONVERSATION_CONTEXT, pendingRepository.load(USER_ID, CONVERSATION_ID));
         return factory.build().compile().invoke(initialState).orElseThrow();
     }
 
@@ -1047,20 +1054,12 @@ class CartManageSubgraphFactoryTest {
                 BigDecimal.ZERO, itemList.size(), Map.of(), itemList);
     }
 
-    private static StubPendingRepository pendingRepository(List<ProductCandidate> candidates) {
-        StubPendingRepository repository = new StubPendingRepository();
-        repository.active = Optional.of(new PendingCartActionRecord(
+    private static StubContextManager contextManager(List<ProductCandidate> candidates) {
+        StubContextManager repository = new StubContextManager();
+        repository.active = Optional.of(new TestPending(
                 1L,
-                USER_ID,
-                CONVERSATION_ID,
-                CartAction.ADD,
-                "苹果",
                 1,
-                candidates,
-                CartWorkflowStatus.WAITING_USER_SELECTION,
-                LocalDateTime.now(),
-                LocalDateTime.now(),
-                LocalDateTime.now().plusHours(1)
+                candidates
         ));
         return repository;
     }
@@ -1168,50 +1167,186 @@ class CartManageSubgraphFactoryTest {
         }
     }
 
-    private static final class StubPendingRepository implements PendingCartActionRepository {
-        Optional<PendingCartActionRecord> active = Optional.empty();
+    private record TestPending(Long id, Integer quantity, List<ProductCandidate> candidates) {
+    }
+
+    private static final class StubCatalogQueryFacade implements CatalogQueryFacade {
+        @Override
+        public CatalogProductView getProduct(Long productId) {
+            return new CatalogProductView(productId, "商品" + productId, "brand", "category", null,
+                    new BigDecimal("9.90"), new BigDecimal("9.90"), new BigDecimal("9.90"),
+                    10, "", "ACTIVE", Map.of(), Map.of(), listSkus(productId), OffsetDateTime.now(), OffsetDateTime.now());
+        }
+
+        @Override
+        public List<CatalogSkuView> listSkus(Long productId) {
+            return List.of(new CatalogSkuView(200L + productId, "SKU-" + productId, Map.of(),
+                    new BigDecimal("9.90"), 10, "ACTIVE"));
+        }
+    }
+
+    private static final class StubContextManager implements ConversationContextManager {
+        Optional<TestPending> active = Optional.empty();
         List<Long> completedIds = new ArrayList<>();
         List<Long> cancelledIds = new ArrayList<>();
         long sequence = 1L;
 
         @Override
-        public PendingCartActionRecord save(PendingCartActionRecord record) {
-            PendingCartActionRecord saved = new PendingCartActionRecord(
-                    sequence++,
-                    record.userId(),
-                    record.conversationId(),
-                    record.action(),
-                    record.productName(),
-                    record.quantity(),
-                    record.candidates(),
-                    record.status(),
-                    record.createdAt(),
-                    record.updatedAt(),
-                    record.expireAt()
+        public ConversationRuntimeContext load(String userId, String conversationId) {
+            ConversationRuntimeContext.PendingClarification clarification = active
+                    .map(pending -> new ConversationRuntimeContext.PendingClarification(
+                            pending.id(),
+                            "CART_CANDIDATE_SELECTION",
+                            "cart_manage_workflow",
+                            pending.quantity(),
+                            toContextCandidates(pending.candidates()),
+                            LocalDateTime.now().plusHours(1),
+                            Map.of()
+                    ))
+                    .orElse(null);
+            return new ConversationRuntimeContext(
+                    1L,
+                    userId,
+                    conversationId,
+                    List.of(),
+                    null,
+                    List.of(),
+                    null,
+                    null,
+                    clarification,
+                    null,
+                    Map.of(),
+                    Map.of(),
+                    List.of()
             );
-            active = Optional.of(saved);
-            return saved;
         }
 
         @Override
-        public Optional<PendingCartActionRecord> findActiveByUserIdAndConversationId(String userId, String conversationId) {
-            return active.filter(record -> record.userId().equals(userId) && record.conversationId().equals(conversationId));
+        public void saveProductCandidates(String userId, String conversationId, String sourceTurnId,
+                                          String sourceWorkflow,
+                                          List<ConversationRuntimeContext.ProductCandidateItem> candidates,
+                                          LocalDateTime expiresAt) {
         }
 
         @Override
-        public void markCompleted(Long id) {
-            completedIds.add(id);
+        public void saveTaskChain(String userId, String conversationId, String sourceTurnId,
+                                  String sourceWorkflow,
+                                  ConversationRuntimeContext.TaskChain taskChain,
+                                  LocalDateTime expiresAt) {
+        }
+
+        @Override
+        public ConversationRuntimeContext.TaskChain loadTaskChain(String userId, String conversationId,
+                                                                  String taskChainId) {
+            return null;
+        }
+
+        @Override
+        public boolean markChainStep(String userId, String conversationId, String taskChainId, int stepNo,
+                                     String newStepStatus, ConversationRuntimeContext.StepOutput output,
+                                     String turnId) {
+            return false;
+        }
+
+        @Override
+        public boolean transitionChainStatus(String userId, String conversationId, String taskChainId,
+                                             String newChainStatus, String turnId) {
+            return false;
+        }
+
+        @Override
+        public void updateFocus(String userId, String conversationId, String sourceTurnId, String sourceWorkflow,
+                                ConversationRuntimeContext.Focus focus, LocalDateTime expiresAt) {
+        }
+
+        @Override
+        public ConversationRuntimeContext.PendingClarification savePendingClarification(
+                String userId,
+                String conversationId,
+                String sourceTurnId,
+                String sourceWorkflow,
+                ConversationRuntimeContext.PendingClarification clarification,
+                LocalDateTime expiresAt
+        ) {
+            Long id = sequence++;
+            active = Optional.of(new TestPending(id, clarification.quantity(),
+                    clarification.candidates().stream()
+                            .map(candidate -> new ProductCandidate(
+                                    candidate.productId(),
+                                    candidate.skuId(),
+                                    candidate.productName(),
+                                    candidate.price(),
+                                    candidate.brief(),
+                                    candidate.spec(),
+                                    candidate.externalRef()))
+                            .toList()));
+            return new ConversationRuntimeContext.PendingClarification(
+                    id,
+                    clarification.clarificationType(),
+                    clarification.sourceWorkflow(),
+                    clarification.quantity(),
+                    clarification.candidates(),
+                    expiresAt,
+                    clarification.payload()
+            );
+        }
+
+        @Override
+        public void consumePendingClarification(Long contextItemId) {
+            completedIds.add(contextItemId);
             active = Optional.empty();
         }
 
         @Override
-        public void markCancelled(Long id) {
-            cancelledIds.add(id);
-            active = Optional.empty();
+        public void updateCartSnapshot(String userId, String conversationId, String sourceTurnId, String sourceWorkflow,
+                                       ConversationRuntimeContext.CartSnapshot cartSnapshot, LocalDateTime expiresAt) {
         }
 
         @Override
-        public void deleteExpired() {
+        public ConversationRuntimeContext.OrderContext updateOrderContext(String userId, String conversationId,
+                                                                          String sourceTurnId, String sourceWorkflow,
+                                                                          ConversationRuntimeContext.OrderContext orderContext,
+                                                                          LocalDateTime expiresAt) {
+            return orderContext;
+        }
+
+        @Override
+        public void updateLastTurn(String userId, String conversationId, String sourceTurnId, String sourceWorkflow,
+                                   ConversationRuntimeContext.LastTurn lastTurn, LocalDateTime expiresAt) {
+        }
+
+        @Override
+        public boolean transitionOrderContextStatus(Long contextItemId, String expectedOrderStatus,
+                                                    ConversationRuntimeContext.OrderContext orderContext,
+                                                    ConversationContextItemStatus itemStatus) {
+            return false;
+        }
+
+        @Override
+        public void markContextItemStatus(Long contextItemId, ConversationContextItemStatus status) {
+            cancelledIds.add(contextItemId);
+            active = Optional.empty();
+        }
+
+        private List<ConversationRuntimeContext.ProductCandidateItem> toContextCandidates(List<ProductCandidate> candidates) {
+            List<ConversationRuntimeContext.ProductCandidateItem> result = new ArrayList<>();
+            for (int i = 0; i < candidates.size(); i++) {
+                ProductCandidate candidate = candidates.get(i);
+                result.add(new ConversationRuntimeContext.ProductCandidateItem(
+                        null,
+                        i + 1,
+                        candidate.productId(),
+                        candidate.skuId(),
+                        candidate.productName(),
+                        candidate.price(),
+                        candidate.brief(),
+                        candidate.spec(),
+                        candidate.externalRef(),
+                        null,
+                        Map.of()
+                ));
+            }
+            return result;
         }
     }
 }

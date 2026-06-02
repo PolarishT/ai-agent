@@ -11,6 +11,7 @@ import com.bytedance.ai.graph.api.GuideGraphFinalSummary;
 import com.bytedance.ai.graph.api.GuideGraphRequest;
 import com.bytedance.ai.graph.api.GuideGraphStreamFacade;
 import com.bytedance.ai.graph.api.NodeRunStatus;
+import com.bytedance.ai.graph.conversation.persistence.AgentConversationRepository;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.MediaType;
@@ -37,9 +38,14 @@ import java.util.UUID;
 public class GuideAgentTurnController {
 
     private final GuideGraphStreamFacade graphStreamFacade;
+    private final AgentConversationRepository conversationRepository;
 
-    public GuideAgentTurnController(GuideGraphStreamFacade graphStreamFacade) {
+    public GuideAgentTurnController(
+            GuideGraphStreamFacade graphStreamFacade,
+            AgentConversationRepository conversationRepository
+    ) {
         this.graphStreamFacade = graphStreamFacade;
+        this.conversationRepository = conversationRepository;
     }
 
     @GetMapping(value = "/turn", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -47,12 +53,11 @@ public class GuideAgentTurnController {
             @RequestParam @NotBlank @Size(max = 64) String userId,
             @RequestParam @NotBlank @Size(max = 64) String conversationId,
             @RequestParam @NotBlank @Size(max = 2000) String message,
-            @RequestParam(required = false) @Size(max = 64) String turnId,
             @RequestParam(required = false) @Size(max = 64) String requestId,
             @RequestParam(required = false) @Size(max = 64) String imageRef,
             @RequestParam(required = false) @Size(max = 16) String streamMode
     ) {
-        String actualTurnId = StringUtils.hasText(turnId) ? turnId : UUID.randomUUID().toString();
+        String actualTurnId = conversationRepository.allocateTurnId(userId, conversationId);
         String actualRequestId = StringUtils.hasText(requestId) ? requestId : UUID.randomUUID().toString();
         StreamMode actualStreamMode = StreamMode.from(streamMode);
 

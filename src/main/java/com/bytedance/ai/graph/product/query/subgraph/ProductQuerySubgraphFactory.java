@@ -7,12 +7,12 @@ import com.alibaba.cloud.ai.graph.StateGraph;
 import com.alibaba.cloud.ai.graph.action.AsyncEdgeAction;
 import com.alibaba.cloud.ai.graph.action.AsyncNodeAction;
 import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
+import com.bytedance.ai.graph.orchestration.GuideGraphNodeNames;
 import com.bytedance.ai.graph.orchestration.GuideGraphStateKeys;
 import com.bytedance.ai.graph.conversation.ConversationMessage;
+import com.bytedance.ai.graph.conversation.context.ConversationContextManager;
+import com.bytedance.ai.graph.conversation.context.ConversationRuntimeContext;
 import com.bytedance.ai.graph.intent.MainIntent;
-import com.bytedance.ai.graph.product.query.persistence.PendingProductQueryAction;
-import com.bytedance.ai.graph.product.query.persistence.PendingProductQueryRepository;
-import com.bytedance.ai.graph.product.query.persistence.PendingProductQueryStatus;
 import com.bytedance.ai.graph.product.query.ProductComparisonResult;
 import com.bytedance.ai.graph.product.query.ProductHydrationOptions;
 import com.bytedance.ai.graph.product.query.ProductQueryCondition;
@@ -35,6 +35,7 @@ import com.bytedance.ai.graph.product.retrieval.ProductSearchRequest;
 import com.bytedance.ai.graph.product.retrieval.ProductSearchResult;
 import com.bytedance.ai.graph.product.retrieval.ProductSearchSpi;
 import com.bytedance.ai.shared.properties.RagProperties;
+import com.bytedance.ai.shared.support.RagJsonCodec;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.LocalDateTime;
@@ -52,7 +53,7 @@ import org.springframework.util.StringUtils;
  * 商品查询子图工厂：构造 product_query_workflow 的 11 节点 StateGraph。
  *
  * <p>注意：这是只读链路（{@code writeAction=false}）。不会修改 cart / order 状态，
- * 仅向 {@code pending_product_query_actions} 持久化当前轮 condition + 排序后候选，
+ * 仅向中央 {@code agent_context_items} 持久化当前轮 condition + 排序后候选，
  * 供下一轮 INHERIT/OVERRIDE/APPEND 与跨 workflow（cartmanage 后续读）使用。
  */
 @Component
@@ -77,9 +78,10 @@ public class ProductQuerySubgraphFactory {
     private final ProductQueryDebugLogger debugLogger;
     private final ProductComparisonBuilder comparisonBuilder;
     private final ProductQueryResponseBuilder responseBuilder;
-    private final PendingProductQueryRepository pendingRepository;
+    private final ConversationContextManager conversationContextManager;
     private final RagProperties ragProperties;
     private final ObjectProvider<MeterRegistry> meterRegistryProvider;
+    private final RagJsonCodec jsonCodec;
 
     public ProductQuerySubgraphFactory(
             ProductQueryConditionLlmService llmService,
@@ -93,9 +95,10 @@ public class ProductQuerySubgraphFactory {
             ProductQueryDebugLogger debugLogger,
             ProductComparisonBuilder comparisonBuilder,
             ProductQueryResponseBuilder responseBuilder,
-            PendingProductQueryRepository pendingRepository,
+            ConversationContextManager conversationContextManager,
             RagProperties ragProperties,
-            ObjectProvider<MeterRegistry> meterRegistryProvider
+            ObjectProvider<MeterRegistry> meterRegistryProvider,
+            RagJsonCodec jsonCodec
     ) {
         this.llmService = llmService;
         this.validator = validator;
@@ -108,9 +111,10 @@ public class ProductQuerySubgraphFactory {
         this.debugLogger = debugLogger;
         this.comparisonBuilder = comparisonBuilder;
         this.responseBuilder = responseBuilder;
-        this.pendingRepository = pendingRepository;
+        this.conversationContextManager = conversationContextManager;
         this.ragProperties = ragProperties;
         this.meterRegistryProvider = meterRegistryProvider;
+        this.jsonCodec = jsonCodec;
     }
 
     public StateGraph build() {
@@ -180,12 +184,7 @@ public class ProductQuerySubgraphFactory {
 
         Map<String, Object> updates = new LinkedHashMap<>();
         clearTransientState(updates);
-        Optional<PendingProductQueryAction> previous = pendingRepository
-                .findActiveByUserIdAndConversationId(userId, conversationId);
-        previous.ifPresent(record -> {
-            updates.put(ProductQueryGraphStateKeys.LAST_PRODUCT_QUERY_CONTEXT, record);
-            updates.put(ProductQueryGraphStateKeys.PENDING_PRODUCT_QUERY_ID, record.id());
-        });
+        Optional<ConversationRuntimeContext.LastTurn> previous = productQueryLastResult(state);
         log.info("Product query load context done: userId={}, conversationId={}, hasPrevious={}, messageLen={}",
                 userId, conversationId, previous.isPresent(),
                 userMessage == null ? 0 : userMessage.length());
@@ -430,43 +429,57 @@ public class ProductQuerySubgraphFactory {
         updates.put(ProductQueryGraphStateKeys.NODE_MESSAGE, message);
         updates.putIfAbsent(ProductQueryGraphStateKeys.NEED_USER_INPUT, STATUS_CLARIFY.equals(status));
 
-        persistPendingAction(state, condition, ranked);
+        persistContext(state, condition, ranked);
         return updates;
     }
 
-    private void persistPendingAction(
+    private void persistContext(
             OverAllState state,
             ProductQueryCondition condition,
             List<ProductSearchCandidate> ranked
     ) {
-        if (condition == null || condition.needClarify()) {
+        if (conversationContextManager == null || condition == null || condition.needClarify()) {
             return;
         }
         try {
             String userId = requiredString(state, GuideGraphStateKeys.USER_ID);
             String conversationId = requiredString(state, GuideGraphStateKeys.CONVERSATION_ID);
-            int turnCount = state.value(ProductQueryGraphStateKeys.LAST_PRODUCT_QUERY_CONTEXT,
-                            PendingProductQueryAction.class)
-                    .map(PendingProductQueryAction::turnCount)
-                    .map(prev -> prev + 1)
-                    .orElse(1);
             long ttlHours = ragProperties.productQuery().pendingTtlHours();
-            LocalDateTime now = LocalDateTime.now();
-            PendingProductQueryAction record = new PendingProductQueryAction(
-                    null,
+            LocalDateTime expiresAt = LocalDateTime.now().plusHours(ttlHours);
+            String turnId = state.value(GuideGraphStateKeys.RUN_ID, "");
+            String workflow = GuideGraphNodeNames.PRODUCT_QUERY_WORKFLOW;
+
+            List<ConversationRuntimeContext.ProductCandidateItem> candidates = toContextCandidates(ranked);
+            conversationContextManager.saveProductCandidates(
                     userId,
                     conversationId,
-                    condition,
-                    ranked,
-                    turnCount,
-                    PendingProductQueryStatus.ACTIVE,
-                    now,
-                    now,
-                    now.plusHours(ttlHours)
+                    turnId,
+                    workflow,
+                    candidates,
+                    expiresAt
             );
-            pendingRepository.save(record);
+
+            ConversationRuntimeContext.Focus focus = candidates.isEmpty()
+                    ? null
+                    : focusFromCandidate(candidates.getFirst());
+            conversationContextManager.updateFocus(userId, conversationId, turnId, workflow, focus, expiresAt);
+
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("condition", condition);
+            payload.put("candidateCount", ranked == null ? 0 : ranked.size());
+            payload.put("status", ranked == null || ranked.isEmpty() ? STATUS_NO_HITS : STATUS_OK);
+            payload.put("workflow", workflow);
+            conversationContextManager.updateLastTurn(
+                    userId,
+                    conversationId,
+                    turnId,
+                    workflow,
+                    new ConversationRuntimeContext.LastTurn(null, workflow,
+                            ranked == null || ranked.isEmpty() ? STATUS_NO_HITS : STATUS_OK, payload),
+                    expiresAt
+            );
         } catch (RuntimeException exception) {
-            log.warn("Failed to persist pending_product_query_actions; multi-turn refine may misbehave", exception);
+            log.warn("Failed to persist product query context; multi-turn refine may misbehave", exception);
         }
     }
 
@@ -478,12 +491,100 @@ public class ProductQuerySubgraphFactory {
     }
 
     private ProductQueryCondition previousCondition(OverAllState state) {
-        return state.value(ProductQueryGraphStateKeys.LAST_PRODUCT_QUERY_CONTEXT, PendingProductQueryAction.class)
-                .map(PendingProductQueryAction::condition)
+        return productQueryLastResult(state)
+                .map(lastTurn -> readCondition(lastTurn.payload().get("condition")))
                 .orElse(null);
     }
 
+    private Optional<ConversationRuntimeContext.LastTurn> productQueryLastResult(OverAllState state) {
+        ConversationRuntimeContext context = state.value(
+                GuideGraphStateKeys.CONVERSATION_CONTEXT,
+                ConversationRuntimeContext.class
+        ).orElse(null);
+        if (context == null) {
+            return Optional.empty();
+        }
+        ConversationRuntimeContext.LastTurn workflowResult =
+                context.lastResult(GuideGraphNodeNames.PRODUCT_QUERY_WORKFLOW);
+        if (workflowResult != null) {
+            return Optional.of(workflowResult);
+        }
+        ConversationRuntimeContext.LastTurn current = context.lastTurn();
+        return current != null && GuideGraphNodeNames.PRODUCT_QUERY_WORKFLOW.equals(current.sourceWorkflow())
+                ? Optional.of(current)
+                : Optional.empty();
+    }
+
+    private ProductQueryCondition readCondition(Object value) {
+        if (value instanceof ProductQueryCondition condition) {
+            return condition;
+        }
+        if (value == null || jsonCodec == null) {
+            return null;
+        }
+        try {
+            return jsonCodec.read(jsonCodec.write(value), ProductQueryCondition.class);
+        } catch (RuntimeException exception) {
+            log.warn("Failed to read product query condition from conversation context", exception);
+            return null;
+        }
+    }
+
+    private List<ConversationRuntimeContext.ProductCandidateItem> toContextCandidates(
+            List<ProductSearchCandidate> candidates
+    ) {
+        if (candidates == null || candidates.isEmpty()) {
+            return List.of();
+        }
+        List<ConversationRuntimeContext.ProductCandidateItem> result = new java.util.ArrayList<>();
+        for (int i = 0; i < candidates.size(); i++) {
+            ProductSearchCandidate candidate = candidates.get(i);
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("source", "product_query");
+            payload.put("candidate", candidate);
+            payload.put("brand", candidate.brand());
+            payload.put("category", candidate.category());
+            payload.put("subCategory", candidate.subCategory());
+            payload.put("matchReasons", candidate.matchReasons());
+            result.add(new ConversationRuntimeContext.ProductCandidateItem(
+                    null,
+                    i + 1,
+                    candidate.productId() == null ? null : String.valueOf(candidate.productId()),
+                    null,
+                    candidate.title(),
+                    candidate.price(),
+                    candidate.brand(),
+                    null,
+                    candidate.externalRef(),
+                    candidate.stock(),
+                    payload
+            ));
+        }
+        return List.copyOf(result);
+    }
+
+    private ConversationRuntimeContext.Focus focusFromCandidate(
+            ConversationRuntimeContext.ProductCandidateItem candidate
+    ) {
+        return new ConversationRuntimeContext.Focus(
+                null,
+                "current",
+                candidate.rank(),
+                candidate.productId(),
+                candidate.skuId(),
+                candidate.productName(),
+                candidate.payload()
+        );
+    }
+
     private String conversationMemory(OverAllState state) {
+        ConversationRuntimeContext context = state.value(
+                GuideGraphStateKeys.CONVERSATION_CONTEXT,
+                ConversationRuntimeContext.class
+        ).orElse(null);
+        if (context != null) {
+            return context.conversationMemoryText();
+        }
         @SuppressWarnings("unchecked")
         List<ConversationMessage> recent = (List<ConversationMessage>) state
                 .value(GuideGraphStateKeys.RECENT_MESSAGES, List.class)

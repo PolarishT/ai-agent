@@ -6,7 +6,7 @@ package com.bytedance.ai.graph.orchestration;
 public final class GuideGraphNodeNames {
 
     public static final String CHECK_CONVERSATION = "check_conversation";
-    public static final String LOAD_MEMORY = "load_memory";
+    public static final String LOAD_CONVERSATION_CONTEXT = "load_conversation_context";
     public static final String INIT_CONVERSATION = "init_conversation";
     public static final String SAVE_USER_MESSAGE = "save_user_message";
     public static final String MAIN_INTENT_ROUTER = "main_intent_router";

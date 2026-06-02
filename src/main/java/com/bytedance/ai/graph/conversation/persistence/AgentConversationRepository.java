@@ -12,6 +12,12 @@ public interface AgentConversationRepository {
 
     Long initConversation(String userId, String conversationId);
 
+    /**
+     * 原子分配会话内单调递增的 turn_id。
+     * 格式：turn_&lt;base36(内部会话 id)&gt;_&lt;6 位 0 填充序号&gt;。
+     */
+    String allocateTurnId(String userId, String conversationId);
+
     List<ConversationMessage> loadRecentMessages(String userId, String conversationId, int limit);
 
     ConversationMessage saveUserMessage(

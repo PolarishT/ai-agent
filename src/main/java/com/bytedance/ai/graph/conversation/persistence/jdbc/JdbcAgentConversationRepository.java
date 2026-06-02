@@ -93,6 +93,30 @@ public class JdbcAgentConversationRepository implements AgentConversationReposit
     }
 
     @Override
+    @Transactional
+    public String allocateTurnId(String userId, String conversationId) {
+        Long internalId = findConversationInternalId(userId, conversationId)
+                .orElseGet(() -> initConversation(userId, conversationId));
+
+        Long seq = jdbc.queryForObject(
+                """
+                        UPDATE agent_conversations
+                           SET next_turn_seq = next_turn_seq + 1,
+                               updated_at = CURRENT_TIMESTAMP
+                         WHERE id = ?
+                     RETURNING next_turn_seq
+                        """,
+                Long.class,
+                internalId
+        );
+        if (seq == null) {
+            throw new IllegalStateException(
+                    "failed to allocate turn seq for conversation " + conversationId);
+        }
+        return String.format("turn_%s_%06d", Long.toString(internalId, 36), seq);
+    }
+
+    @Override
     public List<ConversationMessage> loadRecentMessages(String userId, String conversationId, int limit) {
         return jdbc.query(
                 """
@@ -213,6 +237,7 @@ public class JdbcAgentConversationRepository implements AgentConversationReposit
                                    status = ?,
                                    intent = ?,
                                    target_workflow = ?,
+                                   updated_at = CURRENT_TIMESTAMP,
                                    completed_at = CASE
                                        WHEN ? IN ('SUCCEEDED', 'FAILED', 'WAITING_CLARIFICATION', 'WAITING_CONFIRMATION')
                                        THEN CURRENT_TIMESTAMP

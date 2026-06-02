@@ -11,7 +11,8 @@ import com.bytedance.ai.graph.cartmanage.application.CartManageSlotFillingServic
 import com.bytedance.ai.graph.cartmanage.application.CartQueryService;
 import com.bytedance.ai.graph.cartmanage.application.InventoryQueryService;
 import com.bytedance.ai.graph.cartmanage.application.ProductCatalogResolver;
-import com.bytedance.ai.graph.cartmanage.persistence.PendingCartActionRepository;
+import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
+import com.bytedance.ai.graph.conversation.context.ConversationContextManager;
 import com.bytedance.ai.graph.cartmanage.subgraph.node.CartCheckStockNode;
 import com.bytedance.ai.graph.cartmanage.subgraph.node.CartExecuteActionNode;
 import com.bytedance.ai.graph.cartmanage.subgraph.node.CartFinalResponseNode;
@@ -47,7 +48,8 @@ public class CartManageSubgraphFactory {
             CartCommandService cartCommandService,
             InventoryQueryService inventoryQueryService,
             ProductCatalogResolver productCatalogResolver,
-            PendingCartActionRepository pendingCartActionRepository,
+            CatalogQueryFacade catalogQueryFacade,
+            ConversationContextManager conversationContextManager,
             CartManageSlotFillingService slotFillingService,
             CandidateSelectionLlmService candidateSelectionLlmService
     ) {
@@ -55,13 +57,18 @@ public class CartManageSubgraphFactory {
         CandidateSelectionResolver candidateSelectionResolver = new CandidateSelectionResolver(candidateSelectionLlmService);
         CartItemLookup cartItemLookup = new CartItemLookup();
 
-        this.loadContextNode = new CartLoadContextNode(pendingCartActionRepository, candidateSelectionResolver);
+        this.loadContextNode = new CartLoadContextNode(conversationContextManager, candidateSelectionResolver);
         this.resolveActionNode = new CartResolveActionNode();
-        this.resolveTargetNode = new CartResolveTargetNode(slotFillingService, cartItemLookup);
-        this.searchCatalogNode = new CartSearchCatalogNode(productCatalogResolver, pendingCartActionRepository, candidateMatcher);
-        this.resolveCandidateNode = new CartResolveCandidateNode(pendingCartActionRepository, candidateSelectionResolver);
+        this.resolveTargetNode = new CartResolveTargetNode(slotFillingService, cartItemLookup, catalogQueryFacade);
+        this.searchCatalogNode = new CartSearchCatalogNode(productCatalogResolver, conversationContextManager, candidateMatcher);
+        this.resolveCandidateNode = new CartResolveCandidateNode(conversationContextManager, candidateSelectionResolver);
         this.checkStockNode = new CartCheckStockNode(inventoryQueryService);
-        this.executeActionNode = new CartExecuteActionNode(cartQueryService, cartCommandService, cartItemLookup);
+        this.executeActionNode = new CartExecuteActionNode(
+                cartQueryService,
+                cartCommandService,
+                cartItemLookup,
+                conversationContextManager
+        );
         this.finalResponseNode = new CartFinalResponseNode();
     }
 

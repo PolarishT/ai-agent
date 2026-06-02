@@ -17,6 +17,10 @@ import com.bytedance.ai.graph.cartmanage.application.CartManageWorkflowNode;
 import com.bytedance.ai.graph.cartmanage.CartManageWorkflowResult;
 import com.bytedance.ai.graph.cartmanage.subgraph.CartManageSubgraphFactory;
 import com.bytedance.ai.graph.cartmanage.ProductCandidate;
+import com.bytedance.ai.graph.answer.AnswerLlmService;
+import com.bytedance.ai.graph.conversation.context.ConversationContextManager;
+import com.bytedance.ai.graph.conversation.context.ConversationRuntimeContext;
+import com.bytedance.ai.graph.conversation.context.TaskChainTurnRecorder;
 import com.bytedance.ai.graph.conversation.persistence.AgentConversationRepository;
 import com.bytedance.ai.graph.conversation.ConversationMessage;
 import com.bytedance.ai.graph.intent.MainIntent;
@@ -25,7 +29,6 @@ import com.bytedance.ai.graph.intent.service.MainIntentRouterService;
 import com.bytedance.ai.graph.ordermanage.OrderManageSubgraphFactory;
 import com.bytedance.ai.graph.ordermanage.OrderManageStateKeys;
 import com.bytedance.ai.graph.ordermanage.OrderManageStatus;
-import com.bytedance.ai.graph.ordermanage.persistence.PendingOrderActionRepository;
 import com.bytedance.ai.graph.product.query.ProductQueryGraphStateKeys;
 import com.bytedance.ai.graph.product.query.subgraph.ProductQuerySubgraphFactory;
 import com.bytedance.ai.shared.support.RagLogFields;
@@ -34,6 +37,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClientException;
 import java.net.SocketTimeoutException;
 import java.util.LinkedHashSet;
@@ -69,18 +73,20 @@ public class GuideStateGraphFactory {
     private final CartManageWorkflowNode cartManageWorkflowNode;
     private final CartManageSubgraphFactory cartManageSubgraphFactory;
     private final OrderManageSubgraphFactory orderManageSubgraphFactory;
-    private final PendingOrderActionRepository pendingOrderActionRepository;
     private final ProductQuerySubgraphFactory productQuerySubgraphFactory;
+    private final ConversationContextManager conversationContextManager;
+    private final TaskChainTurnRecorder taskChainTurnRecorder;
+    private final AnswerLlmService answerLlmService;
 
     public GuideStateGraphFactory(AgentConversationRepository conversationRepository) {
-        this(conversationRepository, (MainIntentRouterService) null, (CartManageWorkflowNode) null, null, null, null, null);
+        this(conversationRepository, (MainIntentRouterService) null, (CartManageWorkflowNode) null, null, null, null, null, null, null);
     }
 
     public GuideStateGraphFactory(
             AgentConversationRepository conversationRepository,
             CartManageWorkflowNode cartManageWorkflowNode
     ) {
-        this(conversationRepository, (MainIntentRouterService) null, cartManageWorkflowNode, null, null, null, null);
+        this(conversationRepository, (MainIntentRouterService) null, cartManageWorkflowNode, null, null, null, null, null, null);
     }
 
     @Autowired
@@ -90,8 +96,10 @@ public class GuideStateGraphFactory {
             ObjectProvider<CartManageWorkflowNode> cartManageWorkflowNodeProvider,
             ObjectProvider<CartManageSubgraphFactory> cartManageSubgraphFactoryProvider,
             OrderManageSubgraphFactory orderManageSubgraphFactory,
-            ObjectProvider<PendingOrderActionRepository> pendingOrderActionRepositoryProvider,
-            ObjectProvider<ProductQuerySubgraphFactory> productQuerySubgraphFactoryProvider
+            ObjectProvider<ProductQuerySubgraphFactory> productQuerySubgraphFactoryProvider,
+            ObjectProvider<ConversationContextManager> conversationContextManagerProvider,
+            ObjectProvider<TaskChainTurnRecorder> taskChainTurnRecorderProvider,
+            ObjectProvider<AnswerLlmService> answerLlmServiceProvider
     ) {
         this(
                 conversationRepository,
@@ -99,8 +107,10 @@ public class GuideStateGraphFactory {
                 cartManageWorkflowNodeProvider.getIfAvailable(),
                 cartManageSubgraphFactoryProvider.getIfAvailable(),
                 orderManageSubgraphFactory,
-                pendingOrderActionRepositoryProvider.getIfAvailable(),
-                productQuerySubgraphFactoryProvider.getIfAvailable()
+                productQuerySubgraphFactoryProvider.getIfAvailable(),
+                conversationContextManagerProvider.getIfAvailable(),
+                taskChainTurnRecorderProvider.getIfAvailable(),
+                answerLlmServiceProvider.getIfAvailable()
         );
     }
 
@@ -110,16 +120,86 @@ public class GuideStateGraphFactory {
             CartManageWorkflowNode cartManageWorkflowNode,
             CartManageSubgraphFactory cartManageSubgraphFactory,
             OrderManageSubgraphFactory orderManageSubgraphFactory,
-            PendingOrderActionRepository pendingOrderActionRepository,
-            ProductQuerySubgraphFactory productQuerySubgraphFactory
+            ProductQuerySubgraphFactory productQuerySubgraphFactory,
+            ConversationContextManager conversationContextManager,
+            TaskChainTurnRecorder taskChainTurnRecorder,
+            AnswerLlmService answerLlmService
     ) {
         this.conversationRepository = conversationRepository;
         this.mainIntentRouterService = mainIntentRouterService;
         this.cartManageWorkflowNode = cartManageWorkflowNode;
         this.cartManageSubgraphFactory = cartManageSubgraphFactory;
         this.orderManageSubgraphFactory = orderManageSubgraphFactory;
-        this.pendingOrderActionRepository = pendingOrderActionRepository;
         this.productQuerySubgraphFactory = productQuerySubgraphFactory;
+        this.conversationContextManager = conversationContextManager;
+        this.taskChainTurnRecorder = taskChainTurnRecorder;
+        this.answerLlmService = answerLlmService;
+    }
+
+    GuideStateGraphFactory(
+            AgentConversationRepository conversationRepository,
+            MainIntentRouterService mainIntentRouterService,
+            CartManageWorkflowNode cartManageWorkflowNode,
+            CartManageSubgraphFactory cartManageSubgraphFactory,
+            OrderManageSubgraphFactory orderManageSubgraphFactory,
+            ProductQuerySubgraphFactory productQuerySubgraphFactory,
+            ConversationContextManager conversationContextManager,
+            TaskChainTurnRecorder taskChainTurnRecorder
+    ) {
+        this(
+                conversationRepository,
+                mainIntentRouterService,
+                cartManageWorkflowNode,
+                cartManageSubgraphFactory,
+                orderManageSubgraphFactory,
+                productQuerySubgraphFactory,
+                conversationContextManager,
+                taskChainTurnRecorder,
+                null
+        );
+    }
+
+    GuideStateGraphFactory(
+            AgentConversationRepository conversationRepository,
+            MainIntentRouterService mainIntentRouterService,
+            CartManageWorkflowNode cartManageWorkflowNode,
+            CartManageSubgraphFactory cartManageSubgraphFactory,
+            OrderManageSubgraphFactory orderManageSubgraphFactory,
+            ProductQuerySubgraphFactory productQuerySubgraphFactory,
+            ConversationContextManager conversationContextManager
+    ) {
+        this(
+                conversationRepository,
+                mainIntentRouterService,
+                cartManageWorkflowNode,
+                cartManageSubgraphFactory,
+                orderManageSubgraphFactory,
+                productQuerySubgraphFactory,
+                conversationContextManager,
+                null,
+                null
+        );
+    }
+
+    GuideStateGraphFactory(
+            AgentConversationRepository conversationRepository,
+            MainIntentRouterService mainIntentRouterService,
+            CartManageWorkflowNode cartManageWorkflowNode,
+            CartManageSubgraphFactory cartManageSubgraphFactory,
+            OrderManageSubgraphFactory orderManageSubgraphFactory,
+            ProductQuerySubgraphFactory productQuerySubgraphFactory
+    ) {
+        this(
+                conversationRepository,
+                mainIntentRouterService,
+                cartManageWorkflowNode,
+                cartManageSubgraphFactory,
+                orderManageSubgraphFactory,
+                productQuerySubgraphFactory,
+                null,
+                null,
+                null
+        );
     }
 
     public CompiledGraph compile(Consumer<AgentStreamEvent> eventSink) {
@@ -135,10 +215,11 @@ public class GuideStateGraphFactory {
                             GuideGraphNodeNames.CHECK_CONVERSATION, state,
                             actionOverrides.getOrDefault(
                                     GuideGraphNodeNames.CHECK_CONVERSATION, this::checkConversation))));
-            graph.addNode(GuideGraphNodeNames.LOAD_MEMORY,
+            graph.addNode(GuideGraphNodeNames.LOAD_CONVERSATION_CONTEXT,
                     AsyncNodeAction.node_async(state -> nodeTemplate.execute(
-                            GuideGraphNodeNames.LOAD_MEMORY, state,
-                            actionOverrides.getOrDefault(GuideGraphNodeNames.LOAD_MEMORY, this::loadMemory))));
+                            GuideGraphNodeNames.LOAD_CONVERSATION_CONTEXT, state,
+                            actionOverrides.getOrDefault(GuideGraphNodeNames.LOAD_CONVERSATION_CONTEXT,
+                                    this::loadConversationContext))));
             graph.addNode(GuideGraphNodeNames.INIT_CONVERSATION,
                     AsyncNodeAction.node_async(state -> nodeTemplate.execute(
                             GuideGraphNodeNames.INIT_CONVERSATION, state,
@@ -199,8 +280,8 @@ public class GuideStateGraphFactory {
                     AsyncEdgeAction.edge_async(this::routeByConversationExists),
                     conversationExistenceMappings()
             );
-            graph.addEdge(GuideGraphNodeNames.LOAD_MEMORY, GuideGraphNodeNames.SAVE_USER_MESSAGE);
-            graph.addEdge(GuideGraphNodeNames.INIT_CONVERSATION, GuideGraphNodeNames.SAVE_USER_MESSAGE);
+            graph.addEdge(GuideGraphNodeNames.LOAD_CONVERSATION_CONTEXT, GuideGraphNodeNames.SAVE_USER_MESSAGE);
+            graph.addEdge(GuideGraphNodeNames.INIT_CONVERSATION, GuideGraphNodeNames.LOAD_CONVERSATION_CONTEXT);
             graph.addEdge(GuideGraphNodeNames.SAVE_USER_MESSAGE, GuideGraphNodeNames.MAIN_INTENT_ROUTER);
             graph.addConditionalEdges(
                     GuideGraphNodeNames.MAIN_INTENT_ROUTER,
@@ -238,17 +319,28 @@ public class GuideStateGraphFactory {
         );
     }
 
-    private GuideNodeExecutionResult loadMemory(OverAllState state) {
+    private GuideNodeExecutionResult loadConversationContext(OverAllState state) {
         String userId = requiredString(state, GuideGraphStateKeys.USER_ID);
         String conversationId = requiredString(state, GuideGraphStateKeys.CONVERSATION_ID);
-        java.util.List<ConversationMessage> recentMessages =
-                conversationRepository.loadRecentMessages(userId, conversationId, 20);
+        ConversationRuntimeContext context;
+        if (conversationContextManager != null) {
+            context = conversationContextManager.load(userId, conversationId);
+        } else {
+            Long conversationInternalId = conversationRepository.initConversation(userId, conversationId);
+            java.util.List<ConversationMessage> recentMessages =
+                    conversationRepository.loadRecentMessages(userId, conversationId, 24).stream()
+                            .sorted(java.util.Comparator.comparingInt(ConversationMessage::sequenceNo))
+                            .toList();
+            context = ConversationRuntimeContext.empty(conversationInternalId, userId, conversationId, recentMessages);
+        }
         return GuideNodeExecutionResult.withStateUpdates(
                 Map.of(
-                        GuideGraphStateKeys.RECENT_MESSAGES, recentMessages,
-                        GuideGraphStateKeys.MESSAGE_COUNT, recentMessages.size()
+                        GuideGraphStateKeys.CONVERSATION_INTERNAL_ID, context.conversationInternalId(),
+                        GuideGraphStateKeys.CONVERSATION_CONTEXT, context,
+                        GuideGraphStateKeys.RECENT_MESSAGES, context.recentMessages(),
+                        GuideGraphStateKeys.MESSAGE_COUNT, context.recentMessages().size()
                 ),
-                Map.of(GuideGraphStateKeys.MESSAGE_COUNT, recentMessages.size())
+                Map.of(GuideGraphStateKeys.MESSAGE_COUNT, context.recentMessages().size())
         );
     }
 
@@ -445,11 +537,12 @@ public class GuideStateGraphFactory {
         String userId = requiredString(state, GuideGraphStateKeys.USER_ID);
         String conversationId = requiredString(state, GuideGraphStateKeys.CONVERSATION_ID);
         String activePendingStatus = "";
-        if (pendingOrderActionRepository != null) {
-            activePendingStatus = pendingOrderActionRepository
-                    .findActiveByUserIdAndConversationId(userId, conversationId)
-                    .map(record -> record.status().name())
-                    .orElse("");
+        ConversationRuntimeContext context = state.value(
+                GuideGraphStateKeys.CONVERSATION_CONTEXT,
+                ConversationRuntimeContext.class
+        ).orElse(null);
+        if (context != null && context.order() != null && StringUtils.hasText(context.order().orderStatus())) {
+            activePendingStatus = context.order().orderStatus();
         }
         boolean hasActivePending = !activePendingStatus.isBlank();
         boolean checkout = looksLikeOrderCheckout(normalized);
@@ -510,6 +603,13 @@ public class GuideStateGraphFactory {
     }
 
     private String conversationMemory(OverAllState state) {
+        ConversationRuntimeContext context = state.value(
+                GuideGraphStateKeys.CONVERSATION_CONTEXT,
+                ConversationRuntimeContext.class
+        ).orElse(null);
+        if (context != null) {
+            return context.conversationMemoryText();
+        }
         List<ConversationMessage> recentMessages = state.value(
                 GuideGraphStateKeys.RECENT_MESSAGES,
                 List.<ConversationMessage>of()
@@ -656,6 +756,20 @@ public class GuideStateGraphFactory {
         state.value(GuideGraphStateKeys.WORKFLOW_RESULT).ifPresent(workflowResult ->
                 answerContext.put("workflowResult", workflowResult));
 
+        // 把跨轮记忆（最近消息 + 任务链）喂给 answer 阶段，
+        // 当前 rule-based answer 用不到这两个字段，但 SSE trace 模式可观察；
+        // 后续把 answer 切到 LLM 时直接读 `agentMemoryText` 或 `taskChains` 即可。
+        state.value(GuideGraphStateKeys.CONVERSATION_CONTEXT, ConversationRuntimeContext.class)
+                .ifPresent(context -> {
+                    if (!context.taskChains().isEmpty()) {
+                        answerContext.put("taskChains", context.taskChains());
+                    }
+                    String memory = context.agentMemoryText();
+                    if (!memory.isBlank()) {
+                        answerContext.put("agentMemoryText", memory);
+                    }
+                });
+
         if (GuideGraphNodeNames.ORDER_MANAGE_WORKFLOW.equals(targetWorkflow) && !orderWorkflowDispatched(state)) {
             answerContext.put("answer", ORDER_WORKFLOW_NOT_DISPATCHED_MESSAGE);
             answerContext.put("todo", false);
@@ -664,6 +778,9 @@ public class GuideStateGraphFactory {
             updates.put(GuideGraphStateKeys.ERROR_CODE, ORDER_WORKFLOW_NOT_DISPATCHED);
             updates.put(GuideGraphStateKeys.ERROR_MESSAGE, ORDER_WORKFLOW_NOT_DISPATCHED_MESSAGE);
             updates.put(GuideGraphStateKeys.NODE_MESSAGE, ORDER_WORKFLOW_NOT_DISPATCHED_MESSAGE);
+            recordTaskChainOutcome(state,
+                    state.value(GuideGraphStateKeys.WORKFLOW_RESULT).orElse(null),
+                    ORDER_WORKFLOW_NOT_DISPATCHED_MESSAGE, false);
             return new GuideNodeExecutionResult(
                     NodeRunStatus.FAILED,
                     null,
@@ -678,15 +795,88 @@ public class GuideStateGraphFactory {
             );
         }
 
-        String answer = explicitNodeMessage(state, targetWorkflow)
+        String ruleAnswer = explicitNodeMessage(state, targetWorkflow)
                 .orElseGet(() -> fallbackAnswer(state));
+        boolean success = !hasFailedState(state) && !hasStateErrorCode(state);
+        Object workflowResult = state.value(GuideGraphStateKeys.WORKFLOW_RESULT).orElse(null);
 
+        String answer = ruleAnswer;
+        String answerSource = "rule";
+        if (answerLlmService != null) {
+            String llmAnswer = tryLlmAnswer(state, targetWorkflow, workflowResult, ruleAnswer);
+            if (StringUtils.hasText(llmAnswer)) {
+                answer = llmAnswer;
+                answerSource = "llm";
+            }
+        }
         answerContext.put("answer", answer);
+        answerContext.put("answerSource", answerSource);
         answerContext.put("todo", false);
+        recordTaskChainOutcome(state, workflowResult, answer, success);
         return GuideNodeExecutionResult.withStateUpdates(
                 Map.of(GuideGraphStateKeys.ANSWER_CONTEXT, Map.copyOf(answerContext)),
                 Map.of("answerReady", true, "todo", false)
         );
+    }
+
+    /**
+     * 调 LLM 生成 answer，失败返回 null 让调用方走规则兜底。任何异常 / 空响应不抛。
+     */
+    private String tryLlmAnswer(
+            OverAllState state, String targetWorkflow, Object workflowResult, String ruleAnswer
+    ) {
+        String intent = GuideGraphStateValues.intent(state, GuideGraphStateKeys.INTENT)
+                .map(Enum::name)
+                .orElse(GuideGraphIntent.CLARIFY.name());
+        String userMessage = state.value(GuideGraphStateKeys.MESSAGE, "");
+        String agentMemoryText = state.value(
+                        GuideGraphStateKeys.CONVERSATION_CONTEXT, ConversationRuntimeContext.class)
+                .map(ConversationRuntimeContext::agentMemoryText)
+                .orElse("");
+        AnswerLlmService.AnswerLlmInput input = new AnswerLlmService.AnswerLlmInput(
+                userMessage, intent, targetWorkflow, workflowResult, agentMemoryText, ruleAnswer);
+        try {
+            return answerLlmService.generate(input);
+        } catch (AnswerLlmService.AnswerLlmException ex) {
+            log.warn("answer LLM unavailable, falling back to rule answer: {}", ex.toString());
+            return null;
+        } catch (RuntimeException ex) {
+            log.warn("unexpected error from answer LLM, falling back to rule answer: {}", ex.toString());
+            return null;
+        }
+    }
+
+    /**
+     * 把本轮的 intent / workflow / 结果 交给 recorder + planner 决策落链。
+     * recorder 未注入时静默跳过；任何异常都吞掉 —— 不要让链记录失败影响 answer。
+     */
+    private void recordTaskChainOutcome(
+            OverAllState state, Object workflowResult, String answer, boolean success
+    ) {
+        if (taskChainTurnRecorder == null) {
+            return;
+        }
+        String userId = state.value(GuideGraphStateKeys.USER_ID, "");
+        String conversationId = state.value(GuideGraphStateKeys.CONVERSATION_ID, "");
+        String turnId = state.value(GuideGraphStateKeys.RUN_ID, "");
+        String message = state.value(GuideGraphStateKeys.MESSAGE, "");
+        String intent = GuideGraphStateValues.intent(state, GuideGraphStateKeys.INTENT)
+                .map(Enum::name)
+                .orElse(GuideGraphIntent.CLARIFY.name());
+        String workflow = state.value(GuideGraphStateKeys.TARGET_WORKFLOW, "");
+        ConversationRuntimeContext context = state.value(
+                        GuideGraphStateKeys.CONVERSATION_CONTEXT, ConversationRuntimeContext.class)
+                .orElse(null);
+        try {
+            taskChainTurnRecorder.recordTurn(
+                    context,
+                    userId, conversationId, turnId,
+                    intent, workflow, success,
+                    message, workflowResult, answer
+            );
+        } catch (RuntimeException ex) {
+            log.warn("failed to record task chain for turn {}: {}", turnId, ex.toString());
+        }
     }
 
     private String fallbackAnswer(OverAllState state) {
@@ -760,12 +950,12 @@ public class GuideStateGraphFactory {
 
     private String routeByConversationExists(OverAllState state) {
         boolean exists = state.value(GuideGraphStateKeys.CONVERSATION_EXISTS, false);
-        return exists ? GuideGraphNodeNames.LOAD_MEMORY : GuideGraphNodeNames.INIT_CONVERSATION;
+        return exists ? GuideGraphNodeNames.LOAD_CONVERSATION_CONTEXT : GuideGraphNodeNames.INIT_CONVERSATION;
     }
 
     private Map<String, String> conversationExistenceMappings() {
         return Map.of(
-                GuideGraphNodeNames.LOAD_MEMORY, GuideGraphNodeNames.LOAD_MEMORY,
+                GuideGraphNodeNames.LOAD_CONVERSATION_CONTEXT, GuideGraphNodeNames.LOAD_CONVERSATION_CONTEXT,
                 GuideGraphNodeNames.INIT_CONVERSATION, GuideGraphNodeNames.INIT_CONVERSATION
         );
     }

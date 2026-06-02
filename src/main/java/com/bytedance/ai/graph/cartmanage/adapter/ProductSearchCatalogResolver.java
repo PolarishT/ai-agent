@@ -5,12 +5,22 @@ import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
 import com.bytedance.ai.graph.cartmanage.ProductCandidate;
 import com.bytedance.ai.graph.cartmanage.application.ProductCatalogResolver;
+import com.bytedance.ai.graph.product.query.ProductQueryIntent;
+import com.bytedance.ai.graph.product.retrieval.ProductHardFilter;
+import com.bytedance.ai.graph.product.retrieval.ProductSearchHit;
+import com.bytedance.ai.graph.product.retrieval.ProductSearchRequest;
+import com.bytedance.ai.graph.product.retrieval.ProductSearchResult;
+import com.bytedance.ai.graph.product.retrieval.ProductSearchSpi;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 基于商品检索能力的购物车商品候选解析器。
@@ -18,22 +28,64 @@ import java.util.Map;
 @Service
 public class ProductSearchCatalogResolver implements ProductCatalogResolver {
 
-    private final CatalogQueryFacade catalogQueryFacade;
+    private static final Logger log = LoggerFactory.getLogger(ProductSearchCatalogResolver.class);
 
-    public ProductSearchCatalogResolver(CatalogQueryFacade catalogQueryFacade) {
+    private final CatalogQueryFacade catalogQueryFacade;
+    private final ProductSearchSpi productSearchSpi;
+
+    public ProductSearchCatalogResolver(CatalogQueryFacade catalogQueryFacade, ProductSearchSpi productSearchSpi) {
         this.catalogQueryFacade = catalogQueryFacade;
+        this.productSearchSpi = productSearchSpi;
     }
 
     @Override
     public List<ProductCandidate> searchCandidates(String productName, int limit) {
+        if (!StringUtils.hasText(productName)) {
+            return List.of();
+        }
         int safeLimit = limit <= 0 ? 5 : Math.min(limit, 20);
+        ProductSearchResult result;
+        try {
+            result = productSearchSpi.searchProduct(new ProductSearchRequest(
+                    productName,
+                    safeLimit,
+                    ProductHardFilter.empty(),
+                    productName,
+                    null,
+                    ProductQueryIntent.PRODUCT_SEARCH
+            ));
+        } catch (RuntimeException exception) {
+            log.warn("Cart fallback ProductSearchSpi failed: productName={}", productName, exception);
+            return List.of();
+        }
+        List<ProductSearchHit> hits = result.rankedHits().isEmpty() ? result.fusedHits() : result.rankedHits();
+        Set<Long> productIds = new LinkedHashSet<>();
+        for (ProductSearchHit hit : hits) {
+            if (hit.productId() != null) {
+                productIds.add(hit.productId());
+            }
+            if (productIds.size() >= safeLimit) {
+                break;
+            }
+        }
+
         List<ProductCandidate> candidates = new ArrayList<>();
-        for (CatalogProductView product : catalogQueryFacade.searchActiveProducts(productName, safeLimit)) {
+        for (Long productId : productIds) {
+            CatalogProductView product;
+            try {
+                product = catalogQueryFacade.getProduct(productId);
+            } catch (RuntimeException exception) {
+                log.debug("Cart fallback hit dropped: productId={} not found in catalog", productId);
+                continue;
+            }
             List<CatalogSkuView> skus = product.skus() == null ? List.of() : product.skus();
             if (skus.isEmpty()) {
                 candidates.add(candidate(product, null));
             } else {
                 for (CatalogSkuView sku : skus) {
+                    if (!"ACTIVE".equals(sku.status())) {
+                        continue;
+                    }
                     candidates.add(candidate(product, sku));
                     if (candidates.size() >= safeLimit) {
                         return List.copyOf(candidates);

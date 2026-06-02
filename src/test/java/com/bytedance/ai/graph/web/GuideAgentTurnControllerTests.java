@@ -9,6 +9,8 @@ import com.bytedance.ai.graph.api.GuideGraphStreamFacade;
 import com.bytedance.ai.graph.api.NodeRunStatus;
 import com.bytedance.ai.graph.api.events.TurnErrorPayload;
 import com.bytedance.ai.graph.api.events.TurnStartedPayload;
+import com.bytedance.ai.graph.conversation.ConversationMessage;
+import com.bytedance.ai.graph.conversation.persistence.AgentConversationRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
@@ -19,6 +21,7 @@ import reactor.core.publisher.Flux;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -29,7 +32,7 @@ class GuideAgentTurnControllerTests {
     void getTurnEndpointStreamsServerSentEventsForSseClients() {
         CapturingGuideGraphStreamFacade facade = new CapturingGuideGraphStreamFacade();
         WebTestClient client = WebTestClient
-                .bindToController(new GuideAgentTurnController(facade))
+                .bindToController(new GuideAgentTurnController(facade, stubRepo()))
                 .build();
 
         List<ServerSentEvent<String>> events = client.get()
@@ -38,7 +41,6 @@ class GuideAgentTurnControllerTests {
                         .queryParam("userId", "u1")
                         .queryParam("conversationId", "c1")
                         .queryParam("message", "推荐防晒霜")
-                        .queryParam("turnId", "t-get-1")
                         .build())
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .exchange()
@@ -56,12 +58,12 @@ class GuideAgentTurnControllerTests {
                         AgentStreamEventType.TURN_STARTED.eventName(),
                         AgentStreamEventType.TURN_COMPLETED.eventName()
         );
-        assertThat(events.getFirst().data()).contains("t-get-1");
+        assertThat(events.getFirst().data()).contains("turn_1_");
         assertThat(events.getFirst().data()).contains("requestId");
         assertThat(events.getLast().data()).contains("SUCCESS");
         assertThat(events.getLast().data()).doesNotContain("finalNode");
         assertThat(facade.lastRequest.get()).isNotNull();
-        assertThat(facade.lastRequest.get().runId()).isEqualTo("t-get-1");
+        assertThat(facade.lastRequest.get().runId()).startsWith("turn_1_");
         assertThat(facade.lastRequest.get().requestId()).isNotBlank();
         assertThat(facade.lastRequest.get().initialIntent()).isNull();
     }
@@ -70,7 +72,7 @@ class GuideAgentTurnControllerTests {
     void getTurnEndpointTraceModeKeepsNodeLifecycleEvents() {
         CapturingGuideGraphStreamFacade facade = new CapturingGuideGraphStreamFacade();
         WebTestClient client = WebTestClient
-                .bindToController(new GuideAgentTurnController(facade))
+                .bindToController(new GuideAgentTurnController(facade, stubRepo()))
                 .build();
 
         List<ServerSentEvent<String>> events = client.get()
@@ -79,7 +81,6 @@ class GuideAgentTurnControllerTests {
                         .queryParam("userId", "u1")
                         .queryParam("conversationId", "c1")
                         .queryParam("message", "推荐防晒霜")
-                        .queryParam("turnId", "t-trace-1")
                         .queryParam("streamMode", "trace")
                         .build())
                 .accept(MediaType.TEXT_EVENT_STREAM)
@@ -106,7 +107,7 @@ class GuideAgentTurnControllerTests {
     void getTurnEndpointGeneratesMissingTurnIdAndRequestId() {
         CapturingGuideGraphStreamFacade facade = new CapturingGuideGraphStreamFacade();
         WebTestClient client = WebTestClient
-                .bindToController(new GuideAgentTurnController(facade))
+                .bindToController(new GuideAgentTurnController(facade, stubRepo()))
                 .build();
 
         List<ServerSentEvent<String>> events = client.get()
@@ -140,10 +141,10 @@ class GuideAgentTurnControllerTests {
     }
 
     @Test
-    void getTurnEndpointPreservesProvidedTurnIdAndRequestId() {
+    void getTurnEndpointUsesServerGeneratedTurnIdAndPreservesClientRequestId() {
         CapturingGuideGraphStreamFacade facade = new CapturingGuideGraphStreamFacade();
         WebTestClient client = WebTestClient
-                .bindToController(new GuideAgentTurnController(facade))
+                .bindToController(new GuideAgentTurnController(facade, stubRepo()))
                 .build();
 
         client.get()
@@ -152,7 +153,6 @@ class GuideAgentTurnControllerTests {
                         .queryParam("userId", "u1")
                         .queryParam("conversationId", "c1")
                         .queryParam("message", "这个多少钱")
-                        .queryParam("turnId", "turn-123")
                         .queryParam("requestId", "req-456")
                         .build())
                 .accept(MediaType.TEXT_EVENT_STREAM)
@@ -165,7 +165,7 @@ class GuideAgentTurnControllerTests {
                 .block();
 
         assertThat(facade.lastRequest.get()).isNotNull();
-        assertThat(facade.lastRequest.get().runId()).isEqualTo("turn-123");
+        assertThat(facade.lastRequest.get().runId()).startsWith("turn_1_");
         assertThat(facade.lastRequest.get().requestId()).isEqualTo("req-456");
         assertThat(facade.lastRequest.get().correlationId()).isEqualTo("req-456");
     }
@@ -174,7 +174,7 @@ class GuideAgentTurnControllerTests {
     void controllerDoesNotSeedProductSearchForPriceQuestion() {
         CapturingGuideGraphStreamFacade facade = new CapturingGuideGraphStreamFacade();
         WebTestClient client = WebTestClient
-                .bindToController(new GuideAgentTurnController(facade))
+                .bindToController(new GuideAgentTurnController(facade, stubRepo()))
                 .build();
 
         client.get()
@@ -212,7 +212,7 @@ class GuideAgentTurnControllerTests {
     @Test
     void turnEndpointRejectsInvalidRequest() {
         WebTestClient client = WebTestClient
-                .bindToController(new GuideAgentTurnController(new CapturingGuideGraphStreamFacade()))
+                .bindToController(new GuideAgentTurnController(new CapturingGuideGraphStreamFacade(), stubRepo()))
                 .build();
 
         // Controller 现在是 GET + @RequestParam，缺失必填参数 message 时必须以 400 拒绝。
@@ -247,7 +247,7 @@ class GuideAgentTurnControllerTests {
             );
         };
         WebTestClient client = WebTestClient
-                .bindToController(new GuideAgentTurnController(facade))
+                .bindToController(new GuideAgentTurnController(facade, stubRepo()))
                 .build();
 
         List<ServerSentEvent<String>> events = client.get()
@@ -281,6 +281,45 @@ class GuideAgentTurnControllerTests {
                 .doesNotContain("errorMessage");
     }
 
+    private static AgentConversationRepository stubRepo() {
+        AtomicLong seq = new AtomicLong();
+        return new AgentConversationRepository() {
+            @Override
+            public boolean existsConversation(String userId, String conversationId) {
+                return true;
+            }
+
+            @Override
+            public Long initConversation(String userId, String conversationId) {
+                return 1L;
+            }
+
+            @Override
+            public String allocateTurnId(String userId, String conversationId) {
+                return String.format("turn_1_%06d", seq.incrementAndGet());
+            }
+
+            @Override
+            public List<ConversationMessage> loadRecentMessages(String userId, String conversationId, int limit) {
+                return List.of();
+            }
+
+            @Override
+            public ConversationMessage saveUserMessage(String u, String c, String t, String r, String m) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public ConversationMessage saveAssistantMessage(String u, String c, String t, String r, String m, String s) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public void createOrUpdateTurn(String u, String c, String t, String r, String s, String i, String w) {
+            }
+        };
+    }
+
     private static final class CapturingGuideGraphStreamFacade implements GuideGraphStreamFacade {
 
         private final AtomicReference<GuideGraphRequest> lastRequest = new AtomicReference<>();
@@ -306,9 +345,9 @@ class GuideAgentTurnControllerTests {
                     new AgentStreamEvent("1", AgentStreamEventType.TURN_STARTED.eventName(), request.correlationId(),
                             new TurnStartedPayload(request.runId(), request.conversationId(), "guide-state-graph-v1")),
                     new AgentStreamEvent("2", AgentStreamEventType.NODE_STARTED.eventName(), request.correlationId(),
-                            java.util.Map.of("nodeName", "load_memory")),
+                            java.util.Map.of("nodeName", "load_conversation_context")),
                     new AgentStreamEvent("3", AgentStreamEventType.NODE_COMPLETED.eventName(), request.correlationId(),
-                            java.util.Map.of("nodeName", "load_memory")),
+                            java.util.Map.of("nodeName", "load_conversation_context")),
                     new AgentStreamEvent("4", AgentStreamEventType.TURN_COMPLETED.eventName(), request.correlationId(), summary)
             );
         }

@@ -1,19 +1,20 @@
 package com.bytedance.ai.graph.cartmanage.subgraph.node;
 
 import com.alibaba.cloud.ai.graph.OverAllState;
-import com.bytedance.ai.graph.cartmanage.persistence.PendingCartActionRecord;
-import com.bytedance.ai.graph.cartmanage.persistence.PendingCartActionRepository;
+import com.bytedance.ai.graph.conversation.context.ConversationContextItemStatus;
+import com.bytedance.ai.graph.conversation.context.ConversationContextManager;
+import com.bytedance.ai.graph.conversation.context.ConversationRuntimeContext;
 import com.bytedance.ai.graph.cartmanage.subgraph.CartGraphStateKeys;
 import com.bytedance.ai.graph.cartmanage.subgraph.support.CandidateSelectionResolver;
 import com.bytedance.ai.graph.cartmanage.subgraph.support.CartActionParser;
 import com.bytedance.ai.graph.cartmanage.subgraph.support.CartGraphStateSupport;
+import com.bytedance.ai.graph.cartmanage.subgraph.support.ConversationProductCandidateMapper;
 import com.bytedance.ai.graph.orchestration.GuideGraphStateKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Optional;
 
 /**
  * 购物车管理子图节点，加载当前购物车、会话输入和后续节点所需上下文。
@@ -22,14 +23,14 @@ public class CartLoadContextNode {
 
     private static final Logger log = LoggerFactory.getLogger(CartLoadContextNode.class);
 
-    private final PendingCartActionRepository pendingCartActionRepository;
+    private final ConversationContextManager conversationContextManager;
     private final CandidateSelectionResolver candidateSelectionResolver;
 
     public CartLoadContextNode(
-            PendingCartActionRepository pendingCartActionRepository,
+            ConversationContextManager conversationContextManager,
             CandidateSelectionResolver candidateSelectionResolver
     ) {
-        this.pendingCartActionRepository = pendingCartActionRepository;
+        this.conversationContextManager = conversationContextManager;
         this.candidateSelectionResolver = candidateSelectionResolver;
     }
 
@@ -46,23 +47,30 @@ public class CartLoadContextNode {
         updates.put(GuideGraphStateKeys.CONVERSATION_ID, conversationId);
         updates.put(GuideGraphStateKeys.MESSAGE, userMessage);
 
-        Optional<PendingCartActionRecord> pending = pendingCartActionRepository
-                .findActiveByUserIdAndConversationId(userId, conversationId);
+        ConversationRuntimeContext context = state.value(
+                GuideGraphStateKeys.CONVERSATION_CONTEXT,
+                ConversationRuntimeContext.class
+        ).orElse(null);
+        ConversationRuntimeContext.PendingClarification pending = context == null ? null : context.pendingClarification();
         boolean pendingLoaded = false;
         boolean stalePendingCancelled = false;
-        if (pending.isPresent()) {
-            if (candidateSelectionResolver.looksLikeCandidateSelection(userMessage, pending.get().candidates())
+        if (pending != null && "CART_CANDIDATE_SELECTION".equals(pending.clarificationType())) {
+            var candidates = ConversationProductCandidateMapper.toCartCandidates(pending.candidates());
+            if (candidateSelectionResolver.looksLikeCandidateSelection(userMessage, candidates)
                     || !CartActionParser.looksLikeNewCartRequest(userMessage)) {
-                updates.put(CartGraphStateKeys.PENDING_CART_ACTION_ID, pending.get().id());
-                updates.put(CartGraphStateKeys.PRODUCT_CANDIDATES, pending.get().candidates());
+                updates.put(CartGraphStateKeys.PENDING_CLARIFICATION_ID, pending.contextItemId());
+                updates.put(CartGraphStateKeys.PRODUCT_CANDIDATES, candidates);
                 pendingLoaded = true;
-                log.info("Loaded pending cart action {} for user {} conversation {} (selection follow-up)",
-                        pending.get().id(), userId, conversationId);
-            } else {
-                pendingCartActionRepository.markCancelled(pending.get().id());
+                log.info("Loaded pending clarification {} for user {} conversation {} (selection follow-up)",
+                        pending.contextItemId(), userId, conversationId);
+            } else if (conversationContextManager != null) {
+                conversationContextManager.markContextItemStatus(
+                        pending.contextItemId(),
+                        ConversationContextItemStatus.CANCELLED
+                );
                 stalePendingCancelled = true;
-                log.info("Cancelled stale pending cart action {} (new non-selection turn)",
-                        pending.get().id());
+                log.info("Cancelled stale pending clarification {} (new non-selection turn)",
+                        pending.contextItemId());
             }
         }
 
@@ -87,7 +95,7 @@ public class CartLoadContextNode {
                 CartGraphStateKeys.CONTEXTUAL_REFERENCE,
                 CartGraphStateKeys.PRODUCT_CANDIDATES,
                 CartGraphStateKeys.SELECTED_CANDIDATE,
-                CartGraphStateKeys.PENDING_CART_ACTION_ID,
+                CartGraphStateKeys.PENDING_CLARIFICATION_ID,
                 CartGraphStateKeys.STOCK_RESULT,
                 CartGraphStateKeys.CART_RESULT,
                 CartGraphStateKeys.WORKFLOW_STATUS,

@@ -336,6 +336,7 @@ CREATE TABLE public.agent_conversations
         CONSTRAINT rag_conversations_status_chk
             CHECK (status IN ('ACTIVE', 'ARCHIVED', 'DELETED')),
     message_count   integer DEFAULT 0                         NOT NULL,
+    next_turn_seq   bigint  DEFAULT 0                         NOT NULL,
     metadata        jsonb   DEFAULT '{}'::jsonb               NOT NULL,
     created_at      timestamp(6) with time zone DEFAULT now() NOT NULL,
     updated_at      timestamp(6) with time zone DEFAULT now() NOT NULL,
@@ -834,86 +835,78 @@ CREATE TABLE public.agent_turn
                 )),
     intent          varchar(64),
     target_workflow varchar(64),
+    metadata        jsonb DEFAULT '{}'::jsonb                NOT NULL,
     created_at      timestamp with time zone DEFAULT now()   NOT NULL,
+    updated_at      timestamp with time zone DEFAULT now()   NOT NULL,
     completed_at    timestamp with time zone
 );
 
-CREATE UNIQUE INDEX agent_turn_turn_id_key
+CREATE UNIQUE INDEX uq_agent_turn_turn_id
     ON public.agent_turn USING btree (turn_id);
 
-CREATE INDEX idx_agent_turn_user_conversation_created
-    ON public.agent_turn (user_id, conversation_id, created_at DESC);
+CREATE INDEX idx_agent_turn_conversation_turn
+    ON public.agent_turn (conversation_id, turn_id);
 
-CREATE INDEX idx_agent_turn_request_id
-    ON public.agent_turn (request_id);
+CREATE UNIQUE INDEX uq_agent_turn_conversation_request
+    ON public.agent_turn (conversation_id, request_id) WHERE request_id IS NOT NULL;
 
 -- ----------------------------------------------------------------------------
--- cart_manage_subgraph: persisted candidate-selection state across turns.
--- Created when a CART_MANAGE / ADD turn produces multiple product candidates;
--- consumed on the next turn when the user replies with a selection (e.g.
--- "选第 1 个"). Scoped strictly by (user_id, conversation_id) so candidates
--- never leak across conversations.
+-- Central conversation runtime context.
+-- Replaces workflow-private pending_* tables. All product/cart/order workflows
+-- read their cross-turn context from this table through ConversationContextManager.
 -- ----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS public.pending_cart_actions
+CREATE TABLE IF NOT EXISTS public.agent_context_items
 (
-    id              bigserial PRIMARY KEY,
-    user_id         varchar(255) NOT NULL,
-    conversation_id varchar(255) NOT NULL,
-    action          varchar(50)  NOT NULL,
-    product_name    varchar(1024),
-    quantity        integer,
-    candidates      jsonb        NOT NULL DEFAULT '[]'::jsonb,
-    status          varchar(50)  NOT NULL,
-    created_at      timestamp    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at      timestamp    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    expire_at       timestamp    NOT NULL
+    id                       bigserial PRIMARY KEY,
+    conversation_internal_id bigint                              NOT NULL,
+    user_id                  varchar(255)                        NOT NULL,
+    conversation_id          varchar(255)                        NOT NULL,
+    item_type                varchar(64)                         NOT NULL
+        CONSTRAINT agent_context_items_type_chk
+            CHECK (item_type IN (
+                                 'PRODUCT_CANDIDATE',
+                                 'FOCUS',
+                                 'PENDING_CLARIFICATION',
+                                 'CART_SNAPSHOT',
+                                 'ORDER_CONTEXT',
+                                 'LAST_RESULT',
+                                 'MEMORY_SLOT',
+                                 'TASK_CHAIN'
+                )),
+    item_key                 varchar(255)                        NOT NULL,
+    source_turn_id           varchar(128),
+    source_workflow          varchar(128),
+    status                   varchar(32)                         NOT NULL
+        CONSTRAINT agent_context_items_status_chk
+            CHECK (status IN (
+                              'ACTIVE',
+                              'CONSUMED',
+                              'SUPERSEDED',
+                              'CANCELLED',
+                              'COMPLETED',
+                              'FAILED',
+                              'EXPIRED'
+                )),
+    payload_json             jsonb DEFAULT '{}'::jsonb           NOT NULL,
+    created_at               timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at               timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    expires_at               timestamp,
+    CONSTRAINT fk_agent_context_items_conversation
+        FOREIGN KEY (conversation_internal_id)
+            REFERENCES public.agent_conversations (id)
+            ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_pending_cart_user_conv
-    ON public.pending_cart_actions (user_id, conversation_id);
-CREATE INDEX IF NOT EXISTS idx_pending_cart_status
-    ON public.pending_cart_actions (status);
-CREATE INDEX IF NOT EXISTS idx_pending_cart_expire
-    ON public.pending_cart_actions (expire_at);
-
--- ----------------------------------------------------------------------------
--- order_manage_workflow: persisted multi-turn pending order state.
--- Checkout and address collection never create an order directly. Only an
--- active WAITING_CONFIRMATION row can be confirmed into an order.
--- ----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS public.pending_order_actions
-(
-    id                 bigserial PRIMARY KEY,
-    user_id            varchar(255) NOT NULL,
-    conversation_id    varchar(255) NOT NULL,
-    cart_snapshot      jsonb        NOT NULL DEFAULT '{}'::jsonb,
-    cart_snapshot_hash varchar(128),
-    address_snapshot   jsonb        NOT NULL DEFAULT '{}'::jsonb,
-    amount_snapshot    numeric(12, 2),
-    status             varchar(50)  NOT NULL,
-    fail_reason        text,
-    order_no           varchar(64),
-    created_at         timestamp    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at         timestamp    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    expire_at          timestamp    NOT NULL,
-    CONSTRAINT pending_order_actions_status_chk
-        CHECK (status IN (
-                          'WAITING_ADDRESS',
-                          'WAITING_CONFIRMATION',
-                          'CREATING',
-                          'ORDER_CREATED',
-                          'CANCELLED',
-                          'FAILED',
-                          'EXPIRED'
-            ))
-);
-
-CREATE INDEX IF NOT EXISTS idx_pending_order_action_user_conv
-    ON public.pending_order_actions (user_id, conversation_id);
-CREATE INDEX IF NOT EXISTS idx_pending_order_action_status
-    ON public.pending_order_actions (status);
-CREATE INDEX IF NOT EXISTS idx_pending_order_action_expire
-    ON public.pending_order_actions (expire_at);
+CREATE INDEX IF NOT EXISTS idx_agent_context_items_user_conv_type_status
+    ON public.agent_context_items (user_id, conversation_id, item_type, status);
+CREATE INDEX IF NOT EXISTS idx_agent_context_items_conv_type_key
+    ON public.agent_context_items (conversation_internal_id, item_type, item_key);
+CREATE INDEX IF NOT EXISTS idx_agent_context_items_active_expiry
+    ON public.agent_context_items (expires_at)
+    WHERE status = 'ACTIVE' AND expires_at IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_context_items_active_key
+    ON public.agent_context_items (conversation_internal_id, item_type, item_key)
+    WHERE status = 'ACTIVE';
 
 CREATE TABLE IF NOT EXISTS public.mock_orders
 (
@@ -932,35 +925,5 @@ CREATE TABLE IF NOT EXISTS public.mock_orders
 
 CREATE INDEX IF NOT EXISTS idx_mock_orders_user_conv
     ON public.mock_orders (user_id, conversation_id);
-
--- ----------------------------------------------------------------------------
--- product_query_workflow: multi-turn product query state.
--- Stores last-turn ProductQueryCondition + ranked candidates so the next turn
--- can INHERIT / OVERRIDE / APPEND / RESET against it, and so cross-workflow
--- references ("把第二个加入购物车") can resolve candidates by index.
--- writeAction = false for this table -- it never mutates cart / order state.
--- ----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS public.pending_product_query_actions
-(
-    id                 bigserial PRIMARY KEY,
-    user_id            varchar(255) NOT NULL,
-    conversation_id    varchar(255) NOT NULL,
-    condition_json     jsonb        NOT NULL DEFAULT '{}'::jsonb,
-    candidates_json    jsonb        NOT NULL DEFAULT '[]'::jsonb,
-    turn_count         integer      NOT NULL DEFAULT 1,
-    status             varchar(32)  NOT NULL
-        CONSTRAINT pending_product_query_actions_status_chk
-            CHECK (status IN ('ACTIVE', 'SUPERSEDED', 'EXPIRED')),
-    created_at         timestamp    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at         timestamp    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    expire_at          timestamp    NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_pending_product_query_user_conv
-    ON public.pending_product_query_actions (user_id, conversation_id);
-CREATE INDEX IF NOT EXISTS idx_pending_product_query_status
-    ON public.pending_product_query_actions (status);
-CREATE INDEX IF NOT EXISTS idx_pending_product_query_expire
-    ON public.pending_product_query_actions (expire_at);
 
 COMMIT;

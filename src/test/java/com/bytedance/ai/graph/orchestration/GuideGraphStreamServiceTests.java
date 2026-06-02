@@ -312,6 +312,7 @@ class GuideGraphStreamServiceTests {
 
         private final Set<String> conversations = new HashSet<>();
         private final Map<String, List<ConversationMessage>> messages = new HashMap<>();
+        private final Map<String, Long> turnSeq = new HashMap<>();
 
         @Override
         public boolean existsConversation(String userId, String conversationId) {
@@ -322,6 +323,15 @@ class GuideGraphStreamServiceTests {
         public Long initConversation(String userId, String conversationId) {
             conversations.add(key(userId, conversationId));
             return (long) conversations.size();
+        }
+
+        @Override
+        public String allocateTurnId(String userId, String conversationId) {
+            String key = key(userId, conversationId);
+            conversations.add(key);
+            long seq = turnSeq.merge(key, 1L, Long::sum);
+            long internalId = (long) conversations.size();
+            return String.format("turn_%s_%06d", Long.toString(internalId, 36), seq);
         }
 
         @Override

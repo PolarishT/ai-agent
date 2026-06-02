@@ -8,6 +8,7 @@ import java.sql.SQLException;
 import java.util.Map;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 购物车仓储的 JDBC 实现。
@@ -24,6 +25,7 @@ public class JdbcCartTransitionAuditRepository implements CartTransitionAuditRep
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void save(
             Long cartId,
             String businessCartId,

@@ -17,6 +17,7 @@ import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 购物车仓储的 JDBC 实现。
@@ -33,6 +34,7 @@ public class JdbcShoppingCartRepository implements ShoppingCartRepository {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public ShoppingCartRecord create(String userId, String conversationId) {
         // PostgreSQL-friendly: INSERT ... RETURNING * returns the freshly persisted row in one
         // round-trip. Avoids the KeyHolder dance (PG returns every inserted column as a generated
@@ -109,6 +111,7 @@ public class JdbcShoppingCartRepository implements ShoppingCartRepository {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void updateTotals(Long id, BigDecimal subtotalAmount, int itemCount) {
         jdbc.update(
                 """
@@ -126,6 +129,7 @@ public class JdbcShoppingCartRepository implements ShoppingCartRepository {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void updateShippingAddress(Long id, Map<String, Object> shippingAddress) {
         jdbc.update(connection -> {
             PreparedStatement statement = connection.prepareStatement(updateAddressSql(connection));

@@ -3,8 +3,8 @@ package com.bytedance.ai.graph.cartmanage.subgraph.node;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.bytedance.ai.graph.cartmanage.ProductCandidate;
 import com.bytedance.ai.graph.cartmanage.application.ProductCatalogResolver;
-import com.bytedance.ai.graph.cartmanage.persistence.PendingCartActionRecord;
-import com.bytedance.ai.graph.cartmanage.persistence.PendingCartActionRepository;
+import com.bytedance.ai.graph.conversation.context.ConversationContextManager;
+import com.bytedance.ai.graph.conversation.context.ConversationRuntimeContext;
 import com.bytedance.ai.graph.cartmanage.subgraph.CartAction;
 import com.bytedance.ai.graph.cartmanage.subgraph.CartGraphStateKeys;
 import com.bytedance.ai.graph.cartmanage.subgraph.CartWorkflowStatus;
@@ -31,16 +31,16 @@ public class CartSearchCatalogNode {
     private static final Logger log = LoggerFactory.getLogger(CartSearchCatalogNode.class);
 
     private final ProductCatalogResolver productCatalogResolver;
-    private final PendingCartActionRepository pendingCartActionRepository;
+    private final ConversationContextManager conversationContextManager;
     private final CartCandidateMatcher candidateMatcher;
 
     public CartSearchCatalogNode(
             ProductCatalogResolver productCatalogResolver,
-            PendingCartActionRepository pendingCartActionRepository,
+            ConversationContextManager conversationContextManager,
             CartCandidateMatcher candidateMatcher
     ) {
         this.productCatalogResolver = productCatalogResolver;
-        this.pendingCartActionRepository = pendingCartActionRepository;
+        this.conversationContextManager = conversationContextManager;
         this.candidateMatcher = candidateMatcher;
     }
 
@@ -89,26 +89,21 @@ public class CartSearchCatalogNode {
             updates.put(CartGraphStateKeys.SELECTED_CANDIDATE, only);
             updates.put(CartGraphStateKeys.CART_STATUS, "PRODUCT_SELECTED");
         } else {
-            PendingCartActionRecord pending = new PendingCartActionRecord(
-                    null,
+            ConversationRuntimeContext.PendingClarification saved = saveCandidateClarification(
                     userId,
                     conversationId,
-                    CartAction.ADD,
-                    productName,
+                    state.value(GuideGraphStateKeys.RUN_ID, ""),
                     quantity,
-                    matchedCandidates,
-                    CartWorkflowStatus.WAITING_USER_SELECTION,
-                    LocalDateTime.now(),
-                    LocalDateTime.now(),
-                    LocalDateTime.now().plusHours(24)
+                    matchedCandidates
             );
-            PendingCartActionRecord saved = pendingCartActionRepository.save(pending);
-            updates.put(CartGraphStateKeys.PENDING_CART_ACTION_ID, saved.id());
+            if (saved != null) {
+                updates.put(CartGraphStateKeys.PENDING_CLARIFICATION_ID, saved.contextItemId());
+            }
             updates.put(CartGraphStateKeys.WORKFLOW_STATUS, CartWorkflowStatus.WAITING_USER_SELECTION.name());
             updates.put(CartGraphStateKeys.NODE_MESSAGE, formatCandidateQuestion(matchedCandidates));
             updates.put(CartGraphStateKeys.NEED_USER_INPUT, true);
             log.info("Cart search catalog pending created: pendingId={}, candidates={}",
-                    saved.id(), matchedCandidates.size());
+                    saved == null ? null : saved.contextItemId(), matchedCandidates.size());
         }
 
         log.info("Cart search catalog done: productName={}, expectedPrice={}, originalCandidateCount={}, matchedCandidateCount={}, priceMatchedCount={}, specMatchedCount={}, candidatePrices={}, mismatchReasons={}, route={}, status={}, needUserInput={}",
@@ -124,6 +119,53 @@ public class CartSearchCatalogNode {
                 updates.get(CartGraphStateKeys.WORKFLOW_STATUS),
                 updates.get(CartGraphStateKeys.NEED_USER_INPUT));
         return updates;
+    }
+
+    private ConversationRuntimeContext.PendingClarification saveCandidateClarification(
+            String userId,
+            String conversationId,
+            String turnId,
+            int quantity,
+            List<ProductCandidate> matchedCandidates
+    ) {
+        if (conversationContextManager == null) {
+            return null;
+        }
+        List<ConversationRuntimeContext.ProductCandidateItem> candidates = new java.util.ArrayList<>();
+        for (int i = 0; i < matchedCandidates.size(); i++) {
+            ProductCandidate candidate = matchedCandidates.get(i);
+            candidates.add(new ConversationRuntimeContext.ProductCandidateItem(
+                    null,
+                    i + 1,
+                    candidate.productId(),
+                    candidate.skuId(),
+                    candidate.productName(),
+                    candidate.price(),
+                    candidate.brief(),
+                    candidate.spec(),
+                    candidate.externalRef(),
+                    null,
+                    Map.of("source", "cart_fallback_search")
+            ));
+        }
+        ConversationRuntimeContext.PendingClarification clarification =
+                new ConversationRuntimeContext.PendingClarification(
+                        null,
+                        "CART_CANDIDATE_SELECTION",
+                        "cart_manage_workflow",
+                        quantity,
+                        candidates,
+                        LocalDateTime.now().plusHours(24),
+                        Map.of("action", CartAction.ADD.name())
+                );
+        return conversationContextManager.savePendingClarification(
+                userId,
+                conversationId,
+                turnId,
+                "cart_manage_workflow",
+                clarification,
+                clarification.expiresAt()
+        );
     }
 
     public String routeAfter(OverAllState state) {

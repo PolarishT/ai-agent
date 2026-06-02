@@ -27,7 +27,7 @@ public class CartResolveActionNode {
         Map<String, Object> intentSlots = CartGraphStateSupport.readIntentSlots(state);
 
         CartAction action = CartAction.UNKNOWN;
-        boolean pendingSelection = state.value(CartGraphStateKeys.PENDING_CART_ACTION_ID).isPresent();
+        boolean pendingSelection = state.value(CartGraphStateKeys.PENDING_CLARIFICATION_ID).isPresent();
         log.info("Cart resolve action start: pendingSelection={}, slotKeys={}",
                 pendingSelection, intentSlots.keySet());
 
