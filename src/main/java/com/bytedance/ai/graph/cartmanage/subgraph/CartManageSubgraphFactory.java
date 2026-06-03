@@ -59,7 +59,12 @@ public class CartManageSubgraphFactory {
 
         this.loadContextNode = new CartLoadContextNode(conversationContextManager, candidateSelectionResolver);
         this.resolveActionNode = new CartResolveActionNode();
-        this.resolveTargetNode = new CartResolveTargetNode(slotFillingService, cartItemLookup, catalogQueryFacade);
+        this.resolveTargetNode = new CartResolveTargetNode(
+                slotFillingService,
+                cartItemLookup,
+                catalogQueryFacade,
+                conversationContextManager
+        );
         this.searchCatalogNode = new CartSearchCatalogNode(productCatalogResolver, conversationContextManager, candidateMatcher);
         this.resolveCandidateNode = new CartResolveCandidateNode(conversationContextManager, candidateSelectionResolver);
         this.checkStockNode = new CartCheckStockNode(inventoryQueryService);

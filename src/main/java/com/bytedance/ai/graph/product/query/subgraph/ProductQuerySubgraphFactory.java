@@ -7,9 +7,9 @@ import com.alibaba.cloud.ai.graph.StateGraph;
 import com.alibaba.cloud.ai.graph.action.AsyncEdgeAction;
 import com.alibaba.cloud.ai.graph.action.AsyncNodeAction;
 import com.alibaba.cloud.ai.graph.state.strategy.ReplaceStrategy;
+import com.bytedance.ai.graph.orchestration.GuideGraphContextSupport;
 import com.bytedance.ai.graph.orchestration.GuideGraphNodeNames;
 import com.bytedance.ai.graph.orchestration.GuideGraphStateKeys;
-import com.bytedance.ai.graph.conversation.ConversationMessage;
 import com.bytedance.ai.graph.conversation.context.ConversationContextManager;
 import com.bytedance.ai.graph.conversation.context.ConversationRuntimeContext;
 import com.bytedance.ai.graph.intent.MainIntent;
@@ -18,6 +18,7 @@ import com.bytedance.ai.graph.product.query.ProductHydrationOptions;
 import com.bytedance.ai.graph.product.query.ProductQueryCondition;
 import com.bytedance.ai.graph.product.query.ProductQueryGraphStateKeys;
 import com.bytedance.ai.graph.product.query.ProductQueryIntent;
+import com.bytedance.ai.graph.product.query.ProductQueryWorkflowResult;
 import com.bytedance.ai.graph.product.query.ProductSearchCandidate;
 import com.bytedance.ai.graph.product.query.service.ProductCandidatePostFilter;
 import com.bytedance.ai.graph.product.query.service.ProductComparisonBuilder;
@@ -414,20 +415,33 @@ public class ProductQuerySubgraphFactory {
 
         String status = state.value(ProductQueryGraphStateKeys.WORKFLOW_STATUS, "");
         String message;
+        String finalStatus = status;
         if (STATUS_CLARIFY.equals(status) && state.value(ProductQueryGraphStateKeys.NODE_MESSAGE).isPresent()) {
             message = state.value(ProductQueryGraphStateKeys.NODE_MESSAGE, "");
         } else if (comparison != null) {
             message = responseBuilder.buildComparisonResponse(condition, comparison, degradedNotes);
+            finalStatus = STATUS_OK;
             updates.put(ProductQueryGraphStateKeys.WORKFLOW_STATUS, STATUS_OK);
         } else if (ranked.isEmpty()) {
             message = responseBuilder.buildListResponse(condition, List.of(), degradedNotes);
+            finalStatus = STATUS_NO_HITS;
             updates.put(ProductQueryGraphStateKeys.WORKFLOW_STATUS, STATUS_NO_HITS);
         } else {
             message = responseBuilder.buildListResponse(condition, ranked, degradedNotes);
+            finalStatus = STATUS_OK;
             updates.put(ProductQueryGraphStateKeys.WORKFLOW_STATUS, STATUS_OK);
         }
         updates.put(ProductQueryGraphStateKeys.NODE_MESSAGE, message);
         updates.putIfAbsent(ProductQueryGraphStateKeys.NEED_USER_INPUT, STATUS_CLARIFY.equals(status));
+
+        // 把结构化的 workflow result 写到主图 state，供 buildAnswerContext / StepOutputMapper 使用。
+        updates.put(GuideGraphStateKeys.WORKFLOW_RESULT, new ProductQueryWorkflowResult(
+                finalStatus,
+                ranked,
+                comparison,
+                degradedNotes,
+                message
+        ));
 
         persistContext(state, condition, ranked);
         return updates;
@@ -497,10 +511,7 @@ public class ProductQuerySubgraphFactory {
     }
 
     private Optional<ConversationRuntimeContext.LastTurn> productQueryLastResult(OverAllState state) {
-        ConversationRuntimeContext context = state.value(
-                GuideGraphStateKeys.CONVERSATION_CONTEXT,
-                ConversationRuntimeContext.class
-        ).orElse(null);
+        ConversationRuntimeContext context = GuideGraphContextSupport.loadContext(conversationContextManager, state);
         if (context == null) {
             return Optional.empty();
         }
@@ -578,25 +589,7 @@ public class ProductQuerySubgraphFactory {
     }
 
     private String conversationMemory(OverAllState state) {
-        ConversationRuntimeContext context = state.value(
-                GuideGraphStateKeys.CONVERSATION_CONTEXT,
-                ConversationRuntimeContext.class
-        ).orElse(null);
-        if (context != null) {
-            return context.conversationMemoryText();
-        }
-        @SuppressWarnings("unchecked")
-        List<ConversationMessage> recent = (List<ConversationMessage>) state
-                .value(GuideGraphStateKeys.RECENT_MESSAGES, List.class)
-                .orElse(List.of());
-        if (recent.isEmpty()) {
-            return "";
-        }
-        StringBuilder builder = new StringBuilder();
-        for (ConversationMessage message : recent) {
-            builder.append(message.role()).append(": ").append(message.content()).append('\n');
-        }
-        return builder.toString().trim();
+        return GuideGraphContextSupport.conversationMemory(conversationContextManager, state);
     }
 
     private String pickQuery(String preferred, String... fallbacks) {

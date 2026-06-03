@@ -55,7 +55,10 @@ class OrderManageSubgraphFactoryTest {
         assertThat(rig.pending.active.get().status()).isEqualTo(OrderManageStatus.WAITING_ADDRESS);
         assertThat(rig.mockOrders.created).isZero();
         assertThat(state.value(OrderManageStateKeys.NODE_MESSAGE, ""))
-                .contains("请补充");
+                .contains("请补充收货人姓名")
+                .contains("请补充联系电话")
+                .contains("请补充详细收货地址");
+        assertThat(state.value(OrderManageStateKeys.NEED_USER_INPUT, false)).isTrue();
     }
 
     @Test
@@ -82,6 +85,43 @@ class OrderManageSubgraphFactoryTest {
         assertThat(rig.mockOrders.created).isZero();
         assertThat(state.value(OrderManageStateKeys.NODE_MESSAGE, ""))
                 .contains("请确认订单信息")
+                .contains("确认下单请回复");
+    }
+
+    @Test
+    void waitingAddressConsumesAddressSlots() throws Exception {
+        TestRig rig = new TestRig(cart(item(1L, 101L, "苹果", 1)));
+        rig.pending.active = Optional.of(rig.pendingRecord(OrderManageStatus.WAITING_ADDRESS, Map.of()));
+
+        OverAllState state = rig.invoke("这是我的收货信息", Map.of(
+                "recipient_name", "张震霆",
+                "contact_number", "18080266036",
+                "address", "111 high street, nsw 2033"
+        ));
+
+        assertThat(rig.pending.active.get().status()).isEqualTo(OrderManageStatus.WAITING_CONFIRMATION);
+        assertThat(state.value(OrderManageStateKeys.NODE_MESSAGE, ""))
+                .contains("请确认订单信息")
+                .contains("张震霆")
+                .contains("111 high street");
+    }
+
+    @Test
+    void createOrderIntentWithAddressSlotsStartsCheckoutAndBuildsSummary() throws Exception {
+        TestRig rig = new TestRig(cart(item(1L, 101L, "苹果", 1)));
+
+        OverAllState state = rig.invoke("这是我的收货信息", Map.of(
+                "recipient_name", "张震霆",
+                "contact_number", "18080266036",
+                "address", "111 high street, nsw 2033"
+        ), "CREATE_ORDER");
+
+        assertThat(rig.pending.active).isPresent();
+        assertThat(rig.pending.active.get().status()).isEqualTo(OrderManageStatus.WAITING_CONFIRMATION);
+        assertThat(rig.mockOrders.created).isZero();
+        assertThat(state.value(OrderManageStateKeys.NODE_MESSAGE, ""))
+                .contains("请确认订单信息")
+                .contains("张震霆")
                 .contains("确认下单请回复");
     }
 
@@ -222,11 +262,25 @@ class OrderManageSubgraphFactoryTest {
         }
 
         OverAllState invoke(String message) throws Exception {
+            return invoke(message, Map.of(), null);
+        }
+
+        OverAllState invoke(String message, Map<String, Object> slots) throws Exception {
+            return invoke(message, slots, null);
+        }
+
+        OverAllState invoke(String message, Map<String, Object> slots, String intent) throws Exception {
             Map<String, Object> initialState = new LinkedHashMap<>();
             initialState.put(GuideGraphStateKeys.USER_ID, USER_ID);
             initialState.put(GuideGraphStateKeys.CONVERSATION_ID, CONVERSATION_ID);
             initialState.put(GuideGraphStateKeys.MESSAGE, message);
-            initialState.put(GuideGraphStateKeys.CONVERSATION_CONTEXT, pending.load(USER_ID, CONVERSATION_ID));
+            if (!slots.isEmpty()) {
+                initialState.put(GuideGraphStateKeys.INTENT_SLOTS, slots);
+            }
+            if (intent != null) {
+                initialState.put(GuideGraphStateKeys.INTENT, intent);
+                initialState.put(GuideGraphStateKeys.MAIN_INTENT, intent);
+            }
             return factory.build().compile().invoke(initialState).orElseThrow();
         }
 
@@ -308,9 +362,9 @@ class OrderManageSubgraphFactoryTest {
         }
 
         @Override
-        public boolean markChainStep(String userId, String conversationId, String taskChainId, int stepNo,
-                                     String newStepStatus, ConversationRuntimeContext.StepOutput output,
-                                     String turnId) {
+        public boolean markPlanTask(String userId, String conversationId, String taskChainId, String taskId,
+                                    String newTaskStatus, ConversationRuntimeContext.TaskStep executedStep,
+                                    String turnId) {
             return false;
         }
 

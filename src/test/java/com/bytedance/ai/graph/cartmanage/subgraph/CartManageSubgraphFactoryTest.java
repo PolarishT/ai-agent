@@ -1012,7 +1012,6 @@ class CartManageSubgraphFactoryTest {
         initialState.put(GuideGraphStateKeys.CONVERSATION_ID, CONVERSATION_ID);
         initialState.put(GuideGraphStateKeys.MESSAGE, message);
         initialState.put(GuideGraphStateKeys.INTENT_SLOTS, slots);
-        initialState.put(GuideGraphStateKeys.CONVERSATION_CONTEXT, pendingRepository.load(USER_ID, CONVERSATION_ID));
         return factory.build().compile().invoke(initialState).orElseThrow();
     }
 
@@ -1242,9 +1241,9 @@ class CartManageSubgraphFactoryTest {
         }
 
         @Override
-        public boolean markChainStep(String userId, String conversationId, String taskChainId, int stepNo,
-                                     String newStepStatus, ConversationRuntimeContext.StepOutput output,
-                                     String turnId) {
+        public boolean markPlanTask(String userId, String conversationId, String taskChainId, String taskId,
+                                    String newTaskStatus, ConversationRuntimeContext.TaskStep executedStep,
+                                    String turnId) {
             return false;
         }
 

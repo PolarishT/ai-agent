@@ -1,31 +1,16 @@
--- Complete PostgreSQL DDL for the RAG backend.
+-- Complete PostgreSQL DDL for the RAG.
 -- Intended for a fresh PostgreSQL database.
 -- Cleaned version:
 -- 1. Removed owner binding: ALTER TABLE ... OWNER TO neondb_owner.
 -- 2. Fixed exported sequence dependencies by using bigserial.
 -- 3. Removed PostgreSQL system columns from agent_turn.
--- 4. Added practical foreign keys for fresh database usage.
+-- 4. No foreign keys: relations are enforced at application layer.
 -- 5. Kept pg_trgm and trigram/FTS indexes.
 
 BEGIN;
 
 -- Optional but recommended for hybrid keyword retrieval.
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
-
--- =========================================================
--- User accounts
--- =========================================================
-
-CREATE TABLE public.user_accounts
-(
-    id            bigserial PRIMARY KEY,
-    username      varchar(255)             NOT NULL UNIQUE,
-    password_hash varchar(255)             NOT NULL,
-    display_name  varchar(255),
-    enabled       boolean DEFAULT true     NOT NULL,
-    roles         text    DEFAULT ''::text NOT NULL,
-    permissions   text    DEFAULT ''::text NOT NULL
-);
 
 -- =========================================================
 -- RAG documents
@@ -117,11 +102,7 @@ CREATE TABLE public.rag_index_jobs
     created_at        timestamp(6) with time zone DEFAULT now()    NOT NULL,
     updated_at        timestamp(6) with time zone DEFAULT now()    NOT NULL,
     CONSTRAINT uq_rag_index_jobs_document_sha
-        UNIQUE (document_id, content_sha256),
-    CONSTRAINT fk_rag_index_jobs_document
-        FOREIGN KEY (document_id)
-            REFERENCES public.rag_documents (id)
-            ON DELETE CASCADE
+        UNIQUE (document_id, content_sha256)
 );
 
 CREATE INDEX idx_rag_index_jobs_status
@@ -157,15 +138,7 @@ CREATE TABLE public.rag_index_job_transitions
     error_message  text,
     message_id     varchar(128),
     metadata       jsonb   DEFAULT '{}'::jsonb                 NOT NULL,
-    created_at     timestamp(6) with time zone DEFAULT now()   NOT NULL,
-    CONSTRAINT fk_rag_index_job_transitions_document
-        FOREIGN KEY (document_id)
-            REFERENCES public.rag_documents (id)
-            ON DELETE CASCADE,
-    CONSTRAINT fk_rag_index_job_transitions_job
-        FOREIGN KEY (job_id)
-            REFERENCES public.rag_index_jobs (id)
-            ON DELETE SET NULL
+    created_at     timestamp(6) with time zone DEFAULT now()   NOT NULL
 );
 
 CREATE INDEX idx_rag_index_job_transitions_document_created
@@ -196,11 +169,7 @@ CREATE TABLE public.rag_index_outbox
     created_at      timestamp(6) with time zone DEFAULT now() NOT NULL,
     updated_at      timestamp(6) with time zone DEFAULT now() NOT NULL,
     CONSTRAINT uq_rag_index_outbox_document_sha_event
-        UNIQUE (document_id, content_sha256, event_type),
-    CONSTRAINT fk_rag_index_outbox_document
-        FOREIGN KEY (document_id)
-            REFERENCES public.rag_documents (id)
-            ON DELETE CASCADE
+        UNIQUE (document_id, content_sha256, event_type)
 );
 
 CREATE INDEX idx_rag_index_outbox_status_next_attempt
@@ -211,13 +180,6 @@ CREATE INDEX idx_rag_index_outbox_document_id
 
 CREATE INDEX idx_rag_index_outbox_message_id
     ON public.rag_index_outbox (message_id);
-
--- Add optional FK from transitions to outbox after outbox exists.
-ALTER TABLE public.rag_index_job_transitions
-    ADD CONSTRAINT fk_rag_index_job_transitions_outbox
-        FOREIGN KEY (outbox_id)
-            REFERENCES public.rag_index_outbox (id)
-            ON DELETE SET NULL;
 
 -- =========================================================
 -- RAG index message failures
@@ -265,11 +227,7 @@ CREATE TABLE public.rag_chunks
     CONSTRAINT uq_rag_chunks_document_generation_chunk
         UNIQUE (document_id, index_generation, chunk_index),
     CONSTRAINT uq_rag_chunks_vector_id
-        UNIQUE (vector_id),
-    CONSTRAINT fk_rag_chunks_document
-        FOREIGN KEY (document_id)
-            REFERENCES public.rag_documents (id)
-            ON DELETE CASCADE
+        UNIQUE (vector_id)
 );
 
 CREATE INDEX idx_rag_chunks_document_id
@@ -368,11 +326,7 @@ CREATE TABLE public.agent_conversation_messages
     metadata        jsonb DEFAULT '{}'::jsonb                 NOT NULL,
     created_at      timestamp(6) with time zone DEFAULT now() NOT NULL,
     CONSTRAINT uq_rag_messages_conversation_sequence
-        UNIQUE (conversation_id, sequence_no),
-    CONSTRAINT fk_agent_conversation_messages_conversation
-        FOREIGN KEY (conversation_id)
-            REFERENCES public.agent_conversations (id)
-            ON DELETE CASCADE
+        UNIQUE (conversation_id, sequence_no)
 );
 
 CREATE INDEX idx_rag_messages_conversation_sequence
@@ -407,19 +361,7 @@ CREATE TABLE public.rag_ask_runs
     error_code           varchar(64),
     error_message        text,
     started_at           timestamp(6) with time zone DEFAULT now() NOT NULL,
-    completed_at         timestamp(6) with time zone,
-    CONSTRAINT fk_rag_ask_runs_conversation
-        FOREIGN KEY (conversation_id)
-            REFERENCES public.agent_conversations (id)
-            ON DELETE CASCADE,
-    CONSTRAINT fk_rag_ask_runs_user_message
-        FOREIGN KEY (user_message_id)
-            REFERENCES public.agent_conversation_messages (id)
-            ON DELETE SET NULL,
-    CONSTRAINT fk_rag_ask_runs_assistant_message
-        FOREIGN KEY (assistant_message_id)
-            REFERENCES public.agent_conversation_messages (id)
-            ON DELETE SET NULL
+    completed_at         timestamp(6) with time zone
 );
 
 CREATE INDEX idx_rag_ask_runs_user_started
@@ -482,11 +424,7 @@ CREATE TABLE public.cart_item
         CONSTRAINT cart_item_status_chk
             CHECK (status IN ('ACTIVE', 'REMOVED')),
     created_at     timestamp(6) with time zone DEFAULT now() NOT NULL,
-    updated_at     timestamp(6) with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT fk_cart_item_cart
-        FOREIGN KEY (cart_id)
-            REFERENCES public.shopping_cart (id)
-            ON DELETE CASCADE
+    updated_at     timestamp(6) with time zone DEFAULT now() NOT NULL
 );
 
 CREATE INDEX idx_cart_item_cart_status
@@ -512,11 +450,7 @@ CREATE TABLE public.cart_transition_audit
     failure_reason   varchar(64),
     error_message    text,
     metadata         jsonb DEFAULT '{}'::jsonb                 NOT NULL,
-    created_at       timestamp(6) with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT fk_cart_transition_audit_cart
-        FOREIGN KEY (cart_id)
-            REFERENCES public.shopping_cart (id)
-            ON DELETE SET NULL
+    created_at       timestamp(6) with time zone DEFAULT now() NOT NULL
 );
 
 CREATE INDEX idx_cart_transition_audit_cart_created
@@ -570,11 +504,7 @@ CREATE TABLE public.customer_order
     price_change_json     jsonb DEFAULT '[]'::jsonb                 NOT NULL,
     placed_at             timestamp(6) with time zone DEFAULT now() NOT NULL,
     created_at            timestamp(6) with time zone DEFAULT now() NOT NULL,
-    updated_at            timestamp(6) with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT fk_customer_order_delivery_address
-        FOREIGN KEY (delivery_address_id)
-            REFERENCES public.delivery_address (id)
-            ON DELETE SET NULL
+    updated_at            timestamp(6) with time zone DEFAULT now() NOT NULL
 );
 
 CREATE INDEX idx_customer_order_user_created
@@ -601,11 +531,7 @@ CREATE TABLE public.order_item
             CHECK (quantity > 0),
     unit_price   numeric(10, 2),
     line_amount  numeric(12, 2),
-    created_at   timestamp(6) with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT fk_order_item_order
-        FOREIGN KEY (order_id)
-            REFERENCES public.customer_order (id)
-            ON DELETE CASCADE
+    created_at   timestamp(6) with time zone DEFAULT now() NOT NULL
 );
 
 CREATE INDEX idx_order_item_order_id
@@ -890,11 +816,7 @@ CREATE TABLE IF NOT EXISTS public.agent_context_items
     payload_json             jsonb DEFAULT '{}'::jsonb           NOT NULL,
     created_at               timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at               timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    expires_at               timestamp,
-    CONSTRAINT fk_agent_context_items_conversation
-        FOREIGN KEY (conversation_internal_id)
-            REFERENCES public.agent_conversations (id)
-            ON DELETE CASCADE
+    expires_at               timestamp
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_context_items_user_conv_type_status

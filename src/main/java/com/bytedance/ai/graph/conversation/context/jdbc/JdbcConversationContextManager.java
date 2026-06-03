@@ -415,52 +415,42 @@ public class JdbcConversationContextManager implements ConversationContextManage
 
     @Override
     @Transactional
-    public boolean markChainStep(
+    public boolean markPlanTask(
             String userId,
             String conversationId,
             String taskChainId,
-            int stepNo,
-            String newStepStatus,
-            ConversationRuntimeContext.StepOutput output,
+            String taskId,
+            String newTaskStatus,
+            ConversationRuntimeContext.TaskStep executedStep,
             String turnId
     ) {
         ConversationRuntimeContext.TaskChain chain = loadTaskChain(userId, conversationId, taskChainId);
         if (chain == null) {
             return false;
         }
-        LocalDateTime now = LocalDateTime.now();
-        List<ConversationRuntimeContext.TaskStep> newSteps = new ArrayList<>(chain.steps().size());
+        List<ConversationRuntimeContext.PlanTask> newPlan = new ArrayList<>(chain.planTasks().size());
         boolean found = false;
-        for (ConversationRuntimeContext.TaskStep step : chain.steps()) {
-            if (step.stepNo() == stepNo) {
-                String effectiveStatus = StringUtils.hasText(newStepStatus) ? newStepStatus : step.status();
-                LocalDateTime startedAt = "RUNNING".equals(effectiveStatus) && step.startedAt() == null
-                        ? now : step.startedAt();
-                LocalDateTime completedAt = isTerminalStatus(effectiveStatus) && step.completedAt() == null
-                        ? now : step.completedAt();
-                newSteps.add(new ConversationRuntimeContext.TaskStep(
-                        step.stepNo(),
-                        step.stepId(),
-                        step.taskType(),
-                        step.taskText(),
-                        step.workflow(),
-                        effectiveStatus,
-                        StringUtils.hasText(turnId) ? turnId : step.turnId(),
-                        startedAt,
-                        completedAt,
-                        output != null ? output : step.output()
+        for (ConversationRuntimeContext.PlanTask t : chain.planTasks()) {
+            if (t.taskId() != null && t.taskId().equals(taskId)) {
+                newPlan.add(new ConversationRuntimeContext.PlanTask(
+                        t.taskId(), t.taskName(), t.taskType(), t.workflow(), t.order(),
+                        StringUtils.hasText(newTaskStatus) ? newTaskStatus : t.status()
                 ));
                 found = true;
             } else {
-                newSteps.add(step);
+                newPlan.add(t);
             }
         }
         if (!found) {
             return false;
         }
+        List<ConversationRuntimeContext.TaskStep> newSteps = new ArrayList<>(chain.steps());
+        if (executedStep != null) {
+            newSteps.add(executedStep);
+        }
+        LocalDateTime now = LocalDateTime.now();
         saveTaskChain(userId, conversationId, turnId, null,
-                replaceSteps(chain, newSteps, turnId, now),
-                null);
+                rebuildChain(chain, chain.status(), newPlan, newSteps, turnId, now), null);
         return true;
     }
 
@@ -481,25 +471,16 @@ public class JdbcConversationContextManager implements ConversationContextManage
             return false;
         }
         LocalDateTime now = LocalDateTime.now();
-        ConversationRuntimeContext.TaskChain updated = new ConversationRuntimeContext.TaskChain(
-                null,
-                chain.taskChainId(),
-                chain.schemaVersion(),
-                newChainStatus,
-                chain.userGoal(),
-                chain.steps(),
-                chain.createdTurnId(),
-                StringUtils.hasText(turnId) ? turnId : chain.lastUpdatedTurnId(),
-                chain.createdAt() == null ? now : chain.createdAt(),
-                now
-        );
-        saveTaskChain(userId, conversationId, turnId, null, updated, null);
+        saveTaskChain(userId, conversationId, turnId, null,
+                rebuildChain(chain, newChainStatus, chain.planTasks(), chain.steps(), turnId, now), null);
         return true;
     }
 
-    private ConversationRuntimeContext.TaskChain replaceSteps(
+    private ConversationRuntimeContext.TaskChain rebuildChain(
             ConversationRuntimeContext.TaskChain chain,
-            List<ConversationRuntimeContext.TaskStep> newSteps,
+            String status,
+            List<ConversationRuntimeContext.PlanTask> planTasks,
+            List<ConversationRuntimeContext.TaskStep> steps,
             String turnId,
             LocalDateTime now
     ) {
@@ -507,18 +488,15 @@ public class JdbcConversationContextManager implements ConversationContextManage
                 null,
                 chain.taskChainId(),
                 chain.schemaVersion(),
-                chain.status(),
+                status,
                 chain.userGoal(),
-                newSteps,
+                planTasks,
+                steps,
                 chain.createdTurnId(),
                 StringUtils.hasText(turnId) ? turnId : chain.lastUpdatedTurnId(),
                 chain.createdAt() == null ? now : chain.createdAt(),
                 now
         );
-    }
-
-    private static boolean isTerminalStatus(String status) {
-        return "SUCCEEDED".equals(status) || "FAILED".equals(status) || "CANCELLED".equals(status);
     }
 
     private void writeLastTurn(
@@ -755,6 +733,13 @@ public class JdbcConversationContextManager implements ConversationContextManage
 
     private ConversationRuntimeContext.TaskChain toTaskChain(ContextItemRow row, Map<String, Object> payload) {
         ConversationRuntimeContext.UserGoal userGoal = toUserGoal(mapValue(payload.get("userGoal")));
+        List<ConversationRuntimeContext.PlanTask> planTasks = new ArrayList<>();
+        Object rawPlan = payload.get("planTasks");
+        if (rawPlan instanceof List<?> list) {
+            for (Object value : list) {
+                planTasks.add(toPlanTask(mapValue(value)));
+            }
+        }
         List<ConversationRuntimeContext.TaskStep> steps = new ArrayList<>();
         Object rawSteps = payload.get("steps");
         if (rawSteps instanceof List<?> list) {
@@ -768,6 +753,7 @@ public class JdbcConversationContextManager implements ConversationContextManage
                 intValue(payload.get("schemaVersion"), 1),
                 stringValue(payload.get("status")),
                 userGoal,
+                planTasks,
                 steps,
                 stringValue(payload.get("createdTurnId")),
                 stringValue(payload.get("lastUpdatedTurnId")),
@@ -788,12 +774,20 @@ public class JdbcConversationContextManager implements ConversationContextManage
         );
     }
 
+    private ConversationRuntimeContext.PlanTask toPlanTask(Map<String, Object> payload) {
+        return new ConversationRuntimeContext.PlanTask(
+                stringValue(payload.get("taskId")),
+                stringValue(payload.get("taskName")),
+                stringValue(payload.get("taskType")),
+                stringValue(payload.get("workflow")),
+                intValue(payload.get("order"), 0),
+                stringValue(payload.get("status"))
+        );
+    }
+
     private ConversationRuntimeContext.TaskStep toTaskStep(Map<String, Object> payload) {
-        ConversationRuntimeContext.StepOutput output = null;
         Object rawOutput = payload.get("output");
-        if (rawOutput instanceof Map<?, ?>) {
-            output = toStepOutput(mapValue(rawOutput));
-        }
+        Map<String, Object> output = rawOutput instanceof Map<?, ?> ? mapValue(rawOutput) : Map.of();
         return new ConversationRuntimeContext.TaskStep(
                 intValue(payload.get("stepNo"), 0),
                 stringValue(payload.get("stepId")),
@@ -805,13 +799,6 @@ public class JdbcConversationContextManager implements ConversationContextManage
                 parseDateTime(payload.get("startedAt")),
                 parseDateTime(payload.get("completedAt")),
                 output
-        );
-    }
-
-    private ConversationRuntimeContext.StepOutput toStepOutput(Map<String, Object> payload) {
-        return new ConversationRuntimeContext.StepOutput(
-                stringValue(payload.get("kind")),
-                mapValue(payload.get("payload"))
         );
     }
 
@@ -882,6 +869,10 @@ public class JdbcConversationContextManager implements ConversationContextManage
         if (chain.userGoal() != null) {
             payload.put("userGoal", userGoalPayload(chain.userGoal()));
         }
+        List<Map<String, Object>> planTasks = chain.planTasks().stream()
+                .map(this::planTaskPayload)
+                .toList();
+        payload.put("planTasks", planTasks);
         List<Map<String, Object>> steps = chain.steps().stream()
                 .map(this::taskStepPayload)
                 .toList();
@@ -890,6 +881,17 @@ public class JdbcConversationContextManager implements ConversationContextManage
         putIfPresent(payload, "lastUpdatedTurnId", chain.lastUpdatedTurnId());
         putIfPresent(payload, "createdAt", chain.createdAt());
         putIfPresent(payload, "updatedAt", chain.updatedAt());
+        return payload;
+    }
+
+    private Map<String, Object> planTaskPayload(ConversationRuntimeContext.PlanTask task) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        putIfPresent(payload, "taskId", task.taskId());
+        putIfPresent(payload, "taskName", task.taskName());
+        putIfPresent(payload, "taskType", task.taskType());
+        putIfPresent(payload, "workflow", task.workflow());
+        payload.put("order", task.order());
+        putIfPresent(payload, "status", task.status());
         return payload;
     }
 
@@ -913,16 +915,7 @@ public class JdbcConversationContextManager implements ConversationContextManage
         putIfPresent(payload, "turnId", step.turnId());
         putIfPresent(payload, "startedAt", step.startedAt());
         putIfPresent(payload, "completedAt", step.completedAt());
-        if (step.output() != null) {
-            payload.put("output", stepOutputPayload(step.output()));
-        }
-        return payload;
-    }
-
-    private Map<String, Object> stepOutputPayload(ConversationRuntimeContext.StepOutput output) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        putIfPresent(payload, "kind", output.kind());
-        payload.put("payload", output.payload());
+        payload.put("output", step.output());
         return payload;
     }
 

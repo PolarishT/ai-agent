@@ -45,7 +45,11 @@ public final class GuideGraphStateKeys {
     public static final String NODE_MESSAGE = "node_message";
     public static final String RECENT_MESSAGES = "recentMessages";
     public static final String CONVERSATION_CONTEXT = "conversationContext";
+    public static final String CONVERSATION_MEMORY = "conversationMemory";
     public static final String MESSAGE_COUNT = "messageCount";
+    /** 前置状态机：本轮命中的活跃任务链 id 与正在执行的计划任务 id，供 buildAnswerContext 推进。 */
+    public static final String ACTIVE_CHAIN_ID = "activeChainId";
+    public static final String ACTIVE_TASK_ID = "activeTaskId";
 
     private GuideGraphStateKeys() {
     }

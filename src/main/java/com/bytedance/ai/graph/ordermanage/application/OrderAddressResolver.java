@@ -73,6 +73,9 @@ public class OrderAddressResolver {
     }
 
     private String find(Pattern pattern, String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
         Matcher matcher = pattern.matcher(value);
         return matcher.find() ? matcher.group(1).trim() : null;
     }

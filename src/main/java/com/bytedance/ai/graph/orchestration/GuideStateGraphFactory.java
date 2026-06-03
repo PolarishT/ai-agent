@@ -20,7 +20,10 @@ import com.bytedance.ai.graph.cartmanage.ProductCandidate;
 import com.bytedance.ai.graph.answer.AnswerLlmService;
 import com.bytedance.ai.graph.conversation.context.ConversationContextManager;
 import com.bytedance.ai.graph.conversation.context.ConversationRuntimeContext;
-import com.bytedance.ai.graph.conversation.context.TaskChainTurnRecorder;
+import com.bytedance.ai.graph.conversation.context.RuntimeContextView;
+import com.bytedance.ai.graph.conversation.context.StepOutputMapper;
+import com.bytedance.ai.graph.conversation.context.TaskChainCoordinator;
+import com.bytedance.ai.graph.planning.TaskPlanningService;
 import com.bytedance.ai.graph.conversation.persistence.AgentConversationRepository;
 import com.bytedance.ai.graph.conversation.ConversationMessage;
 import com.bytedance.ai.graph.intent.MainIntent;
@@ -40,6 +43,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClientException;
 import java.net.SocketTimeoutException;
+import java.time.LocalDateTime;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -75,18 +79,22 @@ public class GuideStateGraphFactory {
     private final OrderManageSubgraphFactory orderManageSubgraphFactory;
     private final ProductQuerySubgraphFactory productQuerySubgraphFactory;
     private final ConversationContextManager conversationContextManager;
-    private final TaskChainTurnRecorder taskChainTurnRecorder;
+    private final TaskChainCoordinator taskChainCoordinator;
+    private final TaskPlanningService taskPlanningService;
+    private final StepOutputMapper stepOutputMapper;
     private final AnswerLlmService answerLlmService;
 
     public GuideStateGraphFactory(AgentConversationRepository conversationRepository) {
-        this(conversationRepository, (MainIntentRouterService) null, (CartManageWorkflowNode) null, null, null, null, null, null, null);
+        this(conversationRepository, (MainIntentRouterService) null, (CartManageWorkflowNode) null,
+                null, null, null, null, null, null, null, null);
     }
 
     public GuideStateGraphFactory(
             AgentConversationRepository conversationRepository,
             CartManageWorkflowNode cartManageWorkflowNode
     ) {
-        this(conversationRepository, (MainIntentRouterService) null, cartManageWorkflowNode, null, null, null, null, null, null);
+        this(conversationRepository, (MainIntentRouterService) null, cartManageWorkflowNode,
+                null, null, null, null, null, null, null, null);
     }
 
     @Autowired
@@ -98,7 +106,9 @@ public class GuideStateGraphFactory {
             OrderManageSubgraphFactory orderManageSubgraphFactory,
             ObjectProvider<ProductQuerySubgraphFactory> productQuerySubgraphFactoryProvider,
             ObjectProvider<ConversationContextManager> conversationContextManagerProvider,
-            ObjectProvider<TaskChainTurnRecorder> taskChainTurnRecorderProvider,
+            ObjectProvider<TaskChainCoordinator> taskChainCoordinatorProvider,
+            ObjectProvider<TaskPlanningService> taskPlanningServiceProvider,
+            ObjectProvider<StepOutputMapper> stepOutputMapperProvider,
             ObjectProvider<AnswerLlmService> answerLlmServiceProvider
     ) {
         this(
@@ -109,7 +119,9 @@ public class GuideStateGraphFactory {
                 orderManageSubgraphFactory,
                 productQuerySubgraphFactoryProvider.getIfAvailable(),
                 conversationContextManagerProvider.getIfAvailable(),
-                taskChainTurnRecorderProvider.getIfAvailable(),
+                taskChainCoordinatorProvider.getIfAvailable(),
+                taskPlanningServiceProvider.getIfAvailable(),
+                stepOutputMapperProvider.getIfAvailable(),
                 answerLlmServiceProvider.getIfAvailable()
         );
     }
@@ -122,7 +134,9 @@ public class GuideStateGraphFactory {
             OrderManageSubgraphFactory orderManageSubgraphFactory,
             ProductQuerySubgraphFactory productQuerySubgraphFactory,
             ConversationContextManager conversationContextManager,
-            TaskChainTurnRecorder taskChainTurnRecorder,
+            TaskChainCoordinator taskChainCoordinator,
+            TaskPlanningService taskPlanningService,
+            StepOutputMapper stepOutputMapper,
             AnswerLlmService answerLlmService
     ) {
         this.conversationRepository = conversationRepository;
@@ -132,31 +146,10 @@ public class GuideStateGraphFactory {
         this.orderManageSubgraphFactory = orderManageSubgraphFactory;
         this.productQuerySubgraphFactory = productQuerySubgraphFactory;
         this.conversationContextManager = conversationContextManager;
-        this.taskChainTurnRecorder = taskChainTurnRecorder;
+        this.taskChainCoordinator = taskChainCoordinator;
+        this.taskPlanningService = taskPlanningService;
+        this.stepOutputMapper = stepOutputMapper;
         this.answerLlmService = answerLlmService;
-    }
-
-    GuideStateGraphFactory(
-            AgentConversationRepository conversationRepository,
-            MainIntentRouterService mainIntentRouterService,
-            CartManageWorkflowNode cartManageWorkflowNode,
-            CartManageSubgraphFactory cartManageSubgraphFactory,
-            OrderManageSubgraphFactory orderManageSubgraphFactory,
-            ProductQuerySubgraphFactory productQuerySubgraphFactory,
-            ConversationContextManager conversationContextManager,
-            TaskChainTurnRecorder taskChainTurnRecorder
-    ) {
-        this(
-                conversationRepository,
-                mainIntentRouterService,
-                cartManageWorkflowNode,
-                cartManageSubgraphFactory,
-                orderManageSubgraphFactory,
-                productQuerySubgraphFactory,
-                conversationContextManager,
-                taskChainTurnRecorder,
-                null
-        );
     }
 
     GuideStateGraphFactory(
@@ -177,6 +170,8 @@ public class GuideStateGraphFactory {
                 productQuerySubgraphFactory,
                 conversationContextManager,
                 null,
+                null,
+                null,
                 null
         );
     }
@@ -196,6 +191,8 @@ public class GuideStateGraphFactory {
                 cartManageSubgraphFactory,
                 orderManageSubgraphFactory,
                 productQuerySubgraphFactory,
+                null,
+                null,
                 null,
                 null,
                 null
@@ -235,6 +232,8 @@ public class GuideStateGraphFactory {
                                 GuideGraphNodeNames.MAIN_INTENT_ROUTER, state,
                                 actionOverrides.getOrDefault(GuideGraphNodeNames.MAIN_INTENT_ROUTER,
                                         this::mainIntentRouter));
+                        // 前置状态机：意图识别后，按活跃任务链调度本轮要执行的任务（可能覆盖 target_workflow）。
+                        orchestrateTaskChain(state, result);
                         emitWorkflowStarted(eventSink, state, result);
                         return result;
                     }));
@@ -333,11 +332,15 @@ public class GuideStateGraphFactory {
                             .toList();
             context = ConversationRuntimeContext.empty(conversationInternalId, userId, conversationId, recentMessages);
         }
+        String turnId = state.value(GuideGraphStateKeys.RUN_ID, "");
+        String requestId = state.value(GuideGraphStateKeys.REQUEST_ID, "");
+        RuntimeContextView view = RuntimeContextView.from(context, turnId, requestId);
         return GuideNodeExecutionResult.withStateUpdates(
                 Map.of(
                         GuideGraphStateKeys.CONVERSATION_INTERNAL_ID, context.conversationInternalId(),
-                        GuideGraphStateKeys.CONVERSATION_CONTEXT, context,
-                        GuideGraphStateKeys.RECENT_MESSAGES, context.recentMessages(),
+                        GuideGraphStateKeys.CONVERSATION_CONTEXT, view.toStateMap(),
+                        GuideGraphStateKeys.RECENT_MESSAGES, view.recentMessagesForState(),
+                        GuideGraphStateKeys.CONVERSATION_MEMORY, context.conversationMemoryText(),
                         GuideGraphStateKeys.MESSAGE_COUNT, context.recentMessages().size()
                 ),
                 Map.of(GuideGraphStateKeys.MESSAGE_COUNT, context.recentMessages().size())
@@ -537,10 +540,7 @@ public class GuideStateGraphFactory {
         String userId = requiredString(state, GuideGraphStateKeys.USER_ID);
         String conversationId = requiredString(state, GuideGraphStateKeys.CONVERSATION_ID);
         String activePendingStatus = "";
-        ConversationRuntimeContext context = state.value(
-                GuideGraphStateKeys.CONVERSATION_CONTEXT,
-                ConversationRuntimeContext.class
-        ).orElse(null);
+        ConversationRuntimeContext context = freshContext(state);
         if (context != null && context.order() != null && StringUtils.hasText(context.order().orderStatus())) {
             activePendingStatus = context.order().orderStatus();
         }
@@ -603,25 +603,11 @@ public class GuideStateGraphFactory {
     }
 
     private String conversationMemory(OverAllState state) {
-        ConversationRuntimeContext context = state.value(
-                GuideGraphStateKeys.CONVERSATION_CONTEXT,
-                ConversationRuntimeContext.class
-        ).orElse(null);
+        ConversationRuntimeContext context = freshContext(state);
         if (context != null) {
             return context.conversationMemoryText();
         }
-        List<ConversationMessage> recentMessages = state.value(
-                GuideGraphStateKeys.RECENT_MESSAGES,
-                List.<ConversationMessage>of()
-        );
-        if (recentMessages.isEmpty()) {
-            return "";
-        }
-        StringBuilder builder = new StringBuilder();
-        for (ConversationMessage message : recentMessages) {
-            builder.append(message.role()).append(": ").append(message.content()).append('\n');
-        }
-        return builder.toString().trim();
+        return GuideGraphContextSupport.conversationMemoryFromState(state);
     }
 
     private GuideGraphIntent toGuideIntent(MainIntent intent) {
@@ -753,34 +739,21 @@ public class GuideStateGraphFactory {
                 .orElse(GuideGraphIntent.CLARIFY).name());
         String targetWorkflow = state.value(GuideGraphStateKeys.TARGET_WORKFLOW, GuideGraphNodeNames.CLARIFY_WORKFLOW);
         answerContext.put("targetWorkflow", targetWorkflow);
-        state.value(GuideGraphStateKeys.WORKFLOW_RESULT).ifPresent(workflowResult ->
-                answerContext.put("workflowResult", workflowResult));
-
-        // 把跨轮记忆（最近消息 + 任务链）喂给 answer 阶段，
-        // 当前 rule-based answer 用不到这两个字段，但 SSE trace 模式可观察；
-        // 后续把 answer 切到 LLM 时直接读 `agentMemoryText` 或 `taskChains` 即可。
-        state.value(GuideGraphStateKeys.CONVERSATION_CONTEXT, ConversationRuntimeContext.class)
-                .ifPresent(context -> {
-                    if (!context.taskChains().isEmpty()) {
-                        answerContext.put("taskChains", context.taskChains());
-                    }
-                    String memory = context.agentMemoryText();
-                    if (!memory.isBlank()) {
-                        answerContext.put("agentMemoryText", memory);
-                    }
-                });
+        Object workflowResult = state.value(GuideGraphStateKeys.WORKFLOW_RESULT).orElse(null);
+        if (workflowResult != null) {
+            answerContext.put("workflowResult", workflowResult);
+        }
 
         if (GuideGraphNodeNames.ORDER_MANAGE_WORKFLOW.equals(targetWorkflow) && !orderWorkflowDispatched(state)) {
             answerContext.put("answer", ORDER_WORKFLOW_NOT_DISPATCHED_MESSAGE);
             answerContext.put("todo", false);
+            // 任务失败 → 推进链为 FAILED
+            advanceTaskChain(state, workflowResult, false);
             Map<String, Object> updates = new LinkedHashMap<>();
             updates.put(GuideGraphStateKeys.ANSWER_CONTEXT, Map.copyOf(answerContext));
             updates.put(GuideGraphStateKeys.ERROR_CODE, ORDER_WORKFLOW_NOT_DISPATCHED);
             updates.put(GuideGraphStateKeys.ERROR_MESSAGE, ORDER_WORKFLOW_NOT_DISPATCHED_MESSAGE);
             updates.put(GuideGraphStateKeys.NODE_MESSAGE, ORDER_WORKFLOW_NOT_DISPATCHED_MESSAGE);
-            recordTaskChainOutcome(state,
-                    state.value(GuideGraphStateKeys.WORKFLOW_RESULT).orElse(null),
-                    ORDER_WORKFLOW_NOT_DISPATCHED_MESSAGE, false);
             return new GuideNodeExecutionResult(
                     NodeRunStatus.FAILED,
                     null,
@@ -795,11 +768,12 @@ public class GuideStateGraphFactory {
             );
         }
 
+        boolean success = !hasFailedState(state) && !hasStateErrorCode(state);
+        // 前置状态机：先推进当前任务（标 SUCCEEDED/FAILED + 追加 step），再据更新后的链生成 answer。
+        advanceTaskChain(state, workflowResult, success);
+
         String ruleAnswer = explicitNodeMessage(state, targetWorkflow)
                 .orElseGet(() -> fallbackAnswer(state));
-        boolean success = !hasFailedState(state) && !hasStateErrorCode(state);
-        Object workflowResult = state.value(GuideGraphStateKeys.WORKFLOW_RESULT).orElse(null);
-
         String answer = ruleAnswer;
         String answerSource = "rule";
         if (answerLlmService != null) {
@@ -812,7 +786,6 @@ public class GuideStateGraphFactory {
         answerContext.put("answer", answer);
         answerContext.put("answerSource", answerSource);
         answerContext.put("todo", false);
-        recordTaskChainOutcome(state, workflowResult, answer, success);
         return GuideNodeExecutionResult.withStateUpdates(
                 Map.of(GuideGraphStateKeys.ANSWER_CONTEXT, Map.copyOf(answerContext)),
                 Map.of("answerReady", true, "todo", false)
@@ -820,7 +793,8 @@ public class GuideStateGraphFactory {
     }
 
     /**
-     * 调 LLM 生成 answer，失败返回 null 让调用方走规则兜底。任何异常 / 空响应不抛。
+     * 调 answer LLM 生成回复（输入用序列化 view：recentMessages + taskChain + taskSummaries）。
+     * 失败返回 null 让调用方走规则兜底。
      */
     private String tryLlmAnswer(
             OverAllState state, String targetWorkflow, Object workflowResult, String ruleAnswer
@@ -829,12 +803,11 @@ public class GuideStateGraphFactory {
                 .map(Enum::name)
                 .orElse(GuideGraphIntent.CLARIFY.name());
         String userMessage = state.value(GuideGraphStateKeys.MESSAGE, "");
-        String agentMemoryText = state.value(
-                        GuideGraphStateKeys.CONVERSATION_CONTEXT, ConversationRuntimeContext.class)
-                .map(ConversationRuntimeContext::agentMemoryText)
-                .orElse("");
+        String turnId = state.value(GuideGraphStateKeys.RUN_ID, "");
+        String requestId = state.value(GuideGraphStateKeys.REQUEST_ID, "");
+        RuntimeContextView view = RuntimeContextView.from(freshContext(state), turnId, requestId);
         AnswerLlmService.AnswerLlmInput input = new AnswerLlmService.AnswerLlmInput(
-                userMessage, intent, targetWorkflow, workflowResult, agentMemoryText, ruleAnswer);
+                userMessage, intent, targetWorkflow, workflowResult, view, ruleAnswer);
         try {
             return answerLlmService.generate(input);
         } catch (AnswerLlmService.AnswerLlmException ex) {
@@ -847,35 +820,277 @@ public class GuideStateGraphFactory {
     }
 
     /**
-     * 把本轮的 intent / workflow / 结果 交给 recorder + planner 决策落链。
-     * recorder 未注入时静默跳过；任何异常都吞掉 —— 不要让链记录失败影响 answer。
+     * 前置状态机调度：意图识别后，按活跃任务链决定本轮执行哪个任务，必要时规划新链。
+     * 直接把 target_workflow / active_chain_id / active_task_id 写进节点 result。
+     * coordinator 未注入（部分单测）时整体跳过。
      */
-    private void recordTaskChainOutcome(
-            OverAllState state, Object workflowResult, String answer, boolean success
+    private void orchestrateTaskChain(OverAllState state, Map<String, Object> result) {
+        if (taskChainCoordinator == null) {
+            return;
+        }
+        String userId = stringFrom(result, state, GuideGraphStateKeys.USER_ID, "");
+        String conversationId = stringFrom(result, state, GuideGraphStateKeys.CONVERSATION_ID, "");
+        String turnId = stringFrom(result, state, GuideGraphStateKeys.RUN_ID, "");
+        String message = stringFrom(result, state, GuideGraphStateKeys.MESSAGE, "");
+        if (!StringUtils.hasText(userId) || !StringUtils.hasText(conversationId)) {
+            return;
+        }
+        String intent = stringFrom(result, state, GuideGraphStateKeys.INTENT, GuideGraphIntent.CLARIFY.name());
+        String targetWorkflow = stringFrom(result, state, GuideGraphStateKeys.TARGET_WORKFLOW,
+                GuideGraphNodeNames.CLARIFY_WORKFLOW);
+
+        // META 意图（澄清/闲聊/未知）不形成任务链，路由保持原样。
+        if (isMetaIntent(intent)) {
+            return;
+        }
+
+        ConversationRuntimeContext context = freshContext(state);
+        ConversationRuntimeContext.TaskChain active = context == null ? null : context.activeChain();
+
+        try {
+            if (active != null && TaskChainCoordinator.CHAIN_STATUS_EXECUTING.equals(active.status())) {
+                ConversationRuntimeContext.PlanTask matching = matchingPendingTask(active, targetWorkflow);
+                if (matching != null) {
+                    result.put(GuideGraphStateKeys.TARGET_WORKFLOW, matching.workflow());
+                    result.put(GuideGraphStateKeys.ACTIVE_CHAIN_ID, active.taskChainId());
+                    result.put(GuideGraphStateKeys.ACTIVE_TASK_ID, matching.taskId());
+                    taskChainCoordinator.startTask(userId, conversationId, active.taskChainId(),
+                            matching.taskId(), turnId);
+                    return;
+                }
+                // 意图与计划不符 → 中断当前链
+                taskChainCoordinator.transitionChain(userId, conversationId, active.taskChainId(),
+                        TaskChainCoordinator.CHAIN_STATUS_CANCELLED, turnId);
+            } else if (active != null && TaskChainCoordinator.CHAIN_STATUS_PLANNING.equals(active.status())) {
+                // 残留的 PLANNING 链（上轮规划没完成）→ 取消重来
+                taskChainCoordinator.transitionChain(userId, conversationId, active.taskChainId(),
+                        TaskChainCoordinator.CHAIN_STATUS_CANCELLED, turnId);
+            }
+            startNewGoalChain(result, context, userId, conversationId, turnId, message, intent, targetWorkflow);
+        } catch (RuntimeException ex) {
+            log.warn("orchestrate task chain failed for turn {}: {}", turnId, ex.toString());
+        }
+    }
+
+    private void startNewGoalChain(
+            Map<String, Object> result,
+            ConversationRuntimeContext context,
+            String userId, String conversationId, String turnId, String message,
+            String intent, String targetWorkflow
     ) {
-        if (taskChainTurnRecorder == null) {
+        if (isPlanningWorthy(intent) && taskPlanningService != null) {
+            ConversationRuntimeContext.UserGoal goal =
+                    new ConversationRuntimeContext.UserGoal(intent, message, true, "RUNNING");
+            ConversationRuntimeContext.TaskChain chain = taskChainCoordinator.startChain(
+                    userId, conversationId, turnId, targetWorkflow, goal, List.of(),
+                    TaskChainCoordinator.CHAIN_STATUS_PLANNING);
+            List<ConversationRuntimeContext.PlanTask> plan;
+            try {
+                plan = toPlanTasks(taskPlanningService.plan(message, intent, recentText(context)));
+            } catch (TaskPlanningService.TaskPlanningException ex) {
+                log.warn("task planning failed, falling back to single task: {}", ex.toString());
+                plan = List.of(singleTask(intent, targetWorkflow, message));
+            }
+            taskChainCoordinator.populatePlan(userId, conversationId, chain.taskChainId(), plan, turnId);
+            ConversationRuntimeContext.PlanTask first = plan.get(0);
+            result.put(GuideGraphStateKeys.TARGET_WORKFLOW, first.workflow());
+            result.put(GuideGraphStateKeys.ACTIVE_CHAIN_ID, chain.taskChainId());
+            result.put(GuideGraphStateKeys.ACTIVE_TASK_ID, first.taskId());
+            taskChainCoordinator.startTask(userId, conversationId, chain.taskChainId(), first.taskId(), turnId);
+            return;
+        }
+        // 原子目标：单任务 EXECUTING 链，路由保持意图给出的 workflow
+        ConversationRuntimeContext.UserGoal goal =
+                new ConversationRuntimeContext.UserGoal(intent, message, false, "RUNNING");
+        ConversationRuntimeContext.PlanTask only = singleTask(intent, targetWorkflow, message);
+        ConversationRuntimeContext.TaskChain chain = taskChainCoordinator.startChain(
+                userId, conversationId, turnId, targetWorkflow, goal, List.of(only),
+                TaskChainCoordinator.CHAIN_STATUS_EXECUTING);
+        result.put(GuideGraphStateKeys.ACTIVE_CHAIN_ID, chain.taskChainId());
+        result.put(GuideGraphStateKeys.ACTIVE_TASK_ID, only.taskId());
+        taskChainCoordinator.startTask(userId, conversationId, chain.taskChainId(), only.taskId(), turnId);
+    }
+
+    /**
+     * 推进当前任务：标 SUCCEEDED/FAILED + 追加执行明细 step；据此决定链是否收尾。
+     * coordinator 未注入或本轮没有活跃任务时跳过。
+     */
+    private void advanceTaskChain(OverAllState state, Object workflowResult, boolean success) {
+        if (taskChainCoordinator == null) {
+            return;
+        }
+        String chainId = state.value(GuideGraphStateKeys.ACTIVE_CHAIN_ID, "");
+        String taskId = state.value(GuideGraphStateKeys.ACTIVE_TASK_ID, "");
+        if (!StringUtils.hasText(chainId) || !StringUtils.hasText(taskId)) {
             return;
         }
         String userId = state.value(GuideGraphStateKeys.USER_ID, "");
         String conversationId = state.value(GuideGraphStateKeys.CONVERSATION_ID, "");
         String turnId = state.value(GuideGraphStateKeys.RUN_ID, "");
-        String message = state.value(GuideGraphStateKeys.MESSAGE, "");
-        String intent = GuideGraphStateValues.intent(state, GuideGraphStateKeys.INTENT)
-                .map(Enum::name)
-                .orElse(GuideGraphIntent.CLARIFY.name());
-        String workflow = state.value(GuideGraphStateKeys.TARGET_WORKFLOW, "");
-        ConversationRuntimeContext context = state.value(
-                        GuideGraphStateKeys.CONVERSATION_CONTEXT, ConversationRuntimeContext.class)
-                .orElse(null);
         try {
-            taskChainTurnRecorder.recordTurn(
-                    context,
-                    userId, conversationId, turnId,
-                    intent, workflow, success,
-                    message, workflowResult, answer
-            );
+            ConversationRuntimeContext.TaskChain chain = conversationContextManager == null ? null
+                    : conversationContextManager.loadTaskChain(userId, conversationId, chainId);
+            ConversationRuntimeContext.PlanTask task = findPlanTask(chain, taskId);
+            String taskType = task == null ? null : task.taskType();
+            Map<String, Object> output = stepOutputMapper == null
+                    ? Map.of() : stepOutputMapper.toOutput(taskType, workflowResult);
+            ConversationRuntimeContext.TaskStep step = null;
+            if (task != null) {
+                int stepNo = (chain == null ? 0 : chain.steps().size()) + 1;
+                LocalDateTime now = LocalDateTime.now();
+                step = taskChainCoordinator.buildStep(stepNo, task,
+                        success ? TaskChainCoordinator.TASK_STATUS_SUCCEEDED
+                                : TaskChainCoordinator.TASK_STATUS_FAILED,
+                        output, turnId, now, now);
+            }
+            if (success) {
+                taskChainCoordinator.completeTask(userId, conversationId, chainId, taskId, step, turnId);
+            } else {
+                taskChainCoordinator.failTask(userId, conversationId, chainId, taskId, step, turnId);
+            }
+            // 收尾：失败 → 链 FAILED；无剩余 PENDING → 链 SUCCEEDED
+            ConversationRuntimeContext.TaskChain after = conversationContextManager == null ? null
+                    : conversationContextManager.loadTaskChain(userId, conversationId, chainId);
+            if (after != null) {
+                if (!success) {
+                    taskChainCoordinator.transitionChain(userId, conversationId, chainId,
+                            TaskChainCoordinator.CHAIN_STATUS_FAILED, turnId);
+                } else if (after.nextPendingTask() == null) {
+                    taskChainCoordinator.transitionChain(userId, conversationId, chainId,
+                            TaskChainCoordinator.CHAIN_STATUS_SUCCEEDED, turnId);
+                }
+            }
         } catch (RuntimeException ex) {
-            log.warn("failed to record task chain for turn {}: {}", turnId, ex.toString());
+            log.warn("failed to advance task chain {}: {}", chainId, ex.toString());
+        }
+    }
+
+    private ConversationRuntimeContext freshContext(OverAllState state) {
+        ConversationRuntimeContext context = GuideGraphContextSupport.loadContext(conversationContextManager, state);
+        if (context != null) {
+            return context;
+        }
+        String userId = state.value(GuideGraphStateKeys.USER_ID, "");
+        String conversationId = state.value(GuideGraphStateKeys.CONVERSATION_ID, "");
+        if (!StringUtils.hasText(userId) || !StringUtils.hasText(conversationId)) {
+            return null;
+        }
+        Long conversationInternalId = state.value(GuideGraphStateKeys.CONVERSATION_INTERNAL_ID)
+                .map(GuideStateGraphFactory::asLong)
+                .orElse(null);
+        if (conversationInternalId == null) {
+            conversationInternalId = conversationRepository.initConversation(userId, conversationId);
+        }
+        java.util.List<ConversationMessage> recentMessages =
+                conversationRepository.loadRecentMessages(userId, conversationId, 24).stream()
+                        .sorted(java.util.Comparator.comparingInt(ConversationMessage::sequenceNo))
+                        .toList();
+        return ConversationRuntimeContext.empty(conversationInternalId, userId, conversationId, recentMessages);
+    }
+
+    private ConversationRuntimeContext.PlanTask matchingPendingTask(
+            ConversationRuntimeContext.TaskChain chain, String targetWorkflow
+    ) {
+        ConversationRuntimeContext.PlanTask best = null;
+        for (ConversationRuntimeContext.PlanTask t : chain.planTasks()) {
+            if (!TaskChainCoordinator.TASK_STATUS_PENDING.equals(t.status())) {
+                continue;
+            }
+            if (t.workflow() != null && t.workflow().equals(targetWorkflow)
+                    && (best == null || t.order() < best.order())) {
+                best = t;
+            }
+        }
+        return best;
+    }
+
+    private ConversationRuntimeContext.PlanTask findPlanTask(
+            ConversationRuntimeContext.TaskChain chain, String taskId
+    ) {
+        if (chain == null) {
+            return null;
+        }
+        for (ConversationRuntimeContext.PlanTask t : chain.planTasks()) {
+            if (taskId.equals(t.taskId())) {
+                return t;
+            }
+        }
+        return null;
+    }
+
+    private List<ConversationRuntimeContext.PlanTask> toPlanTasks(
+            List<TaskPlanningService.PlannedTask> planned
+    ) {
+        List<ConversationRuntimeContext.PlanTask> tasks = new java.util.ArrayList<>();
+        int order = 1;
+        for (TaskPlanningService.PlannedTask p : planned) {
+            String workflow = StringUtils.hasText(p.workflow())
+                    ? p.workflow() : GuideGraphWorkflows.targetFor(parseIntentOrClarify(p.taskType()));
+            tasks.add(new ConversationRuntimeContext.PlanTask(
+                    taskChainCoordinator.newTaskId(), p.taskName(), p.taskType(), workflow,
+                    order++, TaskChainCoordinator.TASK_STATUS_PENDING));
+        }
+        return tasks;
+    }
+
+    private ConversationRuntimeContext.PlanTask singleTask(String intent, String workflow, String message) {
+        return new ConversationRuntimeContext.PlanTask(
+                taskChainCoordinator.newTaskId(), message, intent, workflow, 1,
+                TaskChainCoordinator.TASK_STATUS_PENDING);
+    }
+
+    private GuideGraphIntent parseIntentOrClarify(String taskType) {
+        return GuideGraphIntent.parse(taskType).orElse(GuideGraphIntent.CLARIFY);
+    }
+
+    private String recentText(ConversationRuntimeContext context) {
+        if (context == null || context.recentMessages().isEmpty()) {
+            return "";
+        }
+        StringBuilder b = new StringBuilder();
+        for (ConversationMessage m : context.recentMessages()) {
+            b.append(m.role()).append(": ").append(m.content()).append('\n');
+        }
+        return b.toString().trim();
+    }
+
+    private boolean isMetaIntent(String intent) {
+        return "CLARIFY".equals(intent) || "SMALL_TALK".equals(intent) || "UNKNOWN".equals(intent);
+    }
+
+    /** 是否值得调 planning LLM 拆解（购买流程系意图）。纯查询 / 辅助类走单任务。 */
+    private boolean isPlanningWorthy(String intent) {
+        return switch (intent) {
+            case "PRODUCT_SEARCH", "PRODUCT_RECOMMEND", "PRODUCT_COMPARE",
+                 "PRODUCT_DETAIL_QUERY", "PRODUCT_QUERY",
+                 "ADD_TO_CART", "REMOVE_FROM_CART", "UPDATE_CART_ITEM", "CART_MANAGE",
+                 "CREATE_ORDER", "CONFIRM_ORDER", "CANCEL_ORDER" -> true;
+            default -> false;
+        };
+    }
+
+    private String stringFrom(Map<String, Object> result, OverAllState state, String key, String fallback) {
+        Object fromResult = result.get(key);
+        if (fromResult instanceof String s && StringUtils.hasText(s)) {
+            return s;
+        }
+        return state.value(key, fallback);
+    }
+
+    private static Long asLong(Object value) {
+        if (value instanceof Long l) {
+            return l;
+        }
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Long.parseLong(String.valueOf(value));
+        } catch (NumberFormatException ignored) {
+            return null;
         }
     }
 

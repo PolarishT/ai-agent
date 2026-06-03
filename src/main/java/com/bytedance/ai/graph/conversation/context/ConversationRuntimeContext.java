@@ -76,43 +76,29 @@ public record ConversationRuntimeContext(
     }
 
     /**
-     * LLM 友好的多轮记忆摘要：最近消息 + 任务链状态。
-     * 用于在 answer 生成 / planner / build_answer_context 阶段把跨轮信息塞进 prompt。
-     * 空上下文返回空串。
+     * 找当前活跃任务链（status = PLANNING 或 EXECUTING），多个时取最近创建的一条。
      */
-    public String agentMemoryText() {
-        StringBuilder builder = new StringBuilder();
-        if (!recentMessages.isEmpty()) {
-            builder.append("[Recent messages]\n");
-            for (ConversationMessage message : recentMessages) {
-                builder.append(message.role()).append(": ").append(message.content()).append('\n');
+    public TaskChain activeChain() {
+        TaskChain active = null;
+        for (TaskChain chain : taskChains) {
+            if (!"PLANNING".equals(chain.status()) && !"EXECUTING".equals(chain.status())) {
+                continue;
+            }
+            if (active == null || isAfter(chain.createdAt(), active.createdAt())) {
+                active = chain;
             }
         }
-        if (!taskChains.isEmpty()) {
-            if (builder.length() > 0) {
-                builder.append('\n');
-            }
-            builder.append("[Task chains]\n");
-            for (TaskChain chain : taskChains) {
-                builder.append("- chain ").append(chain.taskChainId())
-                        .append(" (").append(chain.status()).append(")");
-                if (chain.userGoal() != null && chain.userGoal().goalText() != null) {
-                    builder.append(": ").append(chain.userGoal().goalText());
-                }
-                builder.append('\n');
-                for (TaskStep step : chain.steps()) {
-                    builder.append("  step ").append(step.stepNo())
-                            .append(" [").append(step.taskType())
-                            .append(" @").append(step.workflow()).append("] ")
-                            .append(step.status());
-                    if (step.output() != null && step.output().kind() != null) {
-                        builder.append(" -> ").append(step.output().kind());
-                    }
-                    builder.append('\n');
-                }
-            }
+        return active;
+    }
+
+    private static boolean isAfter(LocalDateTime a, LocalDateTime b) {
+        if (a == null) {
+            return false;
         }
-        return builder.toString().trim();
+        if (b == null) {
+            return true;
+        }
+        return a.isAfter(b);
     }
 
     public record ProductCandidateItem(
@@ -202,9 +188,14 @@ public record ConversationRuntimeContext(
     }
 
     /**
-     * 多轮任务链：一个 user goal 的规划 + 执行历史。
-     * chain.status：PLANNING / EXECUTING / SUCCEEDED / FAILED / CANCELLED
-     * steps 中 PENDING/RUNNING 的部分构成"当前计划"，SUCCEEDED/FAILED 的部分是历史。
+     * 多轮任务链：一个 user goal 的规划（planTasks）+ 执行明细（steps）。
+     *
+     * <p>chain.status：PLANNING / EXECUTING / SUCCEEDED / FAILED / CANCELLED
+     * <ul>
+     *   <li>{@code planTasks} 是 planning 阶段产出的前向计划清单，序列化为顶层 {@code taskChain}，
+     *       驱动「取下一个 PENDING 任务执行」。</li>
+     *   <li>{@code steps} 是已执行任务的后向明细日志，序列化进 {@code taskSummaries}。</li>
+     * </ul>
      */
     public record TaskChain(
             Long contextItemId,
@@ -212,6 +203,7 @@ public record ConversationRuntimeContext(
             int schemaVersion,
             String status,
             UserGoal userGoal,
+            List<PlanTask> planTasks,
             List<TaskStep> steps,
             String createdTurnId,
             String lastUpdatedTurnId,
@@ -219,8 +211,38 @@ public record ConversationRuntimeContext(
             LocalDateTime updatedAt
     ) {
         public TaskChain {
+            planTasks = planTasks == null ? List.of() : List.copyOf(planTasks);
             steps = steps == null ? List.of() : List.copyOf(steps);
         }
+
+        /** 取最小 order 的 PENDING 计划任务（驱动执行）。无则 null。 */
+        public PlanTask nextPendingTask() {
+            PlanTask next = null;
+            for (PlanTask t : planTasks) {
+                if (!"PENDING".equals(t.status())) {
+                    continue;
+                }
+                if (next == null || t.order() < next.order()) {
+                    next = t;
+                }
+            }
+            return next;
+        }
+    }
+
+    /**
+     * 计划任务：planning LLM 产出的前向清单条目。
+     * 序列化给 LLM 时只暴露 {@code taskId / taskName / status}（顶层 taskChain）；
+     * {@code taskType / workflow / order} 是内部路由信息，不进序列化视图。
+     */
+    public record PlanTask(
+            String taskId,
+            String taskName,
+            String taskType,
+            String workflow,
+            int order,
+            String status
+    ) {
     }
 
     public record UserGoal(
@@ -241,20 +263,10 @@ public record ConversationRuntimeContext(
             String turnId,
             LocalDateTime startedAt,
             LocalDateTime completedAt,
-            StepOutput output
+            Map<String, Object> output
     ) {
-    }
-
-    /**
-     * Step 输出，按 kind 区分子结构（PRODUCT_CANDIDATES / CART_MUTATION / ORDER_INFO / TEXT_ANSWER / ...）。
-     * payload 是离散字段，序列化给 LLM 时按 kind 解释。
-     */
-    public record StepOutput(
-            String kind,
-            Map<String, Object> payload
-    ) {
-        public StepOutput {
-            payload = payload == null ? Map.of() : Map.copyOf(payload);
+        public TaskStep {
+            output = output == null ? Map.of() : Map.copyOf(output);
         }
     }
 }

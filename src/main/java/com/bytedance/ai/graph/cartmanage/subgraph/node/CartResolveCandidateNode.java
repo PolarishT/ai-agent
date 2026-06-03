@@ -11,6 +11,7 @@ import com.bytedance.ai.graph.cartmanage.subgraph.support.CandidateSelectionReso
 import com.bytedance.ai.graph.cartmanage.subgraph.support.CandidateSelectionResolver.CandidateSelectionStatus;
 import com.bytedance.ai.graph.cartmanage.subgraph.support.CartGraphStateSupport;
 import com.bytedance.ai.graph.cartmanage.subgraph.support.ConversationProductCandidateMapper;
+import com.bytedance.ai.graph.orchestration.GuideGraphContextSupport;
 import com.bytedance.ai.graph.orchestration.GuideGraphStateKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,10 +46,7 @@ public class CartResolveCandidateNode {
 
         log.info("Cart resolve candidate start: userId={}, conversationId={}, messageLength={}",
                 userId, conversationId, userMessage == null ? 0 : userMessage.length());
-        ConversationRuntimeContext context = state.value(
-                GuideGraphStateKeys.CONVERSATION_CONTEXT,
-                ConversationRuntimeContext.class
-        ).orElse(null);
+        ConversationRuntimeContext context = GuideGraphContextSupport.loadContext(conversationContextManager, state);
         ConversationRuntimeContext.PendingClarification pending = context == null ? null : context.pendingClarification();
 
         if (pending == null || !"CART_CANDIDATE_SELECTION".equals(pending.clarificationType())) {

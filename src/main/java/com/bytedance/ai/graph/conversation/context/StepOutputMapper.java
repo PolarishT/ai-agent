@@ -1,27 +1,21 @@
 package com.bytedance.ai.graph.conversation.context;
 
+import java.util.Map;
+
 /**
- * 把 (intent, workflowResult, answerText) 投影成结构化的 {@link ConversationRuntimeContext.StepOutput}。
+ * 把 workflow 执行结果投影成 step 的 {@code output} map（写进 taskSummaries.steps[].output）。
  *
- * <p>kind 字段按 intent 类别给出（PRODUCT_CANDIDATES / CART_MUTATION / ORDER_INFO / ...），
- * payload 则按已知的 workflow result 类型抽取关键字段，未知类型保留 raw。
+ * <p>新架构下 step 的分类由 {@code taskType} 承载，不再需要 {@code kind} 判别字段，
+ * 因此 output 直接是离散字段 map（例如 PRODUCT_SEARCH → {@code {candidateCount, productInfo[]}}）。
  *
  * <p>接口放在 {@code conversation.context} 包，实现放在 {@code answer} 包以避免与各 domain workflow 形成循环依赖。
  */
 public interface StepOutputMapper {
 
-    /** kind 字典 —— 与 prompt / LLM 约定的输出种类，调用方按字符串比对。 */
-    String KIND_PRODUCT_CANDIDATES = "PRODUCT_CANDIDATES";
-    String KIND_PRICE_INFO = "PRICE_INFO";
-    String KIND_INVENTORY_INFO = "INVENTORY_INFO";
-    String KIND_CART_MUTATION = "CART_MUTATION";
-    String KIND_CART_SNAPSHOT = "CART_SNAPSHOT";
-    String KIND_ORDER_MUTATION = "ORDER_MUTATION";
-    String KIND_ORDER_INFO = "ORDER_INFO";
-    String KIND_LOGISTICS_INFO = "LOGISTICS_INFO";
-    String KIND_TEXT_ANSWER = "TEXT_ANSWER";
-    String KIND_CLARIFY_REQUEST = "CLARIFY_REQUEST";
-    String KIND_UNKNOWN = "UNKNOWN_OUTPUT";
-
-    ConversationRuntimeContext.StepOutput map(String intent, Object workflowResult, String answerText);
+    /**
+     * @param taskType       当前任务类型（PRODUCT_SEARCH / ADD_TO_CART / CREATE_ORDER / ...）
+     * @param workflowResult workflow 节点产出对象（可能为 null）
+     * @return 结构化 output map；至少为空 map，不为 null
+     */
+    Map<String, Object> toOutput(String taskType, Object workflowResult);
 }

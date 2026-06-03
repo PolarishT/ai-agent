@@ -9,6 +9,7 @@ import com.bytedance.ai.graph.cartmanage.subgraph.support.CandidateSelectionReso
 import com.bytedance.ai.graph.cartmanage.subgraph.support.CartActionParser;
 import com.bytedance.ai.graph.cartmanage.subgraph.support.CartGraphStateSupport;
 import com.bytedance.ai.graph.cartmanage.subgraph.support.ConversationProductCandidateMapper;
+import com.bytedance.ai.graph.orchestration.GuideGraphContextSupport;
 import com.bytedance.ai.graph.orchestration.GuideGraphStateKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,10 +48,7 @@ public class CartLoadContextNode {
         updates.put(GuideGraphStateKeys.CONVERSATION_ID, conversationId);
         updates.put(GuideGraphStateKeys.MESSAGE, userMessage);
 
-        ConversationRuntimeContext context = state.value(
-                GuideGraphStateKeys.CONVERSATION_CONTEXT,
-                ConversationRuntimeContext.class
-        ).orElse(null);
+        ConversationRuntimeContext context = GuideGraphContextSupport.loadContext(conversationContextManager, state);
         ConversationRuntimeContext.PendingClarification pending = context == null ? null : context.pendingClarification();
         boolean pendingLoaded = false;
         boolean stalePendingCancelled = false;

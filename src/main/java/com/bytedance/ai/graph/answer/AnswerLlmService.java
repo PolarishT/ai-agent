@@ -1,5 +1,6 @@
 package com.bytedance.ai.graph.answer;
 
+import com.bytedance.ai.graph.conversation.context.RuntimeContextView;
 import com.bytedance.ai.shared.support.RagJsonCodec;
 import com.bytedance.ai.shared.support.RagLogFields;
 import org.slf4j.Logger;
@@ -46,7 +47,7 @@ public class AnswerLlmService {
                         input.intent(),
                         input.workflow(),
                         workflowResultJson,
-                        input.agentMemoryText(),
+                        serializeView(input.view()),
                         input.ruleFallback()
                 );
         String prompt = promptFactory.build(promptInput);
@@ -98,13 +99,28 @@ public class AnswerLlmService {
         }
     }
 
+    /** 把运行时上下文 view 序列化成 JSON 喂给 prompt（recentMessages + taskChain + taskSummaries）。 */
+    private String serializeView(RuntimeContextView view) {
+        if (view == null) {
+            return "";
+        }
+        try {
+            return jsonCodec.write(view);
+        } catch (RuntimeException ex) {
+            log.atWarn()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "answer_llm.view_serialize_failed")
+                    .log("runtime context view not serializable: {}", ex.toString());
+            return "";
+        }
+    }
+
     /** Service 入参载体。 */
     public record AnswerLlmInput(
             String userMessage,
             String intent,
             String workflow,
             Object workflowResult,
-            String agentMemoryText,
+            RuntimeContextView view,
             String ruleFallback
     ) {
     }

@@ -139,6 +139,16 @@ class ProductProfileSearcherTests {
         assertThat(sql).contains("THEN 0.4 ELSE 0 END");   // attributes_json
     }
 
+    @Test
+    void sqlUsesAttributesJsonInFullTextRecall() {
+        when(filterBuilder.build(any(ProductQueryCondition.class))).thenReturn(PostgresFilterFragment.empty());
+        searcher.search("白葡萄味", ProductQueryCondition.empty("白葡萄味"), 5);
+
+        String sql = capturedSql();
+        assertThat(sql).contains("coalesce(p.attributes_json::text, '')),\n                    plainto_tsquery");
+        assertThat(sql).contains("coalesce(p.attributes_json::text, '')) @@ plainto_tsquery");
+    }
+
     @SuppressWarnings("unchecked")
     private String capturedSql() {
         ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);

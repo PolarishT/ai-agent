@@ -98,8 +98,7 @@ public class OpenAiClientConfiguration {
                 .build();
 
         OpenAiApi openAiApi = OpenAiApi.builder()
-                .baseUrl(chatCompletionsBaseUrl(baseUrl))
-                .completionsPath("/api/v3/chat/completions")
+                .baseUrl(baseUrl)
                 .apiKey(apiKey)
                 .build();
 
@@ -172,14 +171,8 @@ public class OpenAiClientConfiguration {
 
         OpenAiApi openAiApi = OpenAiApi.builder()
                 .baseUrl(chatCompletionsBaseUrl(baseUrl))
-                .completionsPath("/api/v3/chat/completions")
+
                 .apiKey(apiKey)
-                .restClientBuilder(RestClient.builder()
-                        .requestFactory(new SimpleClientHttpRequestFactory() {{
-                            Duration t = timeout != null ? timeout : Duration.ofSeconds(10);
-                            setConnectTimeout((int) t.toMillis());
-                            setReadTimeout((int) t.toMillis());
-                        }}))
                 .build();
 
         OpenAiChatModel model = OpenAiChatModel.builder()

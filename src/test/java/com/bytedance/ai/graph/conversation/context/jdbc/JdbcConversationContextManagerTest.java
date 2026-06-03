@@ -144,48 +144,39 @@ class JdbcConversationContextManagerTest {
     }
 
     @Test
-    void taskChainRoundTripCoversSaveLoadMarkStepAndTransitionStatus() {
+    void taskChainRoundTripCoversSaveLoadMarkPlanTaskAndTransitionStatus() {
         LocalDateTime now = LocalDateTime.now();
         ConversationRuntimeContext.UserGoal goal = new ConversationRuntimeContext.UserGoal(
                 "PRODUCT_DISCOVERY", "买杯水", true, "RUNNING"
         );
-        ConversationRuntimeContext.TaskStep step1 = new ConversationRuntimeContext.TaskStep(
-                1, "step-1", "PRODUCT_SEARCH", "搜",
-                "product_query_workflow", "PENDING", null, null, null, null
-        );
+        ConversationRuntimeContext.PlanTask task1 = new ConversationRuntimeContext.PlanTask(
+                "task-1", "搜商品", "PRODUCT_SEARCH", "product_query_workflow", 1, "PENDING");
         ConversationRuntimeContext.TaskChain chain = new ConversationRuntimeContext.TaskChain(
-                null, "chain-1", 1, "EXECUTING",
-                goal, List.of(step1), "turn-1", "turn-1", now, now
+                null, "chain-1", 1, "PLANNING",
+                goal, List.of(task1), List.of(), "turn-1", "turn-1", now, now
         );
 
-        // save + load
+        // save + load：planTasks 落库回来
         manager.saveTaskChain("u1", "c1", "turn-1", "main_intent_router", chain, null);
         ConversationRuntimeContext.TaskChain loaded = manager.loadTaskChain("u1", "c1", "chain-1");
         assertThat(loaded).isNotNull();
         assertThat(loaded.taskChainId()).isEqualTo("chain-1");
         assertThat(loaded.userGoal().isComposite()).isTrue();
+        assertThat(loaded.planTasks()).hasSize(1);
+        assertThat(loaded.planTasks().get(0).workflow()).isEqualTo("product_query_workflow");
+        assertThat(loaded.steps()).isEmpty();
+
+        // markPlanTask：SUCCEEDED + 追加 step（含 output map）
+        ConversationRuntimeContext.TaskStep executed = new ConversationRuntimeContext.TaskStep(
+                1, "step-1", "PRODUCT_SEARCH", "搜", "product_query_workflow", "SUCCEEDED",
+                "turn-2", now, now, Map.of("candidateCount", 3));
+        assertThat(manager.markPlanTask("u1", "c1", "chain-1", "task-1", "SUCCEEDED", executed, "turn-2")).isTrue();
+        loaded = manager.loadTaskChain("u1", "c1", "chain-1");
+        assertThat(loaded.planTasks().get(0).status()).isEqualTo("SUCCEEDED");
         assertThat(loaded.steps()).hasSize(1);
-        assertThat(loaded.steps().get(0).status()).isEqualTo("PENDING");
-
-        // RUNNING 写 startedAt
-        assertThat(manager.markChainStep("u1", "c1", "chain-1", 1, "RUNNING", null, "turn-1")).isTrue();
-        loaded = manager.loadTaskChain("u1", "c1", "chain-1");
-        assertThat(loaded.steps().get(0).status()).isEqualTo("RUNNING");
-        assertThat(loaded.steps().get(0).startedAt()).isNotNull();
-        assertThat(loaded.steps().get(0).completedAt()).isNull();
-
-        // SUCCEEDED 写 output + completedAt
-        ConversationRuntimeContext.StepOutput output = new ConversationRuntimeContext.StepOutput(
-                "PRODUCT_CANDIDATES", Map.of("count", 3)
-        );
-        assertThat(manager.markChainStep("u1", "c1", "chain-1", 1, "SUCCEEDED", output, "turn-2")).isTrue();
-        loaded = manager.loadTaskChain("u1", "c1", "chain-1");
-        assertThat(loaded.steps().get(0).status()).isEqualTo("SUCCEEDED");
-        assertThat(loaded.steps().get(0).completedAt()).isNotNull();
-        assertThat(loaded.steps().get(0).output()).isNotNull();
-        assertThat(loaded.steps().get(0).output().kind()).isEqualTo("PRODUCT_CANDIDATES");
-        assertThat(loaded.steps().get(0).turnId()).isEqualTo("turn-2");
+        assertThat(loaded.steps().get(0).output()).containsEntry("candidateCount", 3);
         assertThat(loaded.lastUpdatedTurnId()).isEqualTo("turn-2");
+        assertThat(loaded.nextPendingTask()).isNull();
 
         // chain 整体推到 SUCCEEDED
         assertThat(manager.transitionChainStatus("u1", "c1", "chain-1", "SUCCEEDED", "turn-3")).isTrue();
@@ -193,14 +184,14 @@ class JdbcConversationContextManagerTest {
         assertThat(loaded.status()).isEqualTo("SUCCEEDED");
         assertThat(loaded.lastUpdatedTurnId()).isEqualTo("turn-3");
 
-        // 不存在的 chain / step 返回 false
-        assertThat(manager.markChainStep("u1", "c1", "chain-1", 99, "SUCCEEDED", null, null)).isFalse();
-        assertThat(manager.markChainStep("u1", "c1", "no-such-chain", 1, "SUCCEEDED", null, null)).isFalse();
+        // 不存在的 task / chain 返回 false
+        assertThat(manager.markPlanTask("u1", "c1", "chain-1", "no-task", "SUCCEEDED", null, null)).isFalse();
+        assertThat(manager.markPlanTask("u1", "c1", "no-such-chain", "task-1", "SUCCEEDED", null, null)).isFalse();
         assertThat(manager.transitionChainStatus("u1", "c1", "no-such-chain", "FAILED", null)).isFalse();
 
-        // supersede 链路：原 chain 应该全是 SUPERSEDED，最新仍是 ACTIVE
+        // supersede 链路：最新一条 ACTIVE，前几版 SUPERSEDED
         assertThat(count("TASK_CHAIN", "ACTIVE")).isEqualTo(1);
-        assertThat(count("TASK_CHAIN", "SUPERSEDED")).isEqualTo(3);
+        assertThat(count("TASK_CHAIN", "SUPERSEDED")).isEqualTo(2);
 
         // load() 主入口也能拿到 chain
         ConversationRuntimeContext context = manager.load("u1", "c1");
@@ -216,12 +207,12 @@ class JdbcConversationContextManagerTest {
                 1, "step-1", "PRODUCT_SEARCH", "搜",
                 "product_query_workflow", "SUCCEEDED",
                 "turn-1", LocalDateTime.now().minusHours(2),
-                LocalDateTime.now().minusHours(2), null
+                LocalDateTime.now().minusHours(2), Map.of()
         );
         ConversationRuntimeContext.TaskChain chain = new ConversationRuntimeContext.TaskChain(
                 null, "chain-stale", 1, "EXECUTING",
                 new ConversationRuntimeContext.UserGoal("PRODUCT_SEARCH", "找", false, "RUNNING"),
-                List.of(step), "turn-1", "turn-1",
+                List.of(), List.of(step), "turn-1", "turn-1",
                 LocalDateTime.now().minusHours(2), LocalDateTime.now().minusHours(2)
         );
         manager.saveTaskChain("u1", "c1", "turn-1", "product_query_workflow", chain, expired);
@@ -247,7 +238,7 @@ class JdbcConversationContextManagerTest {
         LocalDateTime future = LocalDateTime.now().plusMinutes(30);
         ConversationRuntimeContext.TaskChain chain = new ConversationRuntimeContext.TaskChain(
                 null, "chain-fresh", 1, "EXECUTING",
-                null, List.of(), "turn-1", "turn-1",
+                null, List.of(), List.of(), "turn-1", "turn-1",
                 LocalDateTime.now(), LocalDateTime.now()
         );
         manager.saveTaskChain("u1", "c1", "turn-1", "wf", chain, future);
@@ -306,6 +297,7 @@ class JdbcConversationContextManagerTest {
                     title VARCHAR(200),
                     status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
                     message_count INTEGER NOT NULL DEFAULT 0,
+                    next_turn_seq BIGINT NOT NULL DEFAULT 0,
                     metadata CLOB NOT NULL DEFAULT '{}',
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,

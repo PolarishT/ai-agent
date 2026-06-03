@@ -98,16 +98,17 @@ public interface ConversationContextManager {
     );
 
     /**
-     * 原子修改某个 step 的状态、输出、时间戳。RUNNING 时填 startedAt，终态时填 completedAt。
-     * 找不到对应 stepNo 时返回 false。
+     * 推进一个计划任务：把 planTasks 里 taskId 对应项置为 newTaskStatus，
+     * 同时（若 executedStep 非空）把执行明细追加到 steps[]。一次原子 upsert。
+     * 找不到对应 taskId 时返回 false。
      */
-    boolean markChainStep(
+    boolean markPlanTask(
             String userId,
             String conversationId,
             String taskChainId,
-            int stepNo,
-            String newStepStatus,
-            ConversationRuntimeContext.StepOutput output,
+            String taskId,
+            String newTaskStatus,
+            ConversationRuntimeContext.TaskStep executedStep,
             String turnId
     );
 

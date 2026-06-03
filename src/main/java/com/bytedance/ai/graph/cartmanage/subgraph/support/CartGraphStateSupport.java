@@ -1,8 +1,7 @@
 package com.bytedance.ai.graph.cartmanage.subgraph.support;
 
 import com.alibaba.cloud.ai.graph.OverAllState;
-import com.bytedance.ai.graph.conversation.ConversationMessage;
-import com.bytedance.ai.graph.conversation.context.ConversationRuntimeContext;
+import com.bytedance.ai.graph.orchestration.GuideGraphContextSupport;
 import com.bytedance.ai.graph.orchestration.GuideGraphStateKeys;
 import org.springframework.util.StringUtils;
 
@@ -37,24 +36,7 @@ public final class CartGraphStateSupport {
     }
 
     public static String conversationMemory(OverAllState state) {
-        ConversationRuntimeContext context = state.value(
-                GuideGraphStateKeys.CONVERSATION_CONTEXT,
-                ConversationRuntimeContext.class
-        ).orElse(null);
-        if (context != null) {
-            return context.conversationMemoryText();
-        }
-        List<?> recentMessages = state.value(GuideGraphStateKeys.RECENT_MESSAGES, List.of());
-        if (recentMessages.isEmpty()) {
-            return "";
-        }
-        StringBuilder builder = new StringBuilder();
-        for (Object value : recentMessages) {
-            if (value instanceof ConversationMessage message) {
-                builder.append(message.role()).append(": ").append(message.content()).append('\n');
-            }
-        }
-        return builder.toString().trim();
+        return GuideGraphContextSupport.conversationMemoryFromState(state);
     }
 
     public static String requiredString(OverAllState state, String key) {

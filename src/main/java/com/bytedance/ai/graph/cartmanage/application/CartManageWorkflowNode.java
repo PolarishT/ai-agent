@@ -9,10 +9,10 @@ import com.bytedance.ai.graph.cartmanage.CartManageAction;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.bytedance.ai.graph.cart.api.CartItemView;
 import com.bytedance.ai.graph.cart.api.CartView;
+import com.bytedance.ai.graph.orchestration.GuideGraphContextSupport;
 import com.bytedance.ai.graph.orchestration.GuideGraphStateKeys;
 import com.bytedance.ai.graph.api.GuideNodeExecutionResult;
 import com.bytedance.ai.graph.api.NodeRunStatus;
-import com.bytedance.ai.graph.conversation.ConversationMessage;
 import com.bytedance.ai.graph.intent.support.SlotKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -624,15 +624,7 @@ public class CartManageWorkflowNode {
     // ---------- helpers ----------
 
     private String renderMemory(OverAllState state) {
-        List<ConversationMessage> recent = state.value(GuideGraphStateKeys.RECENT_MESSAGES, List.of());
-        if (recent == null || recent.isEmpty()) {
-            return "";
-        }
-        StringBuilder builder = new StringBuilder();
-        for (ConversationMessage message : recent) {
-            builder.append(message.role()).append(": ").append(message.content()).append('\n');
-        }
-        return builder.toString().trim();
+        return GuideGraphContextSupport.conversationMemoryFromState(state);
     }
 
     private String requiredString(OverAllState state, String key) {

@@ -5,6 +5,7 @@ import com.bytedance.ai.graph.cartmanage.CartManageSlots;
 import com.bytedance.ai.graph.cartmanage.application.CartManageSlotFillingService;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
+import com.bytedance.ai.graph.conversation.context.ConversationContextManager;
 import com.bytedance.ai.graph.conversation.context.ConversationRuntimeContext;
 import com.bytedance.ai.graph.cartmanage.subgraph.CartAction;
 import com.bytedance.ai.graph.cartmanage.subgraph.CartGraphStateKeys;
@@ -13,6 +14,7 @@ import com.bytedance.ai.graph.cartmanage.subgraph.support.CartActionParser;
 import com.bytedance.ai.graph.cartmanage.subgraph.support.CartGraphStateSupport;
 import com.bytedance.ai.graph.cartmanage.subgraph.support.CartItemLookup;
 import com.bytedance.ai.graph.intent.support.SlotKeys;
+import com.bytedance.ai.graph.orchestration.GuideGraphContextSupport;
 import com.bytedance.ai.graph.orchestration.GuideGraphStateKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,15 +34,18 @@ public class CartResolveTargetNode {
     private final CartManageSlotFillingService slotFillingService;
     private final CartItemLookup cartItemLookup;
     private final CatalogQueryFacade catalogQueryFacade;
+    private final ConversationContextManager conversationContextManager;
 
     public CartResolveTargetNode(
             CartManageSlotFillingService slotFillingService,
             CartItemLookup cartItemLookup,
-            CatalogQueryFacade catalogQueryFacade
+            CatalogQueryFacade catalogQueryFacade,
+            ConversationContextManager conversationContextManager
     ) {
         this.slotFillingService = slotFillingService;
         this.cartItemLookup = cartItemLookup;
         this.catalogQueryFacade = catalogQueryFacade;
+        this.conversationContextManager = conversationContextManager;
     }
 
     public Map<String, Object> apply(OverAllState state) {
@@ -138,10 +143,7 @@ public class CartResolveTargetNode {
             String productName,
             Boolean contextualReference
     ) {
-        ConversationRuntimeContext context = state.value(
-                GuideGraphStateKeys.CONVERSATION_CONTEXT,
-                ConversationRuntimeContext.class
-        ).orElse(null);
+        ConversationRuntimeContext context = GuideGraphContextSupport.loadContext(conversationContextManager, state);
         if (context == null) {
             return null;
         }

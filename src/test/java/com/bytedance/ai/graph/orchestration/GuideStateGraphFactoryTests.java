@@ -366,6 +366,7 @@ class GuideStateGraphFactoryTests {
                     title VARCHAR(200),
                     status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
                     message_count INTEGER NOT NULL DEFAULT 0,
+                    next_turn_seq BIGINT NOT NULL DEFAULT 0,
                     metadata CLOB NOT NULL DEFAULT '{}',
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -399,6 +400,7 @@ class GuideStateGraphFactoryTests {
                     intent VARCHAR(64),
                     target_workflow VARCHAR(64),
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     completed_at TIMESTAMP
                 )
                 """);
@@ -522,9 +524,9 @@ class GuideStateGraphFactoryTests {
         }
 
         @Override
-        public boolean markChainStep(String userId, String conversationId, String taskChainId, int stepNo,
-                                     String newStepStatus, ConversationRuntimeContext.StepOutput output,
-                                     String turnId) {
+        public boolean markPlanTask(String userId, String conversationId, String taskChainId, String taskId,
+                                    String newTaskStatus, ConversationRuntimeContext.TaskStep executedStep,
+                                    String turnId) {
             return false;
         }
 

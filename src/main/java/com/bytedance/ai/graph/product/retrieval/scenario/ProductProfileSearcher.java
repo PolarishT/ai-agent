@@ -71,7 +71,8 @@ public class ProductProfileSearcher {
                                                 coalesce(p.title, '') || ' ' ||
                                                 coalesce(p.brand, '') || ' ' ||
                                                 coalesce(p.category, '') || ' ' ||
-                                                coalesce(p.sub_category, '')),
+                                                coalesce(p.sub_category, '') || ' ' ||
+                                                coalesce(p.attributes_json::text, '')),
                                     plainto_tsquery('simple', :query)) * 2.0
                             + CASE WHEN lower(coalesce(p.title, '')) LIKE :likeQuery THEN 1.8 ELSE 0 END
                             + CASE WHEN EXISTS (
@@ -97,7 +98,8 @@ public class ProductProfileSearcher {
                                     coalesce(p.title, '') || ' ' ||
                                     coalesce(p.brand, '') || ' ' ||
                                     coalesce(p.category, '') || ' ' ||
-                                    coalesce(p.sub_category, '')) @@ plainto_tsquery('simple', :query)
+                                    coalesce(p.sub_category, '') || ' ' ||
+                                    coalesce(p.attributes_json::text, '')) @@ plainto_tsquery('simple', :query)
                      OR lower(coalesce(p.title, '')) LIKE :likeQuery
                      OR lower(coalesce(p.brand, '')) LIKE :likeQuery
                      OR lower(coalesce(p.category, '')) LIKE :likeQuery

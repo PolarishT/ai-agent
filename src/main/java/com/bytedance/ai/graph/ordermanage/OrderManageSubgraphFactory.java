@@ -15,6 +15,7 @@ import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
 import com.bytedance.ai.graph.conversation.context.ConversationContextItemStatus;
 import com.bytedance.ai.graph.conversation.context.ConversationContextManager;
 import com.bytedance.ai.graph.conversation.context.ConversationRuntimeContext;
+import com.bytedance.ai.graph.orchestration.GuideGraphContextSupport;
 import com.bytedance.ai.graph.orchestration.GuideGraphStateKeys;
 import com.bytedance.ai.graph.ordermanage.application.OrderAddressResolver;
 import com.bytedance.ai.graph.ordermanage.application.OrderCartSnapshotService;
@@ -23,6 +24,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -111,10 +113,7 @@ public class OrderManageSubgraphFactory {
         Map<String, Object> updates = new LinkedHashMap<>();
         clearTransientState(updates);
 
-        ConversationRuntimeContext context = state.value(
-                GuideGraphStateKeys.CONVERSATION_CONTEXT,
-                ConversationRuntimeContext.class
-        ).orElse(null);
+        ConversationRuntimeContext context = GuideGraphContextSupport.loadContext(conversationContextManager, state);
         ConversationRuntimeContext.OrderContext order = context == null ? null : context.order();
         if (order != null) {
             if (order.expiresAt() != null && order.expiresAt().isBefore(LocalDateTime.now())) {
@@ -142,16 +141,17 @@ public class OrderManageSubgraphFactory {
         String message = state.value(GuideGraphStateKeys.MESSAGE, "");
         boolean hasPending = state.value(OrderManageStateKeys.ORDER_CONTEXT_ITEM_ID).isPresent();
         OrderManageStatus status = parseStatus(state.value(OrderManageStateKeys.ORDER_STATUS, ""));
+        boolean addressInput = hasAddressInput(state);
         OrderManageAction action;
         if (hasPending && looksLikeCancel(message)) {
             action = OrderManageAction.CANCEL_ORDER;
-        } else if (hasPending && status == OrderManageStatus.WAITING_ADDRESS && addressResolver.looksLikeAddress(message)) {
+        } else if (hasPending && status == OrderManageStatus.WAITING_ADDRESS && addressInput) {
             action = OrderManageAction.PROVIDE_ADDRESS;
         } else if (hasPending && status == OrderManageStatus.WAITING_CONFIRMATION && looksLikeConfirmOrder(message)) {
             action = OrderManageAction.CONFIRM_ORDER;
         } else if (!hasPending && looksLikeConfirmOrder(message)) {
             action = OrderManageAction.CONFIRM_ORDER;
-        } else if (!hasPending && looksLikeCheckout(message)) {
+        } else if (!hasPending && (looksLikeCheckout(message) || isOrderIntent(state) || addressInput)) {
             action = OrderManageAction.CHECKOUT_REQUEST;
         } else if (hasPending && status == OrderManageStatus.WAITING_ADDRESS && looksLikeConfirmOrder(message)) {
             action = OrderManageAction.CONFIRM_ORDER;
@@ -249,7 +249,15 @@ public class OrderManageSubgraphFactory {
             updates.put("orderResolveAddressRoute", "ADDRESS_READY");
             return updates;
         }
-        AddressParseResult parsed = addressResolver.parse(state.value(GuideGraphStateKeys.MESSAGE, ""));
+        if (!hasAddressInput(state)) {
+            updates.put(OrderManageStateKeys.ORDER_STATUS, OrderManageStatus.WAITING_ADDRESS.name());
+            updates.put(OrderManageStateKeys.NODE_MESSAGE,
+                    addressResolver.missingFieldsMessage(List.of("receiverName", "phone", "addressText")));
+            updates.put(OrderManageStateKeys.NEED_USER_INPUT, true);
+            updates.put("orderResolveAddressRoute", "ADDRESS_MISSING");
+            return updates;
+        }
+        AddressParseResult parsed = parseAddress(state);
         if (!parsed.complete()) {
             updates.put(OrderManageStateKeys.ORDER_STATUS, OrderManageStatus.WAITING_ADDRESS.name());
             updates.put(OrderManageStateKeys.NODE_MESSAGE, addressResolver.missingFieldsMessage(parsed.missingFields()));
@@ -365,15 +373,43 @@ public class OrderManageSubgraphFactory {
     }
 
     private Map<String, Object> orderFinalResponse(OverAllState state) {
-        if (state.value(OrderManageStateKeys.NODE_MESSAGE).isPresent()) {
-            return Map.of();
+        Map<String, Object> updates = new LinkedHashMap<>();
+        if (state.value(OrderManageStateKeys.NODE_MESSAGE).isEmpty()) {
+            if (OrderManageAction.UNKNOWN.name().equals(state.value(OrderManageStateKeys.ORDER_ACTION, ""))
+                    && state.value(OrderManageStateKeys.ORDER_CONTEXT_ITEM_ID).isEmpty()) {
+                updates.put(OrderManageStateKeys.NODE_MESSAGE,
+                        "当前没有待确认的订单，请先发送“结算购物车”，我会基于当前购物车生成待确认订单。");
+                updates.put(OrderManageStateKeys.NEED_USER_INPUT, false);
+            } else {
+                updates.put(OrderManageStateKeys.NODE_MESSAGE,
+                        "请提供收货人姓名、联系电话和详细收货地址，例如：Zhang，0412345678，UNSW High Street, Kensington NSW 2052。");
+                updates.put(OrderManageStateKeys.NEED_USER_INPUT, true);
+            }
         }
-        return Map.of(
-                OrderManageStateKeys.NODE_MESSAGE,
-                "请提供收货人姓名、联系电话和详细收货地址，例如：Zhang，0412345678，UNSW High Street, Kensington NSW 2052。",
-                OrderManageStateKeys.NEED_USER_INPUT,
-                true
-        );
+        // 不管走的是 NODE_MESSAGE-already-set 分支还是兜底分支，都把结构化结果统一发给主图。
+        String nodeMessage = updates.containsKey(OrderManageStateKeys.NODE_MESSAGE)
+                ? (String) updates.get(OrderManageStateKeys.NODE_MESSAGE)
+                : state.value(OrderManageStateKeys.NODE_MESSAGE, "");
+        Boolean needUserInput = updates.containsKey(OrderManageStateKeys.NEED_USER_INPUT)
+                ? (Boolean) updates.get(OrderManageStateKeys.NEED_USER_INPUT)
+                : state.value(OrderManageStateKeys.NEED_USER_INPUT, false);
+        updates.put(GuideGraphStateKeys.WORKFLOW_RESULT, new OrderManageWorkflowResult(
+                state.value(OrderManageStateKeys.ORDER_ACTION, ""),
+                state.value(OrderManageStateKeys.ORDER_STATUS, ""),
+                state.value(OrderManageStateKeys.ORDER_NO, (String) null),
+                state.value(OrderManageStateKeys.AMOUNT_SNAPSHOT, BigDecimal.class).orElse(null),
+                state.value(OrderManageStateKeys.ADDRESS_SNAPSHOT, Map.class)
+                        .map(m -> {
+                            @SuppressWarnings("unchecked")
+                            Map<String, Object> cast = (Map<String, Object>) m;
+                            return cast;
+                        })
+                        .orElse(Map.of()),
+                state.value(OrderManageStateKeys.ERROR_REASON, (String) null),
+                Boolean.TRUE.equals(needUserInput),
+                nodeMessage
+        ));
+        return updates;
     }
 
     private void clearTransientState(Map<String, Object> updates) {
@@ -415,6 +451,111 @@ public class OrderManageSubgraphFactory {
                 || text.contains("购买购物车")
                 || text.contains("买这些")
                 || text.equals("checkout");
+    }
+
+    private boolean isOrderIntent(OverAllState state) {
+        String intent = state.value(GuideGraphStateKeys.INTENT)
+                .map(Object::toString)
+                .orElse("");
+        String mainIntent = state.value(GuideGraphStateKeys.MAIN_INTENT)
+                .map(Object::toString)
+                .orElse("");
+        return "CREATE_ORDER".equals(intent)
+                || "CREATE_ORDER".equals(mainIntent)
+                || "CONFIRM_ORDER".equals(intent)
+                || "CONFIRM_ORDER".equals(mainIntent);
+    }
+
+    private boolean hasAddressInput(OverAllState state) {
+        return hasAddressSlots(state) || addressResolver.looksLikeAddress(state.value(GuideGraphStateKeys.MESSAGE, ""));
+    }
+
+    private boolean hasAddressSlots(OverAllState state) {
+        Map<String, Object> slots = intentSlots(state);
+        return firstSlot(slots,
+                "receiverName", "receiver_name", "recipientName", "recipient_name", "name") != null
+                || firstSlot(slots,
+                "phone", "mobile", "contactNumber", "contact_number", "telephone") != null
+                || firstSlot(slots,
+                "address", "addressText", "address_text", "shippingAddress", "shipping_address", "detail") != null;
+    }
+
+    private AddressParseResult parseAddress(OverAllState state) {
+        Map<String, Object> slots = intentSlots(state);
+        String slotReceiver = firstSlot(slots,
+                "receiverName", "receiver_name", "recipientName", "recipient_name", "name");
+        String slotPhone = firstSlot(slots,
+                "phone", "mobile", "contactNumber", "contact_number", "telephone");
+        String slotAddress = firstSlot(slots,
+                "address", "addressText", "address_text", "shippingAddress", "shipping_address", "detail");
+
+        String message = state.value(GuideGraphStateKeys.MESSAGE, "");
+        String combined = String.join(" ",
+                List.of(
+                        nullToEmpty(slotReceiver),
+                        nullToEmpty(slotPhone),
+                        nullToEmpty(slotAddress),
+                        nullToEmpty(message)
+                ));
+        AddressParseResult parsed = addressResolver.parse(combined);
+        AddressSnapshot parsedSnapshot = parsed.snapshot();
+        String receiver = firstNonBlank(slotReceiver, parsedSnapshot.receiverName());
+        String phone = firstNonBlank(slotPhone, parsedSnapshot.phone());
+        String address = firstNonBlank(slotAddress, parsedSnapshot.addressText());
+        String postcode = parsedSnapshot.postcode();
+        String city = parsedSnapshot.city();
+        String stateName = parsedSnapshot.state();
+        AddressSnapshot snapshot = new AddressSnapshot(receiver, phone, address, postcode, city, stateName);
+
+        List<String> missing = new ArrayList<>();
+        if (!StringUtils.hasText(receiver)) {
+            missing.add("receiverName");
+        }
+        if (!StringUtils.hasText(phone)) {
+            missing.add("phone");
+        }
+        if (!StringUtils.hasText(address)) {
+            missing.add("addressText");
+        }
+        return new AddressParseResult(missing.isEmpty(), List.copyOf(missing), snapshot);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> intentSlots(OverAllState state) {
+        Object value = state.value(GuideGraphStateKeys.INTENT_SLOTS).orElse(null);
+        if (value instanceof Map<?, ?> raw) {
+            Map<String, Object> normalized = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : raw.entrySet()) {
+                if (entry.getKey() != null) {
+                    normalized.put(String.valueOf(entry.getKey()), entry.getValue());
+                }
+            }
+            return normalized;
+        }
+        return Map.of();
+    }
+
+    private String firstSlot(Map<String, Object> slots, String... keys) {
+        for (String key : keys) {
+            Object value = slots.get(key);
+            if (value != null && StringUtils.hasText(String.valueOf(value))) {
+                return String.valueOf(value).trim();
+            }
+        }
+        return null;
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 
     private boolean looksLikeConfirmOrder(String message) {
@@ -488,10 +629,7 @@ public class OrderManageSubgraphFactory {
             String failReason,
             String orderNo
     ) {
-        ConversationRuntimeContext context = state.value(
-                GuideGraphStateKeys.CONVERSATION_CONTEXT,
-                ConversationRuntimeContext.class
-        ).orElse(null);
+        ConversationRuntimeContext context = GuideGraphContextSupport.loadContext(conversationContextManager, state);
         ConversationRuntimeContext.OrderContext existing = context == null ? null : context.order();
         Long id = pendingId(state).orElse(existing == null ? null : existing.contextItemId());
         Map<String, Object> cartSnapshot = state.value(OrderManageStateKeys.CART_SNAPSHOT, Map.<String, Object>of());

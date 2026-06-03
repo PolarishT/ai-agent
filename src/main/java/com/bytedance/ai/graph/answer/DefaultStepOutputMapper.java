@@ -6,8 +6,11 @@ import com.bytedance.ai.graph.cartmanage.CartManageAction;
 import com.bytedance.ai.graph.cartmanage.CartManageWorkflowResult;
 import com.bytedance.ai.graph.cartmanage.CartMutationResult;
 import com.bytedance.ai.graph.cartmanage.ProductCandidate;
-import com.bytedance.ai.graph.conversation.context.ConversationRuntimeContext;
 import com.bytedance.ai.graph.conversation.context.StepOutputMapper;
+import com.bytedance.ai.graph.ordermanage.OrderManageWorkflowResult;
+import com.bytedance.ai.graph.product.query.ProductComparisonResult;
+import com.bytedance.ai.graph.product.query.ProductQueryWorkflowResult;
+import com.bytedance.ai.graph.product.query.ProductSearchCandidate;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -16,10 +19,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 默认 StepOutputMapper：把 (intent, workflowResult, answerText) 投影成结构化 StepOutput。
+ * 默认 StepOutputMapper：把 workflow 结果投影成 step.output map。
  *
- * <p>已知 result 类型走专门提取；未知类型保留 {@code payload.raw} 兜底。
- * 各种 list 都封顶截断（候选 10 个、购物车条目 20 个），防止 prompt 爆量。
+ * <p>已知 result 类型走专门提取（PRODUCT_SEARCH → {@code {candidateCount, productInfo[]}}）；
+ * 未知类型保留 {@code {raw: ...}} 兜底。各种 list 都封顶截断防止 prompt 爆量。
  */
 @Component
 public class DefaultStepOutputMapper implements StepOutputMapper {
@@ -28,100 +31,141 @@ public class DefaultStepOutputMapper implements StepOutputMapper {
     private static final int MAX_CART_ITEMS = 20;
 
     @Override
-    public ConversationRuntimeContext.StepOutput map(
-            String intent, Object workflowResult, String answerText
-    ) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        if (StringUtils.hasText(answerText)) {
-            payload.put("answer", answerText);
+    public Map<String, Object> toOutput(String taskType, Object workflowResult) {
+        Map<String, Object> output = new LinkedHashMap<>();
+        if (workflowResult instanceof ProductQueryWorkflowResult pq) {
+            fillProductResult(pq, output);
+        } else if (workflowResult instanceof CartManageWorkflowResult cart) {
+            fillCartResult(cart, output);
+        } else if (workflowResult instanceof OrderManageWorkflowResult om) {
+            fillOrderResult(om, output);
+        } else if (workflowResult != null) {
+            output.put("raw", workflowResult);
         }
-
-        String kind;
-        if (workflowResult instanceof CartManageWorkflowResult cart) {
-            kind = mapCartResult(cart, payload);
-        } else {
-            kind = kindForIntent(intent);
-            if (workflowResult != null) {
-                // 未知 result 类型先原样保留；后续接入更多 workflow 时按需精细化
-                payload.put("raw", workflowResult);
-            }
-        }
-        return new ConversationRuntimeContext.StepOutput(kind, payload);
+        return output;
     }
 
-    private String kindForIntent(String intent) {
-        if (intent == null) {
-            return KIND_UNKNOWN;
+    /** ProductQueryWorkflowResult → {candidateCount, productInfo[]}（+ comparison / clarify / degraded）。 */
+    private void fillProductResult(ProductQueryWorkflowResult pq, Map<String, Object> output) {
+        if ("CLARIFY".equals(pq.status())) {
+            output.put("status", "CLARIFY");
+            if (StringUtils.hasText(pq.nodeMessage())) {
+                output.put("question", pq.nodeMessage());
+            }
+            return;
         }
-        return switch (intent) {
-            case "PRODUCT_SEARCH", "PRODUCT_RECOMMEND", "PRODUCT_COMPARE",
-                 "PRODUCT_DETAIL_QUERY", "PRODUCT_QUERY" -> KIND_PRODUCT_CANDIDATES;
-            case "PRICE_QUERY" -> KIND_PRICE_INFO;
-            case "INVENTORY_QUERY" -> KIND_INVENTORY_INFO;
-            case "ADD_TO_CART", "REMOVE_FROM_CART", "UPDATE_CART_ITEM", "CART_MANAGE" -> KIND_CART_MUTATION;
-            case "CREATE_ORDER", "CONFIRM_ORDER", "CANCEL_ORDER" -> KIND_ORDER_MUTATION;
-            case "ORDER_QUERY" -> KIND_ORDER_INFO;
-            case "LOGISTICS_QUERY" -> KIND_LOGISTICS_INFO;
-            case "POLICY_QA", "REVIEW_SUMMARY", "SMALL_TALK" -> KIND_TEXT_ANSWER;
-            case "CLARIFY" -> KIND_CLARIFY_REQUEST;
-            default -> KIND_UNKNOWN;
-        };
+        putIfPresent(output, "status", pq.status());
+        output.put("candidateCount", pq.candidates().size());
+        if (!pq.candidates().isEmpty()) {
+            output.put("productInfo", projectList(pq.candidates(),
+                    MAX_CANDIDATES, this::compactProductSearchCandidate));
+        }
+        if (pq.comparison() != null) {
+            output.put("comparison", compactComparison(pq.comparison()));
+        }
+        if (!pq.degradedNotes().isEmpty()) {
+            output.put("degradedNotes", pq.degradedNotes());
+        }
     }
 
     /**
-     * CartManageWorkflowResult 决定 kind：
-     * <ul>
-     *   <li>有 clarifyQuestion → CLARIFY_REQUEST</li>
-     *   <li>action == VIEW_CART → CART_SNAPSHOT</li>
-     *   <li>否则 → CART_MUTATION</li>
-     * </ul>
+     * CartManageWorkflowResult：
+     * 有 clarifyQuestion → {question, candidates}；VIEW_CART → cart 快照；否则 → mutation。
      */
-    private String mapCartResult(CartManageWorkflowResult cart, Map<String, Object> payload) {
+    private void fillCartResult(CartManageWorkflowResult cart, Map<String, Object> output) {
         if (StringUtils.hasText(cart.clarifyQuestion())) {
-            payload.put("question", cart.clarifyQuestion().strip());
+            output.put("question", cart.clarifyQuestion().strip());
             if (!cart.candidateItems().isEmpty()) {
-                payload.put("candidateItems", projectList(cart.candidateItems(),
+                output.put("candidateItems", projectList(cart.candidateItems(),
                         MAX_CANDIDATES, this::compactCartItem));
             }
             if (!cart.productCandidates().isEmpty()) {
-                payload.put("productCandidates", projectList(cart.productCandidates(),
+                output.put("productCandidates", projectList(cart.productCandidates(),
                         MAX_CANDIDATES, this::compactProductCandidate));
             }
-            putIfPresent(payload, "pendingConfirmAction", cart.pendingConfirmAction());
-            return KIND_CLARIFY_REQUEST;
+            putIfPresent(output, "pendingConfirmAction", cart.pendingConfirmAction());
+            return;
         }
 
         if (cart.action() == CartManageAction.VIEW_CART && cart.cartBefore() != null) {
-            compactCart(cart.cartBefore(), payload);
-            return KIND_CART_SNAPSHOT;
+            compactCart(cart.cartBefore(), output);
+            return;
         }
 
-        // CART_MUTATION
         if (cart.action() != null) {
-            payload.put("action", cart.action().name());
+            output.put("action", cart.action().name());
         }
         if (cart.targetItem() != null) {
-            payload.put("targetItem", compactCartItem(cart.targetItem()));
+            output.put("targetItem", compactCartItem(cart.targetItem()));
         }
         if (!cart.productCandidates().isEmpty()) {
-            payload.put("productCandidates", projectList(cart.productCandidates(),
+            output.put("productCandidates", projectList(cart.productCandidates(),
                     MAX_CANDIDATES, this::compactProductCandidate));
         }
         if (cart.mutationResult() != null) {
-            payload.put("mutationOutcome", compactMutationResult(cart.mutationResult()));
+            output.put("mutationOutcome", compactMutationResult(cart.mutationResult()));
         }
-        putIfPresent(payload, "pendingConfirmAction", cart.pendingConfirmAction());
-        putIfPresent(payload, "errorCode", cart.errorCode());
-        putIfPresent(payload, "errorMessage", cart.errorMessage());
-        return KIND_CART_MUTATION;
+        putIfPresent(output, "pendingConfirmAction", cart.pendingConfirmAction());
+        putIfPresent(output, "errorCode", cart.errorCode());
+        putIfPresent(output, "errorMessage", cart.errorMessage());
     }
 
-    private void compactCart(CartView cart, Map<String, Object> payload) {
-        putIfPresent(payload, "itemCount", cart.itemCount());
-        putIfPresent(payload, "subtotal", cart.subtotalAmount());
-        putIfPresent(payload, "currency", cart.currency());
+    /** OrderManageWorkflowResult → 扁平字段。 */
+    private void fillOrderResult(OrderManageWorkflowResult om, Map<String, Object> output) {
+        putIfPresent(output, "action", om.action());
+        putIfPresent(output, "status", om.status());
+        putIfPresent(output, "orderNo", om.orderNo());
+        putIfPresent(output, "amount", om.amount());
+        if (!om.addressSnapshot().isEmpty()) {
+            output.put("addressSnapshot", om.addressSnapshot());
+        }
+        putIfPresent(output, "errorReason", om.errorReason());
+        output.put("needUserInput", om.needUserInput());
+    }
+
+    /** 商品候选投影：对齐 productInfo 形态 {productId, title, brand, category, subCategory, price}。 */
+    private Map<String, Object> compactProductSearchCandidate(ProductSearchCandidate c) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        putIfPresent(m, "productId", c.productId());
+        putIfPresent(m, "title", c.title());
+        putIfPresent(m, "brand", c.brand());
+        putIfPresent(m, "category", c.category());
+        putIfPresent(m, "subCategory", c.subCategory());
+        putIfPresent(m, "price", c.price());
+        return m;
+    }
+
+    private Map<String, Object> compactComparison(ProductComparisonResult cmp) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        if (!cmp.dimensions().isEmpty()) {
+            m.put("dimensions", cmp.dimensions());
+        }
+        putIfPresent(m, "summary", cmp.summary());
+        if (!cmp.rows().isEmpty()) {
+            m.put("rows", projectList(cmp.rows(), MAX_CANDIDATES, this::compactComparisonRow));
+        }
+        return m;
+    }
+
+    private Map<String, Object> compactComparisonRow(ProductComparisonResult.Row row) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("index", row.index());
+        putIfPresent(m, "productId", row.productId());
+        putIfPresent(m, "title", row.title());
+        putIfPresent(m, "brand", row.brand());
+        putIfPresent(m, "price", row.price());
+        putIfPresent(m, "color", row.color());
+        putIfPresent(m, "capacity", row.capacity());
+        putIfPresent(m, "stock", row.stock());
+        return m;
+    }
+
+    private void compactCart(CartView cart, Map<String, Object> output) {
+        putIfPresent(output, "itemCount", cart.itemCount());
+        putIfPresent(output, "subtotal", cart.subtotalAmount());
+        putIfPresent(output, "currency", cart.currency());
         if (cart.items() != null && !cart.items().isEmpty()) {
-            payload.put("items", projectList(cart.items(), MAX_CART_ITEMS, this::compactCartItem));
+            output.put("items", projectList(cart.items(), MAX_CART_ITEMS, this::compactCartItem));
         }
     }
 
@@ -164,9 +208,9 @@ public class DefaultStepOutputMapper implements StepOutputMapper {
         return source.stream().limit(cap).map(mapper).toList();
     }
 
-    private void putIfPresent(Map<String, Object> payload, String key, Object value) {
+    private void putIfPresent(Map<String, Object> output, String key, Object value) {
         if (value != null) {
-            payload.put(key, value);
+            output.put(key, value);
         }
     }
 }

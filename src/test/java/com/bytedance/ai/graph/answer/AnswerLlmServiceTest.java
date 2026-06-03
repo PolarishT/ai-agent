@@ -1,5 +1,6 @@
 package com.bytedance.ai.graph.answer;
 
+import com.bytedance.ai.graph.conversation.context.RuntimeContextView;
 import com.bytedance.ai.shared.support.RagJsonCodec;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
@@ -26,23 +27,26 @@ class AnswerLlmServiceTest {
                 "  已为你找到 3 款符合条件的防晒霜，价格在 60 元上下。  ",
                 capturedPrompt);
 
+        RuntimeContextView view = new RuntimeContextView(
+                "c1", "u1", "turn-1", "req-1",
+                List.of(new RuntimeContextView.MessageView("turn-1", "USER", "找防晒霜", null)),
+                List.of(), List.of());
         String result = service.generate(new AnswerLlmService.AnswerLlmInput(
                 "找防晒霜",
                 "PRODUCT_SEARCH",
                 "product_query_workflow",
                 Map.of("count", 3, "topName", "理肤泉"),
-                "[Recent messages]\nUSER: 找防晒霜",
+                view,
                 "给你推荐 3 款"
         ));
 
         assertThat(result).isEqualTo("已为你找到 3 款符合条件的防晒霜，价格在 60 元上下。");
-        // prompt 里包含核心字段，确认 LLM 拿到的是完整上下文
+        // prompt 里包含核心字段，确认 LLM 拿到的是完整上下文（view 以 JSON 形式注入）
         assertThat(capturedPrompt.get())
                 .contains("找防晒霜")
                 .contains("PRODUCT_SEARCH")
                 .contains("product_query_workflow")
                 .contains("理肤泉")
-                .contains("[Recent messages]")
                 .contains("给你推荐 3 款");
     }
 
@@ -53,7 +57,7 @@ class AnswerLlmServiceTest {
         });
 
         assertThatThrownBy(() -> service.generate(new AnswerLlmService.AnswerLlmInput(
-                "msg", "PRODUCT_SEARCH", "wf", null, "", "rule")))
+                "msg", "PRODUCT_SEARCH", "wf", null, (RuntimeContextView) null, "rule")))
                 .isInstanceOf(AnswerLlmService.AnswerLlmException.class)
                 .hasMessageContaining("answer LLM call failed");
     }
@@ -62,7 +66,7 @@ class AnswerLlmServiceTest {
     void generateRejectsEmptyOrBlankContent() {
         AnswerLlmService blank = service("   ", new AtomicReference<>());
         assertThatThrownBy(() -> blank.generate(new AnswerLlmService.AnswerLlmInput(
-                "msg", "PRODUCT_SEARCH", "wf", null, "", "rule")))
+                "msg", "PRODUCT_SEARCH", "wf", null, (RuntimeContextView) null, "rule")))
                 .isInstanceOf(AnswerLlmService.AnswerLlmException.class)
                 .hasMessageContaining("empty");
     }
@@ -73,7 +77,7 @@ class AnswerLlmServiceTest {
         AnswerLlmService service = service("ok", capturedPrompt);
 
         service.generate(new AnswerLlmService.AnswerLlmInput(
-                "msg", "PRODUCT_SEARCH", "wf", null, "", "rule"));
+                "msg", "PRODUCT_SEARCH", "wf", null, (RuntimeContextView) null, "rule"));
 
         // null workflow result → 序列化为空串，prompt 里不会出现 "null"
         assertThat(capturedPrompt.get()).doesNotContain("\"null\"");
