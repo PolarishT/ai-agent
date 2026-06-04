@@ -82,6 +82,13 @@ public class ProductQueryConditionSanitizer {
         String semanticQuery = stripNumericTokens(condition.semanticQuery(), "semanticQuery");
         List<String> includeTerms = stripNumericTokens(condition.includeTerms(), "includeTerms");
         List<String> excludeTerms = stripNumericTokens(condition.excludeTerms(), "excludeTerms");
+        List<String> comparisonTargetTexts = stripNumericTokens(
+                condition.comparisonTargetTexts(), "comparisonTargetTexts"
+        );
+        List<String> compareFocus = stripNumericTokens(condition.compareFocus(), "compareFocus");
+        List<String> requestedDimensions = stripNumericTokens(
+                condition.requestedDimensions(), "requestedDimensions"
+        );
         ProductAttributesCondition attributes = sanitizeAttributes(condition.attributes());
         return new ProductQueryCondition(
                 condition.rawQuery(),
@@ -103,6 +110,9 @@ public class ProductQueryConditionSanitizer {
                 condition.sort(),
                 condition.refineType(),
                 condition.comparisonTargets(),
+                comparisonTargetTexts,
+                compareFocus,
+                requestedDimensions,
                 condition.needComparison(),
                 condition.confidence(),
                 condition.needClarify(),

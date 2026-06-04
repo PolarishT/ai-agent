@@ -30,6 +30,9 @@ import java.util.List;
  * @param sort                  PRICE_ASC / PRICE_DESC / RELEVANCE / RATING
  * @param refineType            INHERIT / OVERRIDE / APPEND / RESET（用于多轮合并）
  * @param comparisonTargets     对比目标的 1-based 索引（基于上一轮候选列表）
+ * @param comparisonTargetTexts 用户直接点名的 2-3 个商品名、型号或外部编号
+ * @param compareFocus          用户本轮对比的决策关注点（如性价比 / 通勤 / 补水 / 敏感肌）
+ * @param requestedDimensions   用户显式要求展示的对比维度（如续航 / 价格 / 用户评价）
  * @param needComparison        是否需要走对比节点而非常规列表回复
  * @param confidence            LLM 自评置信度 [0, 1]
  * @param needClarify           是否需要澄清（低置信度 / 缺关键 slot 时为 true）
@@ -55,6 +58,9 @@ public record ProductQueryCondition(
         String sort,
         String refineType,
         List<Integer> comparisonTargets,
+        List<String> comparisonTargetTexts,
+        List<String> compareFocus,
+        List<String> requestedDimensions,
         boolean needComparison,
         double confidence,
         boolean needClarify,
@@ -70,7 +76,65 @@ public record ProductQueryCondition(
         excludeTerms = copyOrEmpty(excludeTerms);
         attributes = attributes == null ? ProductAttributesCondition.empty() : attributes;
         comparisonTargets = copyOrEmpty(comparisonTargets);
+        comparisonTargetTexts = copyOrEmpty(comparisonTargetTexts);
+        compareFocus = copyOrEmpty(compareFocus);
+        requestedDimensions = copyOrEmpty(requestedDimensions);
         missingSlots = copyOrEmpty(missingSlots);
+    }
+
+    public ProductQueryCondition(
+            String rawQuery,
+            String normalizedQuery,
+            String intent,
+            String queryMode,
+            String keywordQuery,
+            String semanticQuery,
+            List<String> categoryTerms,
+            List<String> excludeCategoryTerms,
+            List<String> brandTerms,
+            List<String> excludeBrandTerms,
+            List<String> includeTerms,
+            List<String> excludeTerms,
+            ProductAttributesCondition attributes,
+            BigDecimal priceMin,
+            BigDecimal priceMax,
+            Boolean mustHaveStock,
+            String sort,
+            String refineType,
+            List<Integer> comparisonTargets,
+            boolean needComparison,
+            double confidence,
+            boolean needClarify,
+            List<String> missingSlots
+    ) {
+        this(
+                rawQuery,
+                normalizedQuery,
+                intent,
+                queryMode,
+                keywordQuery,
+                semanticQuery,
+                categoryTerms,
+                excludeCategoryTerms,
+                brandTerms,
+                excludeBrandTerms,
+                includeTerms,
+                excludeTerms,
+                attributes,
+                priceMin,
+                priceMax,
+                mustHaveStock,
+                sort,
+                refineType,
+                comparisonTargets,
+                List.of(),
+                List.of(),
+                List.of(),
+                needComparison,
+                confidence,
+                needClarify,
+                missingSlots
+        );
     }
 
     public static ProductQueryCondition empty(String rawQuery) {
@@ -93,6 +157,9 @@ public record ProductQueryCondition(
                 null,
                 "RELEVANCE",
                 "RESET",
+                List.of(),
+                List.of(),
+                List.of(),
                 List.of(),
                 false,
                 0.0d,

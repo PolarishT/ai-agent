@@ -37,6 +37,16 @@ public class ProductHydrationOptionsResolver {
                     2,
                     2
             );
+            case PRODUCT_COMPARE -> new ProductHydrationOptions(
+                    true,
+                    true,
+                    true,
+                    false,
+                    true,
+                    true,
+                    3,
+                    2
+            );
             case PRODUCT_QA -> new ProductHydrationOptions(
                     true,
                     true,

@@ -415,11 +415,14 @@ public class ProductQuerySubgraphFactory {
             return "LIST";
         }
         int defaultTopN = ragProperties.productQuery().comparison().defaultTopN();
-        boolean comparableByDefault = condition.needComparison() && ranked.size() >= defaultTopN;
+        boolean comparableByDefault = condition.needComparison() && ranked.size() >= Math.min(defaultTopN, 2);
         boolean comparableByTargets = condition.needComparison()
                 && !condition.comparisonTargets().isEmpty()
                 && !ranked.isEmpty();
-        return comparableByDefault || comparableByTargets ? "COMPARE" : "LIST";
+        boolean comparableByTextTargets = condition.needComparison()
+                && !condition.comparisonTargetTexts().isEmpty()
+                && ranked.size() >= 2;
+        return comparableByDefault || comparableByTargets || comparableByTextTargets ? "COMPARE" : "LIST";
     }
 
     private Map<String, Object> pqBuildComparison(OverAllState state) {
@@ -428,7 +431,7 @@ public class ProductQuerySubgraphFactory {
         List<ProductSearchCandidate> ranked = (List<ProductSearchCandidate>) state
                 .value(ProductQueryGraphStateKeys.RANKED_PRODUCTS, List.class)
                 .orElse(List.of());
-        ProductComparisonResult comparison = comparisonBuilder.build(ranked, condition.comparisonTargets());
+        ProductComparisonResult comparison = comparisonBuilder.build(ranked, condition.comparisonTargets(), condition);
         return Map.of(ProductQueryGraphStateKeys.COMPARISON_RESULT, comparison);
     }
 
@@ -632,6 +635,9 @@ public class ProductQuerySubgraphFactory {
                 false,
                 "RELEVANCE",
                 "INHERIT",
+                List.of(),
+                List.of(),
+                List.of(),
                 List.of(),
                 false,
                 confidence,

@@ -81,6 +81,11 @@ public class ProductQueryResponseBuilder {
             appendDegradedTail(sb, degradedNotes);
             return sb.toString();
         }
+        if (!comparison.dimensionRows().isEmpty() && !comparison.products().isEmpty()) {
+            appendStructuredComparison(sb, comparison);
+            appendDegradedTail(sb, degradedNotes);
+            return sb.toString().trim();
+        }
         sb.append("\n商品对比（共 ").append(comparison.rows().size()).append(" 件）：\n");
         for (ProductComparisonResult.Row row : comparison.rows()) {
             sb.append("第 ").append(row.index()).append(" 件：")
@@ -110,6 +115,76 @@ public class ProductQueryResponseBuilder {
         }
         appendDegradedTail(sb, degradedNotes);
         return sb.toString().trim();
+    }
+
+    private void appendStructuredComparison(StringBuilder sb, ProductComparisonResult comparison) {
+        sb.append("\n商品对比（共 ").append(comparison.products().size()).append(" 件）：\n\n");
+        sb.append("| 维度 |");
+        for (ProductComparisonResult.ProductColumn product : comparison.products()) {
+            sb.append(" 第 ").append(product.index()).append(" 件 |");
+        }
+        sb.append('\n').append("|---|");
+        for (int i = 0; i < comparison.products().size(); i++) {
+            sb.append("---|");
+        }
+        sb.append('\n');
+        appendProductTitleRow(sb, comparison);
+        for (ProductComparisonResult.DimensionRow row : comparison.dimensionRows()) {
+            sb.append("| ").append(escapeTable(row.label())).append(" |");
+            for (ProductComparisonResult.ProductColumn product : comparison.products()) {
+                ProductComparisonResult.Cell cell = cellFor(row, product.index());
+                String value = cell == null ? "暂无数据" : cell.value();
+                if (row.winnerIndex() != null && row.winnerIndex() == product.index()) {
+                    value = value + "（" + (row.reason() == null || row.reason().isBlank() ? "更优" : row.reason()) + "）";
+                }
+                sb.append(' ').append(escapeTable(value)).append(" |");
+            }
+            sb.append('\n');
+        }
+        ProductComparisonResult.Decision decision = comparison.decision();
+        if (decision != null && decision.recommendedIndex() != null && decision.recommendation() != null
+                && !decision.recommendation().isBlank()) {
+            sb.append('\n').append(decision.recommendation()).append('\n');
+            if (!decision.reasons().isEmpty()) {
+                sb.append("理由：").append(String.join("、", decision.reasons())).append("。\n");
+            }
+            if (!decision.tradeoffs().isEmpty()) {
+                sb.append("取舍：").append(String.join("；", decision.tradeoffs())).append('\n');
+            }
+        } else if (comparison.summary() != null && !comparison.summary().isBlank()) {
+            sb.append('\n').append(comparison.summary()).append('\n');
+        }
+        if (!comparison.caveats().isEmpty()) {
+            sb.append("数据缺口：").append(String.join("；", comparison.caveats())).append("。\n");
+        }
+    }
+
+    private void appendProductTitleRow(StringBuilder sb, ProductComparisonResult comparison) {
+        sb.append("| 商品 |");
+        for (ProductComparisonResult.ProductColumn product : comparison.products()) {
+            StringBuilder title = new StringBuilder(safeTitle(product.title()));
+            if (product.brand() != null && !product.brand().isBlank()) {
+                title.append(" / ").append(product.brand());
+            }
+            sb.append(' ').append(escapeTable(title.toString())).append(" |");
+        }
+        sb.append('\n');
+    }
+
+    private ProductComparisonResult.Cell cellFor(ProductComparisonResult.DimensionRow row, int productIndex) {
+        for (ProductComparisonResult.Cell cell : row.cells()) {
+            if (cell.productIndex() == productIndex) {
+                return cell;
+            }
+        }
+        return null;
+    }
+
+    private String escapeTable(String value) {
+        if (value == null || value.isBlank()) {
+            return "暂无数据";
+        }
+        return value.replace("|", "\\|").replace("\n", " ");
     }
 
     public String buildClarifyResponse(ProductQueryCondition condition) {

@@ -156,6 +156,27 @@ public class DefaultStepOutputMapper implements StepOutputMapper {
         if (!cmp.rows().isEmpty()) {
             m.put("rows", projectList(cmp.rows(), MAX_CANDIDATES, this::compactComparisonRow));
         }
+        if (!cmp.products().isEmpty()) {
+            m.put("products", projectList(cmp.products(), MAX_CANDIDATES, this::compactComparisonProduct));
+        }
+        if (!cmp.dimensionRows().isEmpty()) {
+            m.put("dimensionRows", projectList(cmp.dimensionRows(), 8, this::compactComparisonDimensionRow));
+        }
+        if (cmp.decision() != null && cmp.decision().recommendedIndex() != null) {
+            Map<String, Object> decision = new LinkedHashMap<>();
+            putIfPresent(decision, "recommendedIndex", cmp.decision().recommendedIndex());
+            putIfPresent(decision, "recommendation", cmp.decision().recommendation());
+            if (!cmp.decision().reasons().isEmpty()) {
+                decision.put("reasons", cmp.decision().reasons());
+            }
+            if (!cmp.decision().tradeoffs().isEmpty()) {
+                decision.put("tradeoffs", cmp.decision().tradeoffs());
+            }
+            m.put("decision", decision);
+        }
+        if (!cmp.caveats().isEmpty()) {
+            m.put("caveats", cmp.caveats());
+        }
         return m;
     }
 
@@ -169,6 +190,36 @@ public class DefaultStepOutputMapper implements StepOutputMapper {
         putIfPresent(m, "color", row.color());
         putIfPresent(m, "capacity", row.capacity());
         putIfPresent(m, "stock", row.stock());
+        return m;
+    }
+
+    private Map<String, Object> compactComparisonProduct(ProductComparisonResult.ProductColumn product) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("index", product.index());
+        putIfPresent(m, "productId", product.productId());
+        putIfPresent(m, "title", product.title());
+        putIfPresent(m, "brand", product.brand());
+        putIfPresent(m, "price", product.price());
+        return m;
+    }
+
+    private Map<String, Object> compactComparisonDimensionRow(ProductComparisonResult.DimensionRow row) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        putIfPresent(m, "key", row.key());
+        putIfPresent(m, "label", row.label());
+        putIfPresent(m, "winnerIndex", row.winnerIndex());
+        putIfPresent(m, "reason", row.reason());
+        if (!row.cells().isEmpty()) {
+            m.put("cells", projectList(row.cells(), MAX_CANDIDATES, this::compactComparisonCell));
+        }
+        return m;
+    }
+
+    private Map<String, Object> compactComparisonCell(ProductComparisonResult.Cell cell) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("productIndex", cell.productIndex());
+        putIfPresent(m, "value", cell.value());
+        m.put("missing", cell.missing());
         return m;
     }
 

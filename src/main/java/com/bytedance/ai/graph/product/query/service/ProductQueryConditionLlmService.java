@@ -56,6 +56,9 @@ public class ProductQueryConditionLlmService {
               "sort": "RELEVANCE | PRICE_ASC | PRICE_DESC | RATING",
               "refineType": "INHERIT | OVERRIDE | APPEND | RESET",
               "comparisonTargets": [],             // 用户用 1-based 索引（基于上一轮候选）
+              "comparisonTargetTexts": [],          // 用户直接点名的 2-3 个商品名 / 型号 / 外部编号
+              "compareFocus": [],                   // 对比决策目标，如 性价比 / 通勤 / 补水 / 敏感肌
+              "requestedDimensions": [],            // 用户显式要求展示的维度，如 续航 / 价格 / 用户评价
               "needComparison": false,
               "confidence": 0.0,                    // [0,1]
               "needClarify": false,
@@ -68,6 +71,10 @@ public class ProductQueryConditionLlmService {
             - 严禁输出多余 Markdown 代码块或解释，只输出 JSON；
             - 若用户说"再便宜点"用 INHERIT；"就要黑色"用 OVERRIDE；"不要黑色"用 APPEND；"重新搜"用 RESET；
             - 若用户说"对比前两个"或"对比第 1 和第 3 个"，把 1-based 索引列表填到 comparisonTargets，needComparison=true；
+            - 若用户说"A 和 B 对比"、"A 和 B 哪个更适合通勤"，把 A/B 填到 comparisonTargetTexts，needComparison=true；
+            - 若用户说"哪款更适合通勤/补水/敏感肌/视频剪辑/正式场合/性价比"，把这些决策目标填到 compareFocus；
+            - 若用户说"按续航、价格、评价对比"，把这些显式维度填到 requestedDimensions；
+            - 对比目标必须是 2-3 款；若用户要求对比超过 3 款，needClarify=true，missingSlots 包含 "comparisonTargets"；
             - 置信度低于 0.5 必须显式给 needClarify=true 并在 missingSlots 列出缺失字段名。
             """;
 

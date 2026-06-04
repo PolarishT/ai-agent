@@ -2,6 +2,7 @@ package com.bytedance.ai.graph.product.query.service;
 
 import com.bytedance.ai.graph.product.query.AttributeIncludeExclude;
 import com.bytedance.ai.graph.product.query.ProductAttributesCondition;
+import com.bytedance.ai.graph.product.query.ProductComparisonResult;
 import com.bytedance.ai.graph.product.query.ProductQueryCondition;
 import com.bytedance.ai.graph.product.query.ProductReviewSnippet;
 import com.bytedance.ai.graph.product.query.ProductSearchCandidate;
@@ -66,6 +67,25 @@ class ProductQueryResponseBuilderTests {
         String response = builder.buildListResponse(condition, List.of(candidate), List.of());
 
         assertThat(response).contains("评论1", "5星", "小林说", "冲泡很方便");
+    }
+
+    @Test
+    void comparisonResponseRendersStructuredTableAndDecision() {
+        ProductQueryCondition condition = condition(null, List.of());
+        ProductComparisonBuilder comparisonBuilder = new ProductComparisonBuilder(
+                com.bytedance.ai.shared.properties.RagProperties.defaults(),
+                new ProductComparisonDimensionSelector()
+        );
+        ProductComparisonResult comparison = comparisonBuilder.build(List.of(
+                candidate(1L, "耳机 A", "Sony", "299"),
+                candidate(2L, "耳机 B", "Bose", "399")
+        ), List.of(1, 2), condition);
+
+        String response = builder.buildComparisonResponse(condition, comparison, List.of());
+
+        assertThat(response).contains("| 维度 | 第 1 件 | 第 2 件 |");
+        assertThat(response).contains("| 商品 |");
+        assertThat(response).contains("推荐第");
     }
 
     @Test

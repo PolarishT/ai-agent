@@ -51,6 +51,10 @@ public class ProductQueryConditionValidator {
         List<String> brandTerms = dedupeExcluding(condition.brandTerms(), excludeBrandTerms);
 
         ProductAttributesCondition attributes = sanitizeAttributes(condition.attributes());
+        List<Integer> comparisonTargets = limit(dedupeIntegers(condition.comparisonTargets()), 3);
+        List<String> comparisonTargetTexts = limit(dedupe(condition.comparisonTargetTexts()), 3);
+        List<String> compareFocus = limit(dedupe(condition.compareFocus()), 4);
+        List<String> requestedDimensions = limit(dedupe(condition.requestedDimensions()), 8);
 
         double confidence = clamp(condition.confidence(), 0.0d, 1.0d);
         boolean needClarify = condition.needClarify() || confidence < CLARIFY_CONFIDENCE_THRESHOLD;
@@ -74,7 +78,10 @@ public class ProductQueryConditionValidator {
                 condition.mustHaveStock(),
                 defaultIfBlank(condition.sort(), "RELEVANCE"),
                 defaultIfBlank(condition.refineType(), "RESET"),
-                condition.comparisonTargets(),
+                comparisonTargets,
+                comparisonTargetTexts,
+                compareFocus,
+                requestedDimensions,
                 condition.needComparison(),
                 confidence,
                 needClarify,
@@ -131,6 +138,29 @@ public class ProductQueryConditionValidator {
             }
         }
         return List.copyOf(seen);
+    }
+
+    private List<Integer> dedupeIntegers(List<Integer> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        Set<Integer> seen = new LinkedHashSet<>();
+        for (Integer value : values) {
+            if (value != null && value > 0) {
+                seen.add(value);
+            }
+        }
+        return List.copyOf(seen);
+    }
+
+    private <T> List<T> limit(List<T> values, int maxSize) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        if (values.size() <= maxSize) {
+            return values;
+        }
+        return List.copyOf(values.subList(0, maxSize));
     }
 
     private void addUnique(List<String> bucket, String value) {

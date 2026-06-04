@@ -55,6 +55,9 @@ class ProductQueryConditionLlmServiceTests {
                           "sort": "RELEVANCE",
                           "refineType": "RESET",
                           "comparisonTargets": [],
+                          "comparisonTargetTexts": ["水杯 A", "水杯 B"],
+                          "compareFocus": ["通勤"],
+                          "requestedDimensions": ["价格", "容量"],
                           "needComparison": false,
                           "confidence": 0.9,
                           "needClarify": false,
@@ -71,6 +74,9 @@ class ProductQueryConditionLlmServiceTests {
         assertThat(condition.keywordQuery()).isEqualTo("轻便水杯");
         assertThat(condition.includeTerms()).containsExactly("轻便");
         assertThat(condition.categoryTerms()).containsExactly("水杯");
+        assertThat(condition.comparisonTargetTexts()).containsExactly("水杯 A", "水杯 B");
+        assertThat(condition.compareFocus()).containsExactly("通勤");
+        assertThat(condition.requestedDimensions()).containsExactly("价格", "容量");
     }
 
     private record StubChatModel(String content) implements ChatModel {
