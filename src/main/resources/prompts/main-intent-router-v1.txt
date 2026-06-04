@@ -49,11 +49,11 @@ PRICE_QUERY: User asks about price, discount, promotion, or cost.
 INVENTORY_QUERY: User asks whether an item is in stock, available, or has a specific SKU/spec.
 ORDER_QUERY: User asks about an existing order in general.
 LOGISTICS_QUERY: User asks about shipping, delivery, tracking, courier, or logistics status.
-ADD_TO_CART: User wants to add a NEW product (not currently in cart) into the cart.
+ADD_TO_CART: User wants to add a NEW product (not currently in cart) into the cart, including "buy this", "buy now", or "place an order for this product" when the product has not explicitly been added to cart yet.
 REMOVE_FROM_CART: Legacy granular cart intent for removing cart items. Prefer CART_MANAGE for new outputs.
 UPDATE_CART_ITEM: Legacy granular cart intent for changing cart item quantity, option, SKU, or replacement. Prefer CART_MANAGE for new outputs.
 CART_MANAGE: User wants to view, remove, modify quantity of, or clear items already in the cart. Examples: "购物车里有什么", "查看购物车", "删除第二个商品", "把洗面奶删掉", "把数量改成 2", "清空购物车", "全部删掉".
-CREATE_ORDER: User wants to checkout, buy now, or create an order.
+CREATE_ORDER: User wants to checkout the existing cart or continue creating an order from an existing cart/order draft. Do NOT use CREATE_ORDER for directly buying a named/recommended product that has not been added to cart.
 CONFIRM_ORDER: User confirms a pending order action.
 CANCEL_ORDER: User wants to cancel an order.
 POLICY_QA: User asks about platform policy, return policy, refund policy, warranty, payment policy, delivery policy, or after-sales rules.
@@ -78,6 +78,10 @@ Classification rules:
 - If the user wants to mutate cart/order state, choose a write action intent.
 - For ANY cart-management action on items already in the cart (view cart, remove item, change quantity, clear cart), choose CART_MANAGE. Do NOT try to decide remove vs update vs view vs clear here; downstream slot filling will do that.
 - Only choose ADD_TO_CART when the user wants to put a NEW product into the cart that is not currently there.
+- Direct product ordering is not allowed. If the user says "buy this", "buy now", "帮我下单这个商品", "推荐并下单", or asks to order a named product, do NOT choose CREATE_ORDER unless the message clearly refers to checking out the current cart.
+- If the user names a product and wants to buy/order it, choose ADD_TO_CART (or CART_MANAGE with slots.cart_action="ADD" if using unified cart workflow slots). Put product references in slots when available.
+- If the user asks for recommendations/search and ordering in one goal, classify the current routing need as PRODUCT_RECOMMEND/PRODUCT_SEARCH; downstream planning must add cart before order.
+- Only choose CREATE_ORDER for explicit cart checkout language such as "结算购物车", "购买购物车", "提交购物车订单", or "checkout 当前购物车".
 - If the user only asks information, writeAction should be false.
 - If the user asks price, choose PRICE_QUERY instead of PRODUCT_DETAIL_QUERY.
 - If the user asks stock, availability, SKU availability, or whether a spec exists, choose INVENTORY_QUERY.

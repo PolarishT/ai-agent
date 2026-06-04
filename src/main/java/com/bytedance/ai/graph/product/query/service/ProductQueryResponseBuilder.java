@@ -4,6 +4,7 @@ import com.bytedance.ai.graph.product.query.AttributeIncludeExclude;
 import com.bytedance.ai.graph.product.query.ProductAttributesCondition;
 import com.bytedance.ai.graph.product.query.ProductComparisonResult;
 import com.bytedance.ai.graph.product.query.ProductQueryCondition;
+import com.bytedance.ai.graph.product.query.ProductReviewSnippet;
 import com.bytedance.ai.graph.product.query.ProductSearchCandidate;
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -58,6 +59,7 @@ public class ProductQueryResponseBuilder {
                 sb.append("（命中：").append(String.join("、", candidate.matchReasons())).append("）");
             }
             sb.append('\n');
+            appendReviews(sb, candidate.reviews());
         }
         if (candidates.size() > MAX_DISPLAY) {
             sb.append("…等共 ").append(candidates.size()).append(" 件。\n");
@@ -207,6 +209,35 @@ public class ProductQueryResponseBuilder {
         sb.append("\n提示：本轮检索发生部分降级 (")
                 .append(String.join(", ", degradedNotes))
                 .append(")，结果可能不完整。\n");
+    }
+
+    private void appendReviews(StringBuilder sb, List<ProductReviewSnippet> reviews) {
+        if (reviews == null || reviews.isEmpty()) {
+            return;
+        }
+        int display = Math.min(reviews.size(), 3);
+        for (int i = 0; i < display; i++) {
+            ProductReviewSnippet review = reviews.get(i);
+            sb.append("   评论").append(i + 1).append("：");
+            if (review.rating() != null) {
+                sb.append(review.rating()).append("星，");
+            }
+            if (review.sentiment() != null && !review.sentiment().isBlank()) {
+                sb.append(review.sentiment()).append("，");
+            }
+            if (review.nickname() != null && !review.nickname().isBlank()) {
+                sb.append(review.nickname()).append("说：");
+            }
+            sb.append(safeReviewContent(review.content())).append('\n');
+        }
+    }
+
+    private String safeReviewContent(String content) {
+        if (content == null || content.isBlank()) {
+            return "未填写评价内容";
+        }
+        String normalized = content.strip().replaceAll("\\s+", " ");
+        return normalized.length() <= 80 ? normalized : normalized.substring(0, 80) + "...";
     }
 
     private void appendAttributeInclude(List<String> parts, String label, AttributeIncludeExclude attr) {

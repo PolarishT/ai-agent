@@ -29,6 +29,7 @@ public class DefaultStepOutputMapper implements StepOutputMapper {
 
     private static final int MAX_CANDIDATES = 10;
     private static final int MAX_CART_ITEMS = 20;
+    private static final int MAX_REVIEWS = 5;
 
     @Override
     public Map<String, Object> toOutput(String taskType, Object workflowResult) {
@@ -132,6 +133,17 @@ public class DefaultStepOutputMapper implements StepOutputMapper {
         putIfPresent(m, "category", c.category());
         putIfPresent(m, "subCategory", c.subCategory());
         putIfPresent(m, "price", c.price());
+        if (!c.reviews().isEmpty()) {
+            m.put("reviews", projectList(c.reviews(), MAX_REVIEWS, review -> {
+                Map<String, Object> reviewMap = new LinkedHashMap<>();
+                putIfPresent(reviewMap, "reviewIndex", review.reviewIndex());
+                putIfPresent(reviewMap, "nickname", review.nickname());
+                putIfPresent(reviewMap, "rating", review.rating());
+                putIfPresent(reviewMap, "sentiment", review.sentiment());
+                putIfPresent(reviewMap, "content", review.content());
+                return reviewMap;
+            }));
+        }
         return m;
     }
 

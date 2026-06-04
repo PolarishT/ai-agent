@@ -36,7 +36,7 @@ public final class GuideGraphWorkflows {
         TARGETS.put(GuideGraphIntent.CONFIRM_ORDER, GuideGraphNodeNames.ORDER_MANAGE_WORKFLOW);
         TARGETS.put(GuideGraphIntent.CANCEL_ORDER, GuideGraphNodeNames.ORDER_MANAGE_WORKFLOW);
         TARGETS.put(GuideGraphIntent.POLICY_QA, GuideGraphNodeNames.POLICY_QA_WORKFLOW);
-        TARGETS.put(GuideGraphIntent.REVIEW_SUMMARY, GuideGraphNodeNames.REVIEW_SUMMARY_WORKFLOW);
+        TARGETS.put(GuideGraphIntent.REVIEW_SUMMARY, GuideGraphNodeNames.PRODUCT_QUERY_WORKFLOW);
         TARGETS.put(GuideGraphIntent.CLARIFY, GuideGraphNodeNames.CLARIFY_WORKFLOW);
         TARGETS.put(GuideGraphIntent.SMALL_TALK, GuideGraphNodeNames.SMALL_TALK_WORKFLOW);
         TARGETS.put(GuideGraphIntent.UNKNOWN, GuideGraphNodeNames.CLARIFY_WORKFLOW);

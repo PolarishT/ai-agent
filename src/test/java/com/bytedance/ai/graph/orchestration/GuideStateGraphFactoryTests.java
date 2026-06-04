@@ -21,6 +21,8 @@ import com.bytedance.ai.graph.conversation.persistence.jdbc.JdbcAgentConversatio
 import com.bytedance.ai.graph.conversation.context.ConversationContextItemStatus;
 import com.bytedance.ai.graph.conversation.context.ConversationContextManager;
 import com.bytedance.ai.graph.conversation.context.ConversationRuntimeContext;
+import com.bytedance.ai.graph.conversation.context.TaskChainCoordinator;
+import com.bytedance.ai.graph.intent.support.SlotKeys;
 import com.bytedance.ai.graph.ordermanage.AddressSnapshot;
 import com.bytedance.ai.graph.ordermanage.persistence.MockOrderRecord;
 import com.bytedance.ai.graph.ordermanage.persistence.MockOrderRepository;
@@ -29,6 +31,7 @@ import com.bytedance.ai.graph.ordermanage.application.OrderCommandService;
 import com.bytedance.ai.graph.ordermanage.OrderManageStateKeys;
 import com.bytedance.ai.graph.ordermanage.OrderManageStatus;
 import com.bytedance.ai.graph.ordermanage.OrderManageSubgraphFactory;
+import com.bytedance.ai.graph.planning.TaskPlanningService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -258,6 +261,83 @@ class GuideStateGraphFactoryTests {
     }
 
     @Test
+    void directProductOrderIsNotDeterministicallyRoutedToOrderManage() throws Exception {
+        OverAllState state = invokeWithMessage(Map.of(), "帮我下单苹果");
+
+        assertThat(state.value(GuideGraphStateKeys.ROUTE_SOURCE, ""))
+                .isEqualTo("DEFAULT");
+        assertThat(state.value(GuideGraphStateKeys.MAIN_INTENT, ""))
+                .isEqualTo("CLARIFY");
+        assertThat(state.value(GuideGraphStateKeys.TARGET_WORKFLOW, ""))
+                .isNotEqualTo(GuideGraphNodeNames.ORDER_MANAGE_WORKFLOW);
+        List<GuideNodeResult> nodeResults = state.value(GuideGraphStateKeys.NODE_RESULTS, List.<GuideNodeResult>of());
+        assertThat(nodeResults).extracting(GuideNodeResult::nodeName)
+                .doesNotContain(GuideGraphNodeNames.ORDER_MANAGE_WORKFLOW);
+    }
+
+    @Test
+    void plannedAddToCartTaskProvidesCartActionSlot() throws Exception {
+        StubContextManager contextManager = new StubContextManager();
+        TaskChainCoordinator coordinator = new TaskChainCoordinator(contextManager);
+        TaskPlanningService planner = plannerReturning(List.of(
+                new TaskPlanningService.PlannedTask(
+                        "把选定商品加入购物车", "ADD_TO_CART", GuideGraphNodeNames.CART_MANAGE_WORKFLOW),
+                new TaskPlanningService.PlannedTask(
+                        "结算购物车", "CREATE_ORDER", GuideGraphNodeNames.ORDER_MANAGE_WORKFLOW)
+        ));
+        GuideStateGraphFactory planningFactory = new GuideStateGraphFactory(
+                conversationRepository,
+                null,
+                null,
+                null,
+                null,
+                null,
+                contextManager,
+                coordinator,
+                planner,
+                null,
+                null
+        );
+        CompiledGraph graph = planningFactory.compile(event -> {
+        }, Map.of(
+                GuideGraphNodeNames.MAIN_INTENT_ROUTER,
+                _ -> GuideNodeExecutionResult.withStateUpdates(
+                        Map.of(
+                                GuideGraphStateKeys.INTENT, GuideGraphIntent.CREATE_ORDER.name(),
+                                GuideGraphStateKeys.MAIN_INTENT, "CREATE_ORDER",
+                                GuideGraphStateKeys.TARGET_WORKFLOW, GuideGraphNodeNames.ORDER_MANAGE_WORKFLOW,
+                                GuideGraphStateKeys.WRITE_ACTION, true,
+                                GuideGraphStateKeys.INTENT_SLOTS, Map.of()
+                        ),
+                        Map.of()
+                ),
+                GuideGraphNodeNames.CART_MANAGE_WORKFLOW,
+                _ -> GuideNodeExecutionResult.withStateUpdates(
+                        Map.of(
+                                CartGraphStateKeys.WORKFLOW_STATUS, CartWorkflowStatus.ADD_SUCCESS.name(),
+                                CartGraphStateKeys.NODE_MESSAGE, "加购完成"
+                        ),
+                        Map.of("cartAdd", true)
+                )
+        ));
+        Map<String, Object> initialState = new java.util.LinkedHashMap<>();
+        initialState.put(GuideGraphStateKeys.USER_ID, "user-1");
+        initialState.put(GuideGraphStateKeys.CONVERSATION_ID, "conversation-planned-add");
+        initialState.put(GuideGraphStateKeys.MESSAGE, "下单这个吧");
+        initialState.put(GuideGraphStateKeys.RUN_ID, "run-planned-add");
+        initialState.put(GuideGraphStateKeys.CORRELATION_ID, "corr-planned-add");
+
+        OverAllState state = graph.invoke(initialState).orElseThrow();
+
+        assertThat(state.value(GuideGraphStateKeys.TARGET_WORKFLOW, ""))
+                .isEqualTo(GuideGraphNodeNames.CART_MANAGE_WORKFLOW);
+        Map<String, Object> slots = state.value(GuideGraphStateKeys.INTENT_SLOTS, Map.of());
+        assertThat(slots).containsEntry(SlotKeys.CART_ACTION, SlotKeys.CART_ACTION_ADD);
+        assertThat(state.value(CartGraphStateKeys.NODE_MESSAGE, ""))
+                .isEqualTo("加购完成");
+    }
+
+    @Test
     void createOrderFailsWhenOrderWorkflowIsNotDispatched() throws Exception {
         OverAllState state = invokeWithMessage(Map.of(), "结算购物车");
 
@@ -422,6 +502,15 @@ class GuideStateGraphFactoryTests {
                 amount, itemCount, Map.of(), itemList);
     }
 
+    private static TaskPlanningService plannerReturning(List<TaskPlanningService.PlannedTask> tasks) {
+        return new TaskPlanningService(null, null, "prompts/task-planning-v1.txt") {
+            @Override
+            public List<TaskPlanningService.PlannedTask> plan(String goalText, String intent, String recentContext) {
+                return tasks;
+            }
+        };
+    }
+
     private static <T> ObjectProvider<T> provider(T instance) {
         return new ObjectProvider<>() {
             @Override
@@ -493,6 +582,7 @@ class GuideStateGraphFactoryTests {
 
     private static final class StubContextManager implements ConversationContextManager {
         Optional<TestPending> active = Optional.empty();
+        final Map<String, ConversationRuntimeContext.TaskChain> taskChains = new java.util.LinkedHashMap<>();
         long nextId = 1L;
 
         @Override
@@ -500,7 +590,7 @@ class GuideStateGraphFactoryTests {
             ConversationRuntimeContext.OrderContext order = active.map(this::toOrderContext).orElse(null);
             return new ConversationRuntimeContext(
                     1L, userId, conversationId, List.of(), null, List.of(), null,
-                    order, null, null, Map.of(), Map.of(), List.of());
+                    order, null, null, Map.of(), Map.of(), List.copyOf(taskChains.values()));
         }
 
         @Override
@@ -515,25 +605,84 @@ class GuideStateGraphFactoryTests {
                                   String sourceWorkflow,
                                   ConversationRuntimeContext.TaskChain taskChain,
                                   LocalDateTime expiresAt) {
+            taskChains.put(taskChain.taskChainId(), taskChain);
         }
 
         @Override
         public ConversationRuntimeContext.TaskChain loadTaskChain(String userId, String conversationId,
                                                                   String taskChainId) {
-            return null;
+            return taskChains.get(taskChainId);
         }
 
         @Override
         public boolean markPlanTask(String userId, String conversationId, String taskChainId, String taskId,
                                     String newTaskStatus, ConversationRuntimeContext.TaskStep executedStep,
                                     String turnId) {
-            return false;
+            ConversationRuntimeContext.TaskChain chain = taskChains.get(taskChainId);
+            if (chain == null) {
+                return false;
+            }
+            java.util.List<ConversationRuntimeContext.PlanTask> plan = new java.util.ArrayList<>();
+            boolean found = false;
+            for (ConversationRuntimeContext.PlanTask task : chain.planTasks()) {
+                if (task.taskId().equals(taskId)) {
+                    plan.add(new ConversationRuntimeContext.PlanTask(
+                            task.taskId(),
+                            task.taskName(),
+                            task.taskType(),
+                            task.workflow(),
+                            task.order(),
+                            newTaskStatus
+                    ));
+                    found = true;
+                } else {
+                    plan.add(task);
+                }
+            }
+            if (!found) {
+                return false;
+            }
+            java.util.List<ConversationRuntimeContext.TaskStep> steps = new java.util.ArrayList<>(chain.steps());
+            if (executedStep != null) {
+                steps.add(executedStep);
+            }
+            taskChains.put(taskChainId, new ConversationRuntimeContext.TaskChain(
+                    chain.contextItemId(),
+                    chain.taskChainId(),
+                    chain.schemaVersion(),
+                    chain.status(),
+                    chain.userGoal(),
+                    plan,
+                    steps,
+                    chain.createdTurnId(),
+                    turnId,
+                    chain.createdAt(),
+                    LocalDateTime.now()
+            ));
+            return true;
         }
 
         @Override
         public boolean transitionChainStatus(String userId, String conversationId, String taskChainId,
                                              String newChainStatus, String turnId) {
-            return false;
+            ConversationRuntimeContext.TaskChain chain = taskChains.get(taskChainId);
+            if (chain == null) {
+                return false;
+            }
+            taskChains.put(taskChainId, new ConversationRuntimeContext.TaskChain(
+                    chain.contextItemId(),
+                    chain.taskChainId(),
+                    chain.schemaVersion(),
+                    newChainStatus,
+                    chain.userGoal(),
+                    chain.planTasks(),
+                    chain.steps(),
+                    chain.createdTurnId(),
+                    turnId,
+                    chain.createdAt(),
+                    LocalDateTime.now()
+            ));
+            return true;
         }
 
         @Override

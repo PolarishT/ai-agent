@@ -41,8 +41,24 @@ class OrderManageSubgraphFactoryTest {
         OverAllState state = rig.invoke("结算购物车");
 
         assertThat(state.value(OrderManageStateKeys.NODE_MESSAGE, ""))
-                .isEqualTo("你的购物车目前是空的，无法下单。");
+                .isEqualTo("你的购物车目前是空的，请先将商品添加到购物车后再结算。");
         assertThat(rig.pending.active).isEmpty();
+    }
+
+    @Test
+    void emptyCartCreateOrderWithAddressSlotsAsksToAddCartFirst() throws Exception {
+        TestRig rig = new TestRig(cart());
+
+        OverAllState state = rig.invoke("帮我下单", Map.of(
+                "recipient_name", "张震霆",
+                "contact_number", "18080266036",
+                "address", "111 high street, nsw 2033"
+        ), "CREATE_ORDER");
+
+        assertThat(rig.pending.active).isEmpty();
+        assertThat(rig.mockOrders.created).isZero();
+        assertThat(state.value(OrderManageStateKeys.NODE_MESSAGE, ""))
+                .contains("先将商品添加到购物车");
     }
 
     @Test
@@ -59,6 +75,43 @@ class OrderManageSubgraphFactoryTest {
                 .contains("请补充联系电话")
                 .contains("请补充详细收货地址");
         assertThat(state.value(OrderManageStateKeys.NEED_USER_INPUT, false)).isTrue();
+    }
+
+    @Test
+    void createOrderForProductNotInCartIsBlocked() throws Exception {
+        TestRig rig = new TestRig(cart(item(1L, 101L, "苹果", 1)));
+
+        OverAllState state = rig.invoke("帮我下单香蕉", Map.of(
+                "product_name", "香蕉",
+                "recipient_name", "张震霆",
+                "contact_number", "18080266036",
+                "address", "111 high street, nsw 2033"
+        ), "CREATE_ORDER");
+
+        assertThat(rig.pending.active).isEmpty();
+        assertThat(rig.mockOrders.created).isZero();
+        assertThat(state.value(OrderManageStateKeys.NODE_MESSAGE, ""))
+                .isEqualTo("该商品还没有添加到购物车，请先添加到购物车后再结算。");
+    }
+
+    @Test
+    void createOrderForProductAlreadyInCartContinuesCheckout() throws Exception {
+        TestRig rig = new TestRig(cart(item(1L, 101L, "苹果", 1)));
+
+        OverAllState state = rig.invoke("帮我下单苹果", Map.of(
+                "product_id", "101",
+                "recipient_name", "张震霆",
+                "contact_number", "18080266036",
+                "address", "111 high street, nsw 2033"
+        ), "CREATE_ORDER");
+
+        assertThat(rig.pending.active).isPresent();
+        assertThat(rig.pending.active.get().status()).isEqualTo(OrderManageStatus.WAITING_CONFIRMATION);
+        assertThat(rig.mockOrders.created).isZero();
+        assertThat(state.value(OrderManageStateKeys.NODE_MESSAGE, ""))
+                .contains("请确认订单信息")
+                .contains("苹果")
+                .contains("确认下单请回复");
     }
 
     @Test

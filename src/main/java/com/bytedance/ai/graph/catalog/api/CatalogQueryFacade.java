@@ -19,6 +19,13 @@ public interface CatalogQueryFacade {
     CatalogProductView getProduct(Long productId);
 
     /**
+     * 查询商品评论原文，供 review summary / 口碑类问答 hydrate 使用。
+     */
+    default List<CatalogProductReviewView> listReviews(Long productId, int limit) {
+        return List.of();
+    }
+
+    /**
      * PostgreSQL/catalog 关键词搜索，供购物车等写操作解析商品名时使用。
      */
     default List<CatalogProductView> searchActiveProducts(String keyword, int limit) {

@@ -28,10 +28,12 @@ public record ProductSearchCandidate(
         double scoreKeyword,
         double scoreSemantic,
         double scoreFinal,
-        List<String> matchReasons
+        List<String> matchReasons,
+        List<ProductReviewSnippet> reviews
 ) {
     public ProductSearchCandidate {
         attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
         matchReasons = matchReasons == null ? List.of() : List.copyOf(matchReasons);
+        reviews = reviews == null ? List.of() : List.copyOf(reviews);
     }
 }

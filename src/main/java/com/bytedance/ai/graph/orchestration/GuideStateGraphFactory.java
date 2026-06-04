@@ -29,6 +29,7 @@ import com.bytedance.ai.graph.conversation.ConversationMessage;
 import com.bytedance.ai.graph.intent.MainIntent;
 import com.bytedance.ai.graph.intent.MainIntentDecision;
 import com.bytedance.ai.graph.intent.service.MainIntentRouterService;
+import com.bytedance.ai.graph.intent.support.SlotKeys;
 import com.bytedance.ai.graph.ordermanage.OrderManageSubgraphFactory;
 import com.bytedance.ai.graph.ordermanage.OrderManageStateKeys;
 import com.bytedance.ai.graph.ordermanage.OrderManageStatus;
@@ -571,11 +572,10 @@ public class GuideStateGraphFactory {
 
     private boolean looksLikeOrderCheckout(String normalized) {
         return normalized.contains("结算购物车")
-                || normalized.contains("我要下单")
-                || normalized.contains("帮我下单")
-                || normalized.contains("提交订单")
                 || normalized.contains("购买购物车")
-                || normalized.contains("买这些")
+                || normalized.contains("提交购物车订单")
+                || normalized.contains("提交购物车里的订单")
+                || (normalized.contains("checkout") && normalized.contains("购物车"))
                 || normalized.equals("checkout");
     }
 
@@ -854,6 +854,7 @@ public class GuideStateGraphFactory {
                     result.put(GuideGraphStateKeys.TARGET_WORKFLOW, matching.workflow());
                     result.put(GuideGraphStateKeys.ACTIVE_CHAIN_ID, active.taskChainId());
                     result.put(GuideGraphStateKeys.ACTIVE_TASK_ID, matching.taskId());
+                    applyPlannedTaskHints(result, matching);
                     taskChainCoordinator.startTask(userId, conversationId, active.taskChainId(),
                             matching.taskId(), turnId);
                     return;
@@ -896,6 +897,7 @@ public class GuideStateGraphFactory {
             result.put(GuideGraphStateKeys.TARGET_WORKFLOW, first.workflow());
             result.put(GuideGraphStateKeys.ACTIVE_CHAIN_ID, chain.taskChainId());
             result.put(GuideGraphStateKeys.ACTIVE_TASK_ID, first.taskId());
+            applyPlannedTaskHints(result, first);
             taskChainCoordinator.startTask(userId, conversationId, chain.taskChainId(), first.taskId(), turnId);
             return;
         }
@@ -908,7 +910,38 @@ public class GuideStateGraphFactory {
                 TaskChainCoordinator.CHAIN_STATUS_EXECUTING);
         result.put(GuideGraphStateKeys.ACTIVE_CHAIN_ID, chain.taskChainId());
         result.put(GuideGraphStateKeys.ACTIVE_TASK_ID, only.taskId());
+        applyPlannedTaskHints(result, only);
         taskChainCoordinator.startTask(userId, conversationId, chain.taskChainId(), only.taskId(), turnId);
+    }
+
+    private void applyPlannedTaskHints(Map<String, Object> result, ConversationRuntimeContext.PlanTask task) {
+        if (task == null || !GuideGraphNodeNames.CART_MANAGE_WORKFLOW.equals(task.workflow())) {
+            return;
+        }
+        String cartAction = cartActionForTaskType(task.taskType());
+        if (!StringUtils.hasText(cartAction)) {
+            return;
+        }
+        Map<String, Object> slots = new LinkedHashMap<>();
+        Object currentSlots = result.get(GuideGraphStateKeys.INTENT_SLOTS);
+        if (currentSlots instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (entry.getKey() != null) {
+                    slots.put(String.valueOf(entry.getKey()), entry.getValue());
+                }
+            }
+        }
+        slots.putIfAbsent(SlotKeys.CART_ACTION, cartAction);
+        result.put(GuideGraphStateKeys.INTENT_SLOTS, Map.copyOf(slots));
+    }
+
+    private String cartActionForTaskType(String taskType) {
+        return switch (taskType == null ? "" : taskType) {
+            case "ADD_TO_CART" -> SlotKeys.CART_ACTION_ADD;
+            case "REMOVE_FROM_CART" -> SlotKeys.CART_ACTION_REMOVE;
+            case "UPDATE_CART_ITEM" -> SlotKeys.CART_ACTION_UPDATE_QUANTITY;
+            default -> null;
+        };
     }
 
     /**

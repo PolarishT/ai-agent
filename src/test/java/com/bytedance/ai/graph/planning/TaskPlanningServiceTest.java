@@ -47,6 +47,23 @@ class TaskPlanningServiceTest {
     }
 
     @Test
+    void promptRequiresCartBeforeCreateOrderForDirectProductOrders() {
+        StringBuilder capturedPrompt = new StringBuilder();
+        TaskPlanningService service = serviceWithModel(prompt -> {
+            capturedPrompt.append(prompt.getInstructions().get(0).getText());
+            return new ChatResponse(List.of(new Generation(new AssistantMessage("""
+                    { "tasks": [ { "taskName": "搜索商品", "taskType": "PRODUCT_SEARCH", "workflow": "product_query_workflow" } ] }
+                    """))));
+        });
+
+        service.plan("推荐一款双肩包并下单", "PRODUCT_RECOMMEND", "");
+
+        assertThat(capturedPrompt.toString())
+                .contains("不能直接规划 CREATE_ORDER")
+                .contains("只有用户明确结算已有购物车");
+    }
+
+    @Test
     void planThrowsWhenLlmFails() {
         TaskPlanningService service = serviceWithModel(prompt -> {
             throw new RuntimeException("boom");

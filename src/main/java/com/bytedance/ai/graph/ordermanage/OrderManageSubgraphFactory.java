@@ -36,6 +36,9 @@ import java.util.Optional;
 @Component
 public class OrderManageSubgraphFactory {
 
+    private static final String EMPTY_CART_MESSAGE = "你的购物车目前是空的，请先将商品添加到购物车后再结算。";
+    private static final String PRODUCT_NOT_IN_CART_MESSAGE = "该商品还没有添加到购物车，请先添加到购物车后再结算。";
+
     private final CartQueryFacade cartQueryFacade;
     private final CatalogQueryFacade catalogQueryFacade;
     private final ConversationContextManager conversationContextManager;
@@ -85,7 +88,11 @@ public class OrderManageSubgraphFactory {
                     ));
             subgraph.addConditionalEdges("order_load_cart",
                     AsyncEdgeAction.edge_async(this::routeAfterLoadCart),
-                    Map.of("EMPTY_CART", "order_final_response", "HAS_CART", "order_check_stock"));
+                    Map.of(
+                            "EMPTY_CART", "order_final_response",
+                            "CART_GUARD_FAILED", "order_final_response",
+                            "HAS_CART", "order_check_stock"
+                    ));
             subgraph.addConditionalEdges("order_check_stock",
                     AsyncEdgeAction.edge_async(this::routeAfterCheckStock),
                     Map.of("STOCK_OK", "order_resolve_address", "STOCK_NOT_ENOUGH", "order_final_response"));
@@ -172,9 +179,18 @@ public class OrderManageSubgraphFactory {
         CartView cart = cartQueryFacade.getActiveCart(userId, conversationId);
         if (cart == null || cart.items() == null || cart.items().isEmpty()) {
             updates.put(OrderManageStateKeys.ORDER_STATUS, OrderManageStatus.FAILED.name());
-            updates.put(OrderManageStateKeys.NODE_MESSAGE, "你的购物车目前是空的，无法下单。");
+            updates.put(OrderManageStateKeys.ERROR_REASON, "cart empty");
+            updates.put(OrderManageStateKeys.NODE_MESSAGE, EMPTY_CART_MESSAGE);
             updates.put(OrderManageStateKeys.NEED_USER_INPUT, false);
             updates.put("orderLoadCartRoute", "EMPTY_CART");
+            return updates;
+        }
+        if (!requestedProductAlreadyInCart(state, cart)) {
+            updates.put(OrderManageStateKeys.ORDER_STATUS, OrderManageStatus.FAILED.name());
+            updates.put(OrderManageStateKeys.ERROR_REASON, "requested product not in cart");
+            updates.put(OrderManageStateKeys.NODE_MESSAGE, PRODUCT_NOT_IN_CART_MESSAGE);
+            updates.put(OrderManageStateKeys.NEED_USER_INPUT, false);
+            updates.put("orderLoadCartRoute", "CART_GUARD_FAILED");
             return updates;
         }
         Map<String, Object> cartSnapshot = snapshotService.snapshot(cart);
@@ -480,6 +496,101 @@ public class OrderManageSubgraphFactory {
                 "address", "addressText", "address_text", "shippingAddress", "shipping_address", "detail") != null;
     }
 
+    private boolean requestedProductAlreadyInCart(OverAllState state, CartView cart) {
+        RequestedProductReference requested = requestedProductReference(state);
+        if (requested == null) {
+            return true;
+        }
+        if (cart == null || cart.items() == null) {
+            return false;
+        }
+        for (CartItemView item : cart.items()) {
+            if (matchesRequestedProduct(requested, item)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private RequestedProductReference requestedProductReference(OverAllState state) {
+        Map<String, Object> slots = intentSlots(state);
+        String productId = firstSlot(slots, "product_id", "productId", "spu_id", "spuId");
+        String skuId = firstSlot(slots, "sku_id", "skuId");
+        String productRef = firstSlot(slots, "product_ref", "productRef", "external_ref", "externalRef");
+        String productName = firstSlot(slots, "product_name", "productName", "title");
+        if (!StringUtils.hasText(productId)
+                && !StringUtils.hasText(skuId)
+                && !StringUtils.hasText(productRef)
+                && !StringUtils.hasText(productName)) {
+            return null;
+        }
+        return new RequestedProductReference(productId, skuId, productRef, productName);
+    }
+
+    private boolean matchesRequestedProduct(RequestedProductReference requested, CartItemView item) {
+        if (item == null) {
+            return false;
+        }
+        if (StringUtils.hasText(requested.productId())) {
+            return matchesProductId(requested.productId(), item);
+        }
+        if (StringUtils.hasText(requested.skuId())) {
+            return textContains(item.externalRef(), requested.skuId());
+        }
+        if (StringUtils.hasText(requested.productRef())) {
+            return textMatches(requested.productRef(), item.externalRef())
+                    || textMatches(requested.productRef(), item.title());
+        }
+        return textMatches(requested.productName(), item.title())
+                || textMatches(requested.productName(), item.externalRef());
+    }
+
+    private boolean matchesProductId(String productId, CartItemView item) {
+        Optional<Long> numericProductId = parseLong(productId);
+        if (numericProductId.isPresent() && numericProductId.get().equals(item.spuId())) {
+            return true;
+        }
+        String token = normalizeToken(productId);
+        String externalRef = normalizeToken(item.externalRef());
+        return StringUtils.hasText(token)
+                && (token.equals(externalRef) || ("spu-" + token).equals(externalRef));
+    }
+
+    private Optional<Long> parseLong(String value) {
+        if (!StringUtils.hasText(value)) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(Long.parseLong(value.trim()));
+        } catch (NumberFormatException ignored) {
+            return Optional.empty();
+        }
+    }
+
+    private boolean textContains(String value, String token) {
+        String normalizedValue = normalizeToken(value);
+        String normalizedToken = normalizeToken(token);
+        return StringUtils.hasText(normalizedValue)
+                && StringUtils.hasText(normalizedToken)
+                && normalizedValue.contains(normalizedToken);
+    }
+
+    private boolean textMatches(String requested, String value) {
+        String normalizedRequested = normalizeToken(requested);
+        String normalizedValue = normalizeToken(value);
+        if (!StringUtils.hasText(normalizedRequested) || !StringUtils.hasText(normalizedValue)) {
+            return false;
+        }
+        if (normalizedRequested.length() < 2) {
+            return normalizedRequested.equals(normalizedValue);
+        }
+        return normalizedValue.contains(normalizedRequested) || normalizedRequested.contains(normalizedValue);
+    }
+
+    private String normalizeToken(String value) {
+        return value == null ? "" : value.trim().toLowerCase().replaceAll("\\s+", "");
+    }
+
     private AddressParseResult parseAddress(OverAllState state) {
         Map<String, Object> slots = intentSlots(state);
         String slotReceiver = firstSlot(slots,
@@ -556,6 +667,14 @@ public class OrderManageSubgraphFactory {
 
     private String nullToEmpty(String value) {
         return value == null ? "" : value;
+    }
+
+    private record RequestedProductReference(
+            String productId,
+            String skuId,
+            String productRef,
+            String productName
+    ) {
     }
 
     private boolean looksLikeConfirmOrder(String message) {

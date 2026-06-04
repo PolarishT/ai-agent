@@ -34,7 +34,7 @@ public final class MainIntentWorkflowMapping {
         TARGETS.put(MainIntent.CANCEL_ORDER, "order_manage_workflow");
 
         TARGETS.put(MainIntent.POLICY_QA, "policy_qa_workflow");
-        TARGETS.put(MainIntent.REVIEW_SUMMARY, "review_summary_workflow");
+        TARGETS.put(MainIntent.REVIEW_SUMMARY, "product_query_workflow");
 
         TARGETS.put(MainIntent.CLARIFY, "clarify_workflow");
         TARGETS.put(MainIntent.SMALL_TALK, "small_talk_workflow");

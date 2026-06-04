@@ -94,6 +94,9 @@ class CatalogModuleTests {
         CatalogProductView view = catalogQueryFacade.getProduct(productId);
         assertThat(view.id()).isEqualTo(productId);
         assertThat(view.skus()).hasSize(1);
+        assertThat(catalogQueryFacade.listReviews(productId, 5))
+                .extracting("nickname", "rating", "content", "sentiment")
+                .containsExactly(org.assertj.core.groups.Tuple.tuple("alice", 5, "很好用", "POSITIVE"));
 
         await().untilAsserted(() -> {
             List<Long> documentIds = jdbcTemplate.queryForList(

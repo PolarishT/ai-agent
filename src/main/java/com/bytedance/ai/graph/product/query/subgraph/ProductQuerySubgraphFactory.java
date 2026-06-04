@@ -13,6 +13,7 @@ import com.bytedance.ai.graph.orchestration.GuideGraphStateKeys;
 import com.bytedance.ai.graph.conversation.context.ConversationContextManager;
 import com.bytedance.ai.graph.conversation.context.ConversationRuntimeContext;
 import com.bytedance.ai.graph.intent.MainIntent;
+import com.bytedance.ai.graph.product.query.ProductAttributesCondition;
 import com.bytedance.ai.graph.product.query.ProductComparisonResult;
 import com.bytedance.ai.graph.product.query.ProductHydrationOptions;
 import com.bytedance.ai.graph.product.query.ProductQueryCondition;
@@ -35,11 +36,13 @@ import com.bytedance.ai.graph.product.retrieval.ProductSearchHit;
 import com.bytedance.ai.graph.product.retrieval.ProductSearchRequest;
 import com.bytedance.ai.graph.product.retrieval.ProductSearchResult;
 import com.bytedance.ai.graph.product.retrieval.ProductSearchSpi;
+import com.bytedance.ai.shared.metadata.RagChunkType;
 import com.bytedance.ai.shared.properties.RagProperties;
 import com.bytedance.ai.shared.support.RagJsonCodec;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -208,9 +211,24 @@ public class ProductQuerySubgraphFactory {
                 ProductQueryGraphStateKeys.PRODUCT_QUERY_CONDITION, ProductQueryCondition.class
         ).orElseGet(() -> ProductQueryCondition.empty(state.value(GuideGraphStateKeys.MESSAGE, "")));
 
+        ProductQueryCondition previous = previousCondition(state);
         ProductQueryCondition validated = validator.validate(raw);
-        ProductQueryCondition merged = merger.merge(validated, previousCondition(state));
+        ProductQueryCondition merged = merger.merge(validated, previous);
         ProductQueryCondition finalCondition = validator.validate(merged); // re-validate after merge
+        List<ProductSearchHit> reviewFollowUpHits = reviewFollowUpHitsFromState(state, 1);
+        if (isReviewSummaryIntent(state) && !reviewFollowUpHits.isEmpty()) {
+            finalCondition = reviewFollowUpCondition(
+                    finalCondition,
+                    previous,
+                    state.value(GuideGraphStateKeys.MESSAGE, "")
+            );
+            log.info(
+                    "Product query REVIEW_SUMMARY reused previous product context: productCount={}, rawNeedClarify={}, rawConfidence={}",
+                    reviewFollowUpHits.size(),
+                    merged.needClarify(),
+                    merged.confidence()
+            );
+        }
 
         Map<String, Object> updates = new LinkedHashMap<>();
         updates.put(ProductQueryGraphStateKeys.PRODUCT_QUERY_CONDITION, finalCondition);
@@ -293,6 +311,24 @@ public class ProductQuerySubgraphFactory {
         String keywordQuery = pickQuery(condition.keywordQuery(), condition.normalizedQuery(), condition.rawQuery());
         String semanticQuery = pickQuery(condition.rawQuery(), condition.semanticQuery(), condition.normalizedQuery());
         ProductQueryIntent intent = resolveIntentFromState(state, condition);
+        List<ProductSearchHit> reviewFollowUpHits = intent == ProductQueryIntent.REVIEW_QA
+                ? reviewFollowUpHitsFromState(state, topK)
+                : List.of();
+        if (!reviewFollowUpHits.isEmpty()) {
+            ProductSearchResult result = new ProductSearchResult(
+                    reviewFollowUpHits,
+                    List.of(),
+                    reviewFollowUpHits,
+                    reviewFollowUpHits,
+                    List.of()
+            );
+            log.info("Product query REVIEW_SUMMARY context recall done: products={}", reviewFollowUpHits.size());
+            Map<String, Object> updates = new LinkedHashMap<>();
+            updates.put(ProductQueryGraphStateKeys.PRODUCT_SEARCH_RESULT, result);
+            updates.put(ProductQueryGraphStateKeys.KEYWORD_HITS, result.keywordHits());
+            updates.put(ProductQueryGraphStateKeys.DEGRADED_NOTES, result.degradedNotes());
+            return updates;
+        }
         ProductSearchRequest request = new ProductSearchRequest(
                 keywordQuery,
                 topK,
@@ -338,11 +374,16 @@ public class ProductQuerySubgraphFactory {
                 ProductQueryGraphStateKeys.PRODUCT_SEARCH_RESULT, ProductSearchResult.class
         ).orElseGet(ProductSearchResult::empty);
         List<ProductSearchHit> ranked = result.rankedHits();
+        ProductHydrationOptions hydrationOptions = state.value(
+                ProductQueryGraphStateKeys.PRODUCT_HYDRATION_OPTIONS,
+                ProductHydrationOptions.class
+        ).orElseGet(ProductHydrationOptions::basic);
         List<ProductSearchCandidate> refined = productRanker.refine(
                 ranked,
                 result.keywordHits(),
                 result.semanticHits(),
-                condition
+                condition,
+                hydrationOptions
         );
 
         ProductCandidatePostFilter.Result postFilterResult = postFilter.filter(refined, condition);
@@ -539,6 +580,141 @@ public class ProductQuerySubgraphFactory {
             log.warn("Failed to read product query condition from conversation context", exception);
             return null;
         }
+    }
+
+    private boolean isReviewSummaryIntent(OverAllState state) {
+        String mainIntentRaw = state.value(GuideGraphStateKeys.MAIN_INTENT, "");
+        return MainIntent.REVIEW_SUMMARY.name().equals(mainIntentRaw);
+    }
+
+    private List<ProductSearchHit> reviewFollowUpHitsFromState(OverAllState state, int topK) {
+        ConversationRuntimeContext context = GuideGraphContextSupport.loadContext(conversationContextManager, state);
+        return reviewFollowUpHits(context, topK);
+    }
+
+    static ProductQueryCondition reviewFollowUpCondition(
+            ProductQueryCondition current,
+            ProductQueryCondition previous,
+            String userMessage
+    ) {
+        ProductQueryCondition source = current == null ? ProductQueryCondition.empty(userMessage) : current;
+        String rawQuery = pickFirstText(userMessage, source.rawQuery(), previous == null ? null : previous.rawQuery());
+        String normalizedQuery = pickFirstText(
+                source.normalizedQuery(),
+                rawQuery,
+                previous == null ? null : previous.normalizedQuery(),
+                "用户评价"
+        );
+        String reviewQuery = pickFirstText(
+                source.semanticQuery(),
+                source.keywordQuery(),
+                normalizedQuery,
+                rawQuery,
+                "用户评价"
+        );
+        double confidence = Math.max(0.8d, Math.min(1.0d, source.confidence()));
+        return new ProductQueryCondition(
+                rawQuery,
+                normalizedQuery,
+                "REVIEW_QA",
+                "HYBRID",
+                reviewQuery,
+                reviewQuery,
+                previous == null ? List.of() : previous.categoryTerms(),
+                List.of(),
+                previous == null ? List.of() : previous.brandTerms(),
+                List.of(),
+                List.of(),
+                List.of(),
+                ProductAttributesCondition.empty(),
+                null,
+                null,
+                false,
+                "RELEVANCE",
+                "INHERIT",
+                List.of(),
+                false,
+                confidence,
+                false,
+                List.of()
+        );
+    }
+
+    static List<ProductSearchHit> reviewFollowUpHits(ConversationRuntimeContext context, int topK) {
+        if (context == null) {
+            return List.of();
+        }
+        int limit = Math.max(1, topK);
+        Map<Long, ProductSearchHit> hits = new LinkedHashMap<>();
+        ConversationRuntimeContext.Focus focus = context.focus();
+        if (focus != null) {
+            appendReviewFollowUpHit(hits, focus.productId(), focus.rank(), focus.productName(), limit);
+        }
+        List<ConversationRuntimeContext.ProductCandidateItem> candidates = new ArrayList<>(context.productCandidates());
+        candidates.sort(java.util.Comparator.comparingInt(ConversationRuntimeContext.ProductCandidateItem::rank));
+        for (ConversationRuntimeContext.ProductCandidateItem candidate : candidates) {
+            appendReviewFollowUpHit(hits, candidate.productId(), candidate.rank(), candidate.productName(), limit);
+            if (hits.size() >= limit) {
+                break;
+            }
+        }
+        return List.copyOf(hits.values());
+    }
+
+    private static void appendReviewFollowUpHit(
+            Map<Long, ProductSearchHit> hits,
+            String rawProductId,
+            Integer rank,
+            String productName,
+            int limit
+    ) {
+        if (hits.size() >= limit) {
+            return;
+        }
+        Long productId = parseProductId(rawProductId);
+        if (productId == null || hits.containsKey(productId)) {
+            return;
+        }
+        int contextRank = rank == null || rank <= 0 ? hits.size() + 1 : rank;
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("source", "previous_product_context");
+        metadata.put("contextRank", contextRank);
+        if (StringUtils.hasText(productName)) {
+            metadata.put("productName", productName);
+        }
+        double score = Math.max(0.1d, 1.0d - hits.size() * 0.05d);
+        hits.put(productId, new ProductSearchHit(
+                productId,
+                null,
+                String.valueOf(productId),
+                score,
+                RagChunkType.REVIEW.name(),
+                StringUtils.hasText(productName) ? "上一轮商品：" + productName : "上一轮商品评价",
+                metadata
+        ));
+    }
+
+    private static Long parseProductId(String rawProductId) {
+        if (!StringUtils.hasText(rawProductId)) {
+            return null;
+        }
+        try {
+            return Long.valueOf(rawProductId.trim());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private static String pickFirstText(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                return value;
+            }
+        }
+        return "";
     }
 
     private List<ConversationRuntimeContext.ProductCandidateItem> toContextCandidates(

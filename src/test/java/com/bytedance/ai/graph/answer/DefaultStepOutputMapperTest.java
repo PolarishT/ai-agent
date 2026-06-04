@@ -6,6 +6,7 @@ import com.bytedance.ai.graph.cartmanage.CartManageAction;
 import com.bytedance.ai.graph.cartmanage.CartManageWorkflowResult;
 import com.bytedance.ai.graph.ordermanage.OrderManageWorkflowResult;
 import com.bytedance.ai.graph.product.query.ProductQueryWorkflowResult;
+import com.bytedance.ai.graph.product.query.ProductReviewSnippet;
 import com.bytedance.ai.graph.product.query.ProductSearchCandidate;
 import org.junit.jupiter.api.Test;
 
@@ -23,7 +24,8 @@ class DefaultStepOutputMapperTest {
     void productResultProjectsCandidateCountAndProductInfo() {
         ProductSearchCandidate c = new ProductSearchCandidate(
                 201L, "EXT-201", "维他柠檬茶 250ml×6", "维他", "食品饮料", "茶饮料",
-                new BigDecimal("13.9"), 50, Map.of(), 0.8, 0.7, 0.9, List.of("品类匹配"));
+                new BigDecimal("13.9"), 50, Map.of(), 0.8, 0.7, 0.9, List.of("品类匹配"),
+                List.of(new ProductReviewSnippet(0, "阿明", 5, "POSITIVE", "味道清爽")));
         ProductQueryWorkflowResult pq = new ProductQueryWorkflowResult(
                 "OK", List.of(c), null, List.of(), "找到 1 款");
 
@@ -41,6 +43,12 @@ class DefaultStepOutputMapperTest {
                 .containsEntry("subCategory", "茶饮料")
                 .containsEntry("price", new BigDecimal("13.9"))
                 .doesNotContainKey("scoreFinal");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> reviews = (List<Map<String, Object>>) info.get(0).get("reviews");
+        assertThat(reviews).hasSize(1);
+        assertThat(reviews.get(0))
+                .containsEntry("rating", 5)
+                .containsEntry("content", "味道清爽");
     }
 
     @Test

@@ -60,7 +60,8 @@ class ProductComparisonBuilderTests {
                 null, null,
                 new BigDecimal(price), stock, Map.of(),
                 0.5d, 0.5d, 0.8d,
-                List.of("price_match")
+                List.of("price_match"),
+                List.of()
         );
     }
 }

@@ -2,7 +2,10 @@ package com.bytedance.ai.graph.product.query.service;
 
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogProductView;
+import com.bytedance.ai.graph.catalog.api.CatalogProductReviewView;
+import com.bytedance.ai.graph.product.query.ProductHydrationOptions;
 import com.bytedance.ai.graph.product.query.ProductQueryCondition;
+import com.bytedance.ai.graph.product.query.ProductReviewSnippet;
 import com.bytedance.ai.graph.product.query.ProductSearchCandidate;
 import com.bytedance.ai.graph.product.retrieval.ProductSearchHit;
 import com.bytedance.ai.shared.properties.RagProperties;
@@ -49,6 +52,16 @@ public class ProductRanker {
             List<ProductSearchHit> semanticHits,
             ProductQueryCondition condition
     ) {
+        return refine(rankedHits, keywordHits, semanticHits, condition, ProductHydrationOptions.basic());
+    }
+
+    public List<ProductSearchCandidate> refine(
+            List<ProductSearchHit> rankedHits,
+            List<ProductSearchHit> keywordHits,
+            List<ProductSearchHit> semanticHits,
+            ProductQueryCondition condition,
+            ProductHydrationOptions hydrationOptions
+    ) {
         if (rankedHits == null || rankedHits.isEmpty()) {
             return List.of();
         }
@@ -69,6 +82,7 @@ public class ProductRanker {
             List<String> matchReasons = new ArrayList<>();
             double conditionBoost = conditionBoost(view, condition, matchReasons, weights);
             double finalScore = hit.score() + conditionBoost;
+            List<ProductReviewSnippet> reviews = hydrateReviews(view.id(), hydrationOptions);
             enriched.add(new ProductSearchCandidate(
                     view.id(),
                     String.valueOf(view.id()),
@@ -82,10 +96,36 @@ public class ProductRanker {
                     keywordScoreByKey.getOrDefault(key(hit), 0.0d),
                     semanticScoreByKey.getOrDefault(key(hit), 0.0d),
                     finalScore,
-                    matchReasons
+                    matchReasons,
+                    reviews
             ));
         }
         return applySort(enriched, condition);
+    }
+
+    private List<ProductReviewSnippet> hydrateReviews(Long productId, ProductHydrationOptions hydrationOptions) {
+        if (productId == null || hydrationOptions == null
+                || !hydrationOptions.includeReviews() || hydrationOptions.reviewLimit() <= 0) {
+            return List.of();
+        }
+        try {
+            return catalogQueryFacade.listReviews(productId, hydrationOptions.reviewLimit()).stream()
+                    .map(this::toReviewSnippet)
+                    .toList();
+        } catch (RuntimeException exception) {
+            log.warn("Product review hydrate failed: productId={}, error={}", productId, exception.toString());
+            return List.of();
+        }
+    }
+
+    private ProductReviewSnippet toReviewSnippet(CatalogProductReviewView view) {
+        return new ProductReviewSnippet(
+                view.reviewIndex(),
+                view.nickname(),
+                view.rating(),
+                view.sentiment(),
+                view.content()
+        );
     }
 
     private List<ProductSearchCandidate> applySort(List<ProductSearchCandidate> candidates, ProductQueryCondition condition) {
