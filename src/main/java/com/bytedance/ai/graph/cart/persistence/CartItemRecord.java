@@ -10,6 +10,7 @@ public record CartItemRecord(
         Long id,
         Long cartId,
         Long spuId,
+        Long skuId,
         String externalRef,
         String title,
         String brand,

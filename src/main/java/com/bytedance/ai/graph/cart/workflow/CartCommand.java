@@ -11,6 +11,7 @@ public record CartCommand(
         String userId,
         String conversationId,
         Long spuId,
+        Long skuId,
         String externalRef,
         Integer quantity,
         BigDecimal expectedUnitPrice,
@@ -27,10 +28,22 @@ public record CartCommand(
     }
 
     public static CartCommand of(String userId, String conversationId, Long spuId, String externalRef, Integer quantity) {
+        return of(userId, conversationId, spuId, null, externalRef, quantity);
+    }
+
+    public static CartCommand of(
+            String userId,
+            String conversationId,
+            Long spuId,
+            Long skuId,
+            String externalRef,
+            Integer quantity
+    ) {
         return new CartCommand(
                 userId,
                 conversationId,
                 spuId,
+                skuId,
                 externalRef,
                 quantity,
                 null,

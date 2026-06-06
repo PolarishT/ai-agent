@@ -13,6 +13,7 @@ import com.bytedance.ai.graph.cart.api.CartView;
 import com.bytedance.ai.graph.catalog.api.CatalogInventoryFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
+import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
 import com.bytedance.ai.graph.cartmanage.application.CartCommandService;
 import com.bytedance.ai.graph.cartmanage.CartMutationResult;
 import org.springframework.stereotype.Service;
@@ -20,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Comparator;
 import java.util.Map;
 import java.util.UUID;
 
@@ -164,13 +166,45 @@ public class OrderCommandService {
     }
 
     private String validateProductsAndDeductStock(CartView cart) {
-        for (CartItemView item : snapshotService.sortedItems(cart)) {
+        var items = snapshotService.sortedItems(cart);
+        for (CartItemView item : items) {
             CatalogProductView product = catalogQueryFacade.getProduct(item.spuId());
             int quantity = item.quantity() == null ? 0 : item.quantity();
             if (!"ACTIVE".equals(product.status()) || product.totalStock() == null || product.totalStock() < quantity) {
                 return "库存不足: " + item.title();
             }
-            inventoryFacade.decreaseStock(item.spuId(), quantity);
+            String skuError = validateSku(item, product, quantity);
+            if (skuError != null) {
+                return skuError;
+            }
+        }
+        // 扣减按 (spuId, skuId) 统一锁顺序，避免与其它订单反序扣减造成 AB-BA 死锁。
+        // 注意：snapshotService.sortedItems 主键是 itemId（用于快照展示/哈希稳定），不保证锁顺序一致，
+        // 故扣减循环必须按 STOCK_LOCK_ORDER 重新排序；上面的校验循环只读不加锁，沿用快照顺序即可。
+        for (CartItemView item : items.stream().sorted(STOCK_LOCK_ORDER).toList()) {
+            inventoryFacade.decreaseStock(item.spuId(), item.skuId(), item.quantity() == null ? 0 : item.quantity());
+        }
+        return null;
+    }
+
+    /**
+     * 库存扣减顺序：按 (spuId, skuId) 升序，确保所有并发订单以一致的全局顺序获取
+     * catalog_sku / catalog_product 行锁，消除反序扣减引发的 AB-BA 死锁。
+     */
+    private static final Comparator<CartItemView> STOCK_LOCK_ORDER = Comparator
+            .comparing(CartItemView::spuId, Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparing(CartItemView::skuId, Comparator.nullsLast(Comparator.naturalOrder()));
+
+    private String validateSku(CartItemView item, CatalogProductView product, int quantity) {
+        if (item.skuId() == null) {
+            return null;
+        }
+        CatalogSkuView sku = product.skus() == null ? null : product.skus().stream()
+                .filter(candidate -> candidate != null && item.skuId().equals(candidate.id()))
+                .findFirst()
+                .orElse(null);
+        if (sku == null || !"ACTIVE".equals(sku.status()) || sku.stock() == null || sku.stock() < quantity) {
+            return "SKU 库存不足: " + item.title();
         }
         return null;
     }

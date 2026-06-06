@@ -35,6 +35,9 @@ public class JdbcConversationContextManager implements ConversationContextManage
 
     private static final String KEY_CURRENT = "current";
 
+    /** 任务链 CAS 写入的乐观重试次数上限：并发 turn 抢占活跃行时重新加载再应用。 */
+    private static final int MAX_TASK_CHAIN_CAS_RETRIES = 3;
+
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final AgentConversationRepository conversationRepository;
     private final RagJsonCodec jsonCodec;
@@ -424,34 +427,39 @@ public class JdbcConversationContextManager implements ConversationContextManage
             ConversationRuntimeContext.TaskStep executedStep,
             String turnId
     ) {
-        ConversationRuntimeContext.TaskChain chain = loadTaskChain(userId, conversationId, taskChainId);
-        if (chain == null) {
-            return false;
-        }
-        List<ConversationRuntimeContext.PlanTask> newPlan = new ArrayList<>(chain.planTasks().size());
-        boolean found = false;
-        for (ConversationRuntimeContext.PlanTask t : chain.planTasks()) {
-            if (t.taskId() != null && t.taskId().equals(taskId)) {
-                newPlan.add(new ConversationRuntimeContext.PlanTask(
-                        t.taskId(), t.taskName(), t.taskType(), t.workflow(), t.order(),
-                        StringUtils.hasText(newTaskStatus) ? newTaskStatus : t.status()
-                ));
-                found = true;
-            } else {
-                newPlan.add(t);
+        for (int attempt = 0; attempt < MAX_TASK_CHAIN_CAS_RETRIES; attempt++) {
+            ConversationRuntimeContext.TaskChain chain = loadTaskChain(userId, conversationId, taskChainId);
+            if (chain == null) {
+                return false;
             }
+            List<ConversationRuntimeContext.PlanTask> newPlan = new ArrayList<>(chain.planTasks().size());
+            boolean found = false;
+            for (ConversationRuntimeContext.PlanTask t : chain.planTasks()) {
+                if (t.taskId() != null && t.taskId().equals(taskId)) {
+                    newPlan.add(new ConversationRuntimeContext.PlanTask(
+                            t.taskId(), t.taskName(), t.taskType(), t.workflow(), t.order(),
+                            StringUtils.hasText(newTaskStatus) ? newTaskStatus : t.status()
+                    ));
+                    found = true;
+                } else {
+                    newPlan.add(t);
+                }
+            }
+            if (!found) {
+                return false;
+            }
+            List<ConversationRuntimeContext.TaskStep> newSteps = new ArrayList<>(chain.steps());
+            if (executedStep != null) {
+                newSteps.add(executedStep);
+            }
+            LocalDateTime now = LocalDateTime.now();
+            if (replaceActiveTaskChain(userId, conversationId, turnId, null, chain.contextItemId(),
+                    rebuildChain(chain, chain.status(), newPlan, newSteps, turnId, now), null)) {
+                return true;
+            }
+            // CAS 落败：并发 turn 抢先替换了活跃行 → 重新加载最新 chain 再应用
         }
-        if (!found) {
-            return false;
-        }
-        List<ConversationRuntimeContext.TaskStep> newSteps = new ArrayList<>(chain.steps());
-        if (executedStep != null) {
-            newSteps.add(executedStep);
-        }
-        LocalDateTime now = LocalDateTime.now();
-        saveTaskChain(userId, conversationId, turnId, null,
-                rebuildChain(chain, chain.status(), newPlan, newSteps, turnId, now), null);
-        return true;
+        return false;
     }
 
     @Override
@@ -466,14 +474,19 @@ public class JdbcConversationContextManager implements ConversationContextManage
         if (!StringUtils.hasText(newChainStatus)) {
             return false;
         }
-        ConversationRuntimeContext.TaskChain chain = loadTaskChain(userId, conversationId, taskChainId);
-        if (chain == null) {
-            return false;
+        for (int attempt = 0; attempt < MAX_TASK_CHAIN_CAS_RETRIES; attempt++) {
+            ConversationRuntimeContext.TaskChain chain = loadTaskChain(userId, conversationId, taskChainId);
+            if (chain == null) {
+                return false;
+            }
+            LocalDateTime now = LocalDateTime.now();
+            if (replaceActiveTaskChain(userId, conversationId, turnId, null, chain.contextItemId(),
+                    rebuildChain(chain, newChainStatus, chain.planTasks(), chain.steps(), turnId, now), null)) {
+                return true;
+            }
+            // CAS 落败：并发 turn 抢先替换了活跃行 → 重新加载最新 chain 再应用
         }
-        LocalDateTime now = LocalDateTime.now();
-        saveTaskChain(userId, conversationId, turnId, null,
-                rebuildChain(chain, newChainStatus, chain.planTasks(), chain.steps(), turnId, now), null);
-        return true;
+        return false;
     }
 
     private ConversationRuntimeContext.TaskChain rebuildChain(
@@ -589,6 +602,52 @@ public class JdbcConversationContextManager implements ConversationContextManage
             params.addValue("itemKey", itemKey);
         }
         jdbcTemplate.update(sql, params);
+    }
+
+    /**
+     * 按读到的旧活跃行 id 做乐观 CAS 替换任务链：仅当该行仍为 ACTIVE 时把它 SUPERSEDE 掉并插入新版本。
+     * 若 CAS 命中 0 行（已被并发 turn 抢先替换 / 过期），返回 false 且不写入——由上层重新加载后重试。
+     * 配合 uq_agent_context_items_active_key 唯一索引，保证任一时刻同一 chain 只有一行 ACTIVE。
+     */
+    private boolean replaceActiveTaskChain(
+            String userId,
+            String conversationId,
+            String sourceTurnId,
+            String sourceWorkflow,
+            Long expectedActiveId,
+            ConversationRuntimeContext.TaskChain taskChain,
+            LocalDateTime expiresAt
+    ) {
+        if (expectedActiveId == null || taskChain == null || !StringUtils.hasText(taskChain.taskChainId())) {
+            return false;
+        }
+        Long conversationInternalId = conversationRepository.initConversation(userId, conversationId);
+        if (supersedeActiveById(expectedActiveId) != 1) {
+            return false;
+        }
+        insert(
+                conversationInternalId,
+                userId,
+                conversationId,
+                ConversationContextItemType.TASK_CHAIN,
+                taskChain.taskChainId(),
+                sourceTurnId,
+                sourceWorkflow,
+                ConversationContextItemStatus.ACTIVE,
+                taskChainPayload(taskChain),
+                expiresAt
+        );
+        return true;
+    }
+
+    private int supersedeActiveById(Long activeId) {
+        return jdbcTemplate.update("""
+                UPDATE public.agent_context_items
+                   SET status = 'SUPERSEDED',
+                       updated_at = NOW()
+                 WHERE id = :id
+                   AND status = 'ACTIVE'
+                """, new MapSqlParameterSource("id", activeId));
     }
 
     private void expireStaleItems(Long conversationInternalId) {

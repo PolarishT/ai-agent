@@ -207,7 +207,8 @@ public class CartManageWorkflowNode {
         }
         CartItemView target = resolved.item();
         String productId = target.spuId() == null ? null : String.valueOf(target.spuId());
-        StockResult stock = inventoryQueryService.checkStock(productId, target.externalRef(), quantity);
+        String skuId = target.skuId() == null ? null : String.valueOf(target.skuId());
+        StockResult stock = inventoryQueryService.checkStock(productId, skuId, quantity);
         if (!stock.available()) {
             String message = String.format(
                     Locale.ROOT,
@@ -352,6 +353,37 @@ public class CartManageWorkflowNode {
             return ResolveOutcome.ok(items.get(idx - 1));
         }
 
+        if (StringUtils.hasText(slots.skuId())) {
+            List<CartItemView> matches = new ArrayList<>();
+            for (CartItemView item : items) {
+                if (matchesSkuId(item, slots.skuId())
+                        && (!StringUtils.hasText(slots.productId()) || matchesProductId(item, slots.productId()))) {
+                    matches.add(item);
+                }
+            }
+            if (matches.size() == 1) {
+                return ResolveOutcome.ok(matches.get(0));
+            }
+            if (matches.size() > 1) {
+                return ResolveOutcome.clarify(CLARIFY_AMBIGUOUS_TARGET, "sku_ambiguous", matches);
+            }
+        }
+
+        if (StringUtils.hasText(slots.productId())) {
+            List<CartItemView> matches = new ArrayList<>();
+            for (CartItemView item : items) {
+                if (matchesProductId(item, slots.productId())) {
+                    matches.add(item);
+                }
+            }
+            if (matches.size() == 1) {
+                return ResolveOutcome.ok(matches.get(0));
+            }
+            if (matches.size() > 1) {
+                return ResolveOutcome.clarify(CLARIFY_AMBIGUOUS_TARGET, "product_ambiguous", matches);
+            }
+        }
+
         if (StringUtils.hasText(slots.productName())) {
             String needle = slots.productName().toLowerCase(Locale.ROOT);
             List<CartItemView> matches = new ArrayList<>();
@@ -379,6 +411,24 @@ public class CartManageWorkflowNode {
         }
 
         return ResolveOutcome.clarify(CLARIFY_AMBIGUOUS_TARGET, "target_unspecified");
+    }
+
+    private boolean matchesProductId(CartItemView item, String productId) {
+        if (item == null || !StringUtils.hasText(productId)) {
+            return false;
+        }
+        String normalized = productId.trim();
+        return item.spuId() != null && normalized.equals(String.valueOf(item.spuId()))
+                || StringUtils.hasText(item.externalRef()) && item.externalRef().contains(normalized);
+    }
+
+    private boolean matchesSkuId(CartItemView item, String skuId) {
+        if (item == null || !StringUtils.hasText(skuId)) {
+            return false;
+        }
+        String normalized = skuId.trim();
+        return item.skuId() != null && normalized.equals(String.valueOf(item.skuId()))
+                || StringUtils.hasText(item.externalRef()) && item.externalRef().contains(normalized);
     }
 
     // ---------- slot merging ----------

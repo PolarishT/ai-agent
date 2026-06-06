@@ -304,7 +304,7 @@ class CartManageWorkflowNodeTest {
     }
 
     private CartItemView item(Long itemId, String title) {
-        return new CartItemView(itemId, itemId, "ext-" + itemId, title, "brand", null, 1,
+        return new CartItemView(itemId, itemId, null, "ext-" + itemId, title, "brand", null, 1,
                 new BigDecimal("9.9"), new BigDecimal("9.9"), 10);
     }
 

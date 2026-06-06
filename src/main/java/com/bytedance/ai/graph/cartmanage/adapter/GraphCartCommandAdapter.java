@@ -45,6 +45,11 @@ public class GraphCartCommandAdapter implements CartCommandService {
             return CartMutationResult.failure("PRODUCT_ID_INVALID",
                     "productId must be a numeric id: " + productId);
         }
+        Long parsedSkuId = parseItemId(skuId);
+        if (skuId != null && !skuId.isBlank() && parsedSkuId == null) {
+            return CartMutationResult.failure("SKU_ID_INVALID",
+                    "skuId must be a numeric id: " + skuId);
+        }
         try {
             if (expectedUnitPrice != null) {
                 log.atInfo()
@@ -57,7 +62,7 @@ public class GraphCartCommandAdapter implements CartCommandService {
                         .log("Ignoring candidate cached price for cart mutation; cart aggregate uses current catalog price");
             }
             CartView updated = cartCommandFacade.addItem(
-                    userId, conversationId, spuId, null, quantity, null);
+                    userId, conversationId, spuId, parsedSkuId, null, quantity, null);
             return CartMutationResult.ok(updated);
         } catch (RuntimeException exception) {
             log.atWarn()

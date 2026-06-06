@@ -10,6 +10,7 @@ public record OrderItemRecord(
         Long id,
         Long orderId,
         Long spuId,
+        Long skuId,
         String externalRef,
         String title,
         String brand,

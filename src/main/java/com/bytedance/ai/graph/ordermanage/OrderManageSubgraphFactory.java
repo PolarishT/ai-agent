@@ -12,6 +12,7 @@ import com.bytedance.ai.graph.cart.api.CartQueryFacade;
 import com.bytedance.ai.graph.cart.api.CartView;
 import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
+import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
 import com.bytedance.ai.graph.conversation.context.ConversationContextItemStatus;
 import com.bytedance.ai.graph.conversation.context.ConversationContextManager;
 import com.bytedance.ai.graph.conversation.context.ConversationRuntimeContext;
@@ -535,7 +536,7 @@ public class OrderManageSubgraphFactory {
             return matchesProductId(requested.productId(), item);
         }
         if (StringUtils.hasText(requested.skuId())) {
-            return textContains(item.externalRef(), requested.skuId());
+            return matchesSkuId(requested.skuId(), item);
         }
         if (StringUtils.hasText(requested.productRef())) {
             return textMatches(requested.productRef(), item.externalRef())
@@ -554,6 +555,14 @@ public class OrderManageSubgraphFactory {
         String externalRef = normalizeToken(item.externalRef());
         return StringUtils.hasText(token)
                 && (token.equals(externalRef) || ("spu-" + token).equals(externalRef));
+    }
+
+    private boolean matchesSkuId(String skuId, CartItemView item) {
+        Optional<Long> numericSkuId = parseLong(skuId);
+        if (numericSkuId.isPresent() && numericSkuId.get().equals(item.skuId())) {
+            return true;
+        }
+        return textContains(item.externalRef(), skuId);
     }
 
     private Optional<Long> parseLong(String value) {
@@ -707,6 +716,24 @@ public class OrderManageSubgraphFactory {
             if (!"ACTIVE".equals(product.status()) || product.totalStock() == null || product.totalStock() < required) {
                 return "「" + item.title() + "」库存不足或已下架";
             }
+            String skuError = validateSkuStock(item, product, required);
+            if (skuError != null) {
+                return skuError;
+            }
+        }
+        return null;
+    }
+
+    private String validateSkuStock(CartItemView item, CatalogProductView product, int required) {
+        if (item.skuId() == null) {
+            return null;
+        }
+        CatalogSkuView sku = product.skus() == null ? null : product.skus().stream()
+                .filter(candidate -> candidate != null && item.skuId().equals(candidate.id()))
+                .findFirst()
+                .orElse(null);
+        if (sku == null || !"ACTIVE".equals(sku.status()) || sku.stock() == null || sku.stock() < required) {
+            return "「" + item.title() + "」SKU 库存不足或已下架";
         }
         return null;
     }

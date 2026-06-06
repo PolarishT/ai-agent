@@ -80,6 +80,8 @@ public class CartItemLookup {
         if (!StringUtils.hasText(skuId) || item == null) {
             return false;
         }
-        return StringUtils.hasText(item.externalRef()) && item.externalRef().contains(skuId.trim());
+        String normalized = skuId.trim();
+        return item.skuId() != null && normalized.equals(String.valueOf(item.skuId()))
+                || StringUtils.hasText(item.externalRef()) && item.externalRef().contains(normalized);
     }
 }

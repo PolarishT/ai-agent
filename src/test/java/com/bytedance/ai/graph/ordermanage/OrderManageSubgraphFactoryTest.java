@@ -269,7 +269,7 @@ class OrderManageSubgraphFactoryTest {
 
     private static CartItemView item(Long itemId, Long spuId, String title, int quantity) {
         BigDecimal unitPrice = new BigDecimal("9.90");
-        return new CartItemView(itemId, spuId, "SPU-" + spuId, title, "brand", null, quantity,
+        return new CartItemView(itemId, spuId, null, "SPU-" + spuId, title, "brand", null, quantity,
                 unitPrice, unitPrice.multiply(BigDecimal.valueOf(quantity)), 10);
     }
 
@@ -564,7 +564,7 @@ class OrderManageSubgraphFactoryTest {
         int deductCalls;
 
         @Override
-        public void decreaseStock(Long spuId, int quantity) {
+        public void decreaseStock(Long spuId, Long skuId, int quantity) {
             deductCalls++;
         }
     }

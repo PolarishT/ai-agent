@@ -11,6 +11,7 @@ public interface OrderItemRepository {
     void save(
             Long orderId,
             Long spuId,
+            Long skuId,
             String externalRef,
             String title,
             String brand,

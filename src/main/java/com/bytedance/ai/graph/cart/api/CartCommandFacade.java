@@ -14,6 +14,7 @@ public interface CartCommandFacade {
             String userId,
             String conversationId,
             Long spuId,
+            Long skuId,
             String externalRef,
             Integer quantity,
             BigDecimal expectedUnitPrice

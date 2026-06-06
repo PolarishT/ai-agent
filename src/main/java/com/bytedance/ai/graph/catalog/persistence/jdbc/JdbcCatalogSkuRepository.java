@@ -77,6 +77,25 @@ public class JdbcCatalogSkuRepository implements CatalogSkuRepository {
         );
     }
 
+    @Override
+    public boolean decreaseStock(Long productId, Long skuId, int quantity) {
+        int updated = jdbc.update(
+                """
+                UPDATE catalog_sku
+                   SET stock = stock - ?, updated_at = now()
+                 WHERE id = ?
+                   AND product_id = ?
+                   AND status = 'ACTIVE'
+                   AND stock >= ?
+                """,
+                quantity,
+                skuId,
+                productId,
+                quantity
+        );
+        return updated > 0;
+    }
+
     private CatalogSkuRecord findById(long id) {
         List<CatalogSkuRecord> results = jdbc.query(
                 "SELECT * FROM catalog_sku WHERE id = ?",

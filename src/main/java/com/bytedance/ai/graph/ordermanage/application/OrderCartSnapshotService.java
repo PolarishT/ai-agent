@@ -60,6 +60,7 @@ public class OrderCartSnapshotService {
                 .sorted(Comparator
                         .comparing((CartItemView item) -> item.itemId() == null ? Long.MAX_VALUE : item.itemId())
                         .thenComparing(item -> item.spuId() == null ? Long.MAX_VALUE : item.spuId())
+                        .thenComparing(item -> item.skuId() == null ? Long.MAX_VALUE : item.skuId())
                         .thenComparing(item -> item.externalRef() == null ? "" : item.externalRef()))
                 .toList();
     }
@@ -68,6 +69,7 @@ public class OrderCartSnapshotService {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("itemId", item.itemId());
         map.put("spuId", item.spuId());
+        map.put("skuId", item.skuId());
         map.put("externalRef", item.externalRef());
         map.put("title", item.title());
         map.put("quantity", item.quantity());

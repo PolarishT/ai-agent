@@ -13,6 +13,8 @@ public interface CatalogSkuRepository {
 
     List<CatalogSkuRecord> findByProductId(Long productId);
 
+    boolean decreaseStock(Long productId, Long skuId, int quantity);
+
     @Deprecated
     default List<CatalogSkuRecord> findBySpuId(Long productId) {
         return findByProductId(productId);

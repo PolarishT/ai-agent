@@ -10,6 +10,8 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.util.function.Consumer;
+
 /**
  * LLM 生成 answer 文本。复用 intentChatClient（temperature 0），保持简洁、可复现。
  *
@@ -40,17 +42,7 @@ public class AnswerLlmService {
      * 生成最终回复。LLM 失败或空响应都会抛 {@link AnswerLlmException}。
      */
     public String generate(AnswerLlmInput input) {
-        String workflowResultJson = serializeWorkflowResult(input.workflowResult());
-        AnswerPromptFactory.AnswerPromptInput promptInput =
-                new AnswerPromptFactory.AnswerPromptInput(
-                        input.userMessage(),
-                        input.intent(),
-                        input.workflow(),
-                        workflowResultJson,
-                        serializeView(input.view()),
-                        input.ruleFallback()
-                );
-        String prompt = promptFactory.build(promptInput);
+        String prompt = buildPrompt(input);
 
         String content;
         try {
@@ -64,6 +56,60 @@ public class AnswerLlmService {
                     .log("answer LLM call failed: {}", ex.toString());
             throw new AnswerLlmException("answer LLM call failed", ex);
         }
+        return validateAndLogContent(content, input, "answer_llm.generated", "answer LLM generated");
+    }
+
+    /**
+     * 真实流式生成最终回复。每收到一个模型文本片段就回调给调用方，同时累积完整文本用于落库。
+     */
+    public String generateStream(AnswerLlmInput input, Consumer<String> chunkConsumer) {
+        String prompt = buildPrompt(input);
+        StringBuilder content = new StringBuilder();
+        try {
+            chatClient.prompt(prompt)
+                    .stream()
+                    .content()
+                    .filter(chunk -> chunk != null)
+                    .doOnNext(chunk -> {
+                        content.append(chunk);
+                        if (!chunk.isEmpty() && chunkConsumer != null) {
+                            chunkConsumer.accept(chunk);
+                        }
+                    })
+                    .blockLast();
+        } catch (Exception ex) {
+            log.atWarn()
+                    .addKeyValue(RagLogFields.EVENT_NAME, "answer_llm.stream_failed")
+                    .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_FAILURE)
+                    .addKeyValue("answer_llm.intent", input.intent())
+                    .addKeyValue("answer_llm.workflow", input.workflow())
+                    .log("answer LLM stream failed: {}", ex.toString());
+            throw new AnswerLlmException("answer LLM stream failed", ex);
+        }
+        return validateAndLogContent(content.toString(), input, "answer_llm.stream_generated",
+                "answer LLM stream generated");
+    }
+
+    private String buildPrompt(AnswerLlmInput input) {
+        String workflowResultJson = serializeWorkflowResult(input.workflowResult());
+        AnswerPromptFactory.AnswerPromptInput promptInput =
+                new AnswerPromptFactory.AnswerPromptInput(
+                        input.userMessage(),
+                        input.intent(),
+                        input.workflow(),
+                        workflowResultJson,
+                        serializeView(input.view()),
+                        input.ruleFallback()
+                );
+        return promptFactory.build(promptInput);
+    }
+
+    private String validateAndLogContent(
+            String content,
+            AnswerLlmInput input,
+            String eventName,
+            String logMessage
+    ) {
         if (!StringUtils.hasText(content)) {
             log.atWarn()
                     .addKeyValue(RagLogFields.EVENT_NAME, "answer_llm.empty_response")
@@ -73,13 +119,13 @@ public class AnswerLlmService {
         }
         String trimmed = content.strip();
         log.atInfo()
-                .addKeyValue(RagLogFields.EVENT_NAME, "answer_llm.generated")
+                .addKeyValue(RagLogFields.EVENT_NAME, eventName)
                 .addKeyValue(RagLogFields.EVENT_OUTCOME, RagLogFields.OUTCOME_SUCCESS)
                 .addKeyValue("answer_llm.intent", input.intent())
                 .addKeyValue("answer_llm.workflow", input.workflow())
                 .addKeyValue("answer_llm.length", trimmed.length())
-                .log("answer LLM generated: intent={}, workflow={}, length={}",
-                        input.intent(), input.workflow(), trimmed.length());
+                .log("{}: intent={}, workflow={}, length={}",
+                        logMessage, input.intent(), input.workflow(), trimmed.length());
         return trimmed;
     }
 

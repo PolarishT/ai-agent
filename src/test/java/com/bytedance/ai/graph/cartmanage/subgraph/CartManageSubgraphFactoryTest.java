@@ -1043,8 +1043,20 @@ class CartManageSubgraphFactoryTest {
     }
 
     private static CartItemView item(Long itemId, Long spuId, String skuId, String title, int quantity) {
-        return new CartItemView(itemId, spuId, "SPU-" + spuId + ":" + skuId, title, "brand", null, quantity,
+        Long parsedSkuId = parseLongOrNull(skuId);
+        return new CartItemView(itemId, spuId, parsedSkuId, "SPU-" + spuId + ":" + skuId, title, "brand", null, quantity,
                 new BigDecimal("9.90"), new BigDecimal("9.90"), 10);
+    }
+
+    private static Long parseLongOrNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.valueOf(value);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private static CartView cart(CartItemView... items) {

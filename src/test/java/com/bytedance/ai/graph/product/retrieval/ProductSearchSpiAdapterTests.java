@@ -69,6 +69,7 @@ class ProductSearchSpiAdapterTests {
                 new ProductRrfFusion(properties),
                 new ProductBaseRanker(properties),
                 properties,
+                Runnable::run,
                 Runnable::run
         );
     }

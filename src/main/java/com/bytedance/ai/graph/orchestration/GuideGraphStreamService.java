@@ -80,12 +80,17 @@ public class GuideGraphStreamService implements GuideGraphStreamFacade {
                                 ));
                             } else {
                                 answerText(finalState).ifPresent(answer -> {
-                                    String streamAnswer = statusConsistentAnswer(summary, answer);
+                                    boolean answerStreamed = answerStreamed(finalState);
+                                    String streamAnswer = answerStreamed
+                                            ? answer
+                                            : statusConsistentAnswer(summary, answer);
                                     String messageId = saveAssistantMessage(request, streamAnswer, "SUCCEEDED");
-                                    emitNext(eventSink, GuideGraphStreamEvents.answerDelta(
-                                            request.correlationId(),
-                                            streamAnswer
-                                    ));
+                                    if (!answerStreamed) {
+                                        emitNext(eventSink, GuideGraphStreamEvents.answerDelta(
+                                                request.correlationId(),
+                                                streamAnswer
+                                        ));
+                                    }
                                     if (messageId != null) {
                                         emitNext(eventSink, GuideGraphStreamEvents.answerCompleted(
                                                 request.correlationId(),
@@ -176,6 +181,15 @@ public class GuideGraphStreamService implements GuideGraphStreamFacade {
                     .filter(value -> !value.isBlank());
         }
         return java.util.Optional.empty();
+    }
+
+    private boolean answerStreamed(OverAllState state) {
+        Object answerContext = state.value(GuideGraphStateKeys.ANSWER_CONTEXT).orElse(null);
+        if (answerContext instanceof Map<?, ?> map) {
+            Object streamed = map.get(GuideGraphStateKeys.ANSWER_STREAMED);
+            return Boolean.TRUE.equals(streamed) || "true".equalsIgnoreCase(String.valueOf(streamed));
+        }
+        return false;
     }
 
     private String statusConsistentAnswer(GuideGraphFinalSummary summary, String answer) {

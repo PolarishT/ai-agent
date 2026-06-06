@@ -3,6 +3,7 @@ package com.bytedance.ai.graph.cart.workflow;
 import com.bytedance.ai.graph.cart.api.CartState;
 import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
+import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
 import java.math.BigDecimal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,12 +34,14 @@ public class CartGuard {
             if (product.totalStock() == null || product.totalStock() < quantity) {
                 throw new CartWorkflowException("库存不足，当前无法加入购物车");
             }
-            BigDecimal currentPrice = displayPrice(product);
+            CatalogSkuView sku = resolveSku(product, command.skuId());
+            validateSku(sku, command.skuId(), quantity);
+            BigDecimal currentPrice = displayPrice(product, sku);
             if (command.expectedUnitPrice() != null && currentPrice != null) {
                 int compareToResult = command.expectedUnitPrice().compareTo(currentPrice);
                 log.atInfo()
                         .addKeyValue("cart.product_id", command.spuId())
-                        .addKeyValue("cart.sku_id", command.externalRef())
+                        .addKeyValue("cart.sku_id", command.skuId())
                         .addKeyValue("cart.expected_price", command.expectedUnitPrice())
                         .addKeyValue("cart.current_price", currentPrice)
                         .addKeyValue("cart.expected_price_scale", command.expectedUnitPrice().scale())
@@ -77,7 +80,35 @@ public class CartGuard {
         throw new CartWorkflowException("缺少商品信息，请先选择要加入购物车的商品");
     }
 
-    private BigDecimal displayPrice(CatalogProductView product) {
+    private CatalogSkuView resolveSku(CatalogProductView product, Long skuId) {
+        if (skuId == null) {
+            return null;
+        }
+        return product.skus() == null ? null : product.skus().stream()
+                .filter(candidate -> candidate != null && skuId.equals(candidate.id()))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private void validateSku(CatalogSkuView sku, Long skuId, int quantity) {
+        if (skuId == null) {
+            return;
+        }
+        if (sku == null) {
+            throw new CartWorkflowException("SKU 不属于该商品，无法加入购物车");
+        }
+        if (!"ACTIVE".equals(sku.status())) {
+            throw new CartWorkflowException("SKU 已下架，无法加入购物车");
+        }
+        if (sku.stock() == null || sku.stock() < quantity) {
+            throw new CartWorkflowException("SKU 库存不足，当前无法加入购物车");
+        }
+    }
+
+    private BigDecimal displayPrice(CatalogProductView product, CatalogSkuView sku) {
+        if (sku != null && sku.price() != null) {
+            return sku.price();
+        }
         return product.priceMin() != null ? product.priceMin() : product.priceMax();
     }
 }

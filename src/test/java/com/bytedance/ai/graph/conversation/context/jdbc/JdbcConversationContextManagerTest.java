@@ -15,6 +15,12 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -249,6 +255,97 @@ class JdbcConversationContextManagerTest {
         assertThat(loaded.taskChains().get(0).taskChainId()).isEqualTo("chain-fresh");
         assertThat(count("TASK_CHAIN", "ACTIVE")).isEqualTo(1);
         assertThat(count("TASK_CHAIN", "EXPIRED")).isEqualTo(0);
+    }
+
+    @Test
+    void concurrentMarkPlanTaskMergesBothUpdatesWithoutLoss() throws Exception {
+        // 两个独立 PENDING 任务的链：模拟同一会话两个并发 turn 各推进一个任务。
+        LocalDateTime now = LocalDateTime.now();
+        ConversationRuntimeContext.PlanTask task1 = new ConversationRuntimeContext.PlanTask(
+                "task-1", "搜商品", "PRODUCT_SEARCH", "product_query_workflow", 1, "PENDING");
+        ConversationRuntimeContext.PlanTask task2 = new ConversationRuntimeContext.PlanTask(
+                "task-2", "加购物车", "ADD_TO_CART", "cart_manage_workflow", 2, "PENDING");
+        ConversationRuntimeContext.TaskChain chain = new ConversationRuntimeContext.TaskChain(
+                null, "chain-1", 1, "EXECUTING",
+                new ConversationRuntimeContext.UserGoal("PRODUCT_DISCOVERY", "买杯水", true, "RUNNING"),
+                List.of(task1, task2), List.of(), "turn-0", "turn-0", now, now
+        );
+        manager.saveTaskChain("u1", "c1", "turn-0", "main_intent_router", chain, null);
+
+        // 子类编排出确定性竞争：两个 turn 都以同一旧活跃行（row#1）为基准（首读卡栅栏），
+        // 但让先到者（A）完整写完 row#2 后，后到者（B）才带着陈旧基准去写——B 的 supersedeById 必
+        // 然命中 0 行（CAS 落败）→ 重新加载 row#2 再应用。单测无 Spring 事务、按语句自动提交，
+        // 这样排序可避开 supersede 与 insert 之间的非原子空窗，同时仍真实触发"基于旧 chain 更新"。
+        AtomicBoolean firstComer = new AtomicBoolean(true);
+        CountDownLatch laterCapturedStaleBase = new CountDownLatch(1);
+        CountDownLatch earlierFinishedWrite = new CountDownLatch(1);
+        JdbcConversationContextManager racing = new JdbcConversationContextManager(
+                new NamedParameterJdbcTemplate(jdbc),
+                new JdbcAgentConversationRepository(jdbc),
+                new RagJsonCodec(JsonMapper.builder().build())
+        ) {
+            final ThreadLocal<Boolean> firstLoad = ThreadLocal.withInitial(() -> Boolean.TRUE);
+
+            @Override
+            public ConversationRuntimeContext.TaskChain loadTaskChain(String u, String c, String id) {
+                ConversationRuntimeContext.TaskChain loaded = super.loadTaskChain(u, c, id);
+                if (!Boolean.TRUE.equals(firstLoad.get())) {
+                    return loaded; // 重试读直接放行
+                }
+                firstLoad.set(Boolean.FALSE);
+                try {
+                    if (firstComer.getAndSet(false)) {
+                        // A：先到者，等 B 也读到 row#1（陈旧基准就位）后再返回去写
+                        laterCapturedStaleBase.await(5, TimeUnit.SECONDS);
+                    } else {
+                        // B：后到者，宣告已读到 row#1，再等 A 把 row#2 整段写完
+                        laterCapturedStaleBase.countDown();
+                        earlierFinishedWrite.await(5, TimeUnit.SECONDS);
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return loaded;
+            }
+        };
+
+        ConversationRuntimeContext.TaskStep step1 = new ConversationRuntimeContext.TaskStep(
+                1, "step-1", "PRODUCT_SEARCH", "搜", "product_query_workflow", "SUCCEEDED",
+                "turn-1", now, now, Map.of("candidateCount", 3));
+        ConversationRuntimeContext.TaskStep step2 = new ConversationRuntimeContext.TaskStep(
+                1, "step-2", "ADD_TO_CART", "加购", "cart_manage_workflow", "SUCCEEDED",
+                "turn-2", now, now, Map.of("quantity", 1));
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<Boolean> f1 = pool.submit(() -> {
+                try {
+                    return racing.markPlanTask("u1", "c1", "chain-1", "task-1", "SUCCEEDED", step1, "turn-1");
+                } finally {
+                    earlierFinishedWrite.countDown(); // A 写完整段后放行 B；B 调用为幂等空操作
+                }
+            });
+            Future<Boolean> f2 = pool.submit(() -> {
+                try {
+                    return racing.markPlanTask("u1", "c1", "chain-1", "task-2", "SUCCEEDED", step2, "turn-2");
+                } finally {
+                    earlierFinishedWrite.countDown();
+                }
+            });
+            assertThat(f1.get(10, TimeUnit.SECONDS)).isTrue();
+            assertThat(f2.get(10, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            pool.shutdownNow();
+        }
+
+        // 没有丢更新：两个任务都 SUCCEEDED、两条 step 都在，且只有一行 ACTIVE。
+        ConversationRuntimeContext.TaskChain merged = manager.loadTaskChain("u1", "c1", "chain-1");
+        assertThat(merged).isNotNull();
+        assertThat(merged.planTasks()).extracting(ConversationRuntimeContext.PlanTask::status)
+                .containsOnly("SUCCEEDED");
+        assertThat(merged.steps()).extracting(ConversationRuntimeContext.TaskStep::stepId)
+                .containsExactlyInAnyOrder("step-1", "step-2");
+        assertThat(count("TASK_CHAIN", "ACTIVE")).isEqualTo(1);
     }
 
     private ConversationRuntimeContext.ProductCandidateItem candidate(

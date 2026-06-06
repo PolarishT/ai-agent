@@ -152,6 +152,17 @@ public class JdbcCatalogProductRepository implements CatalogProductRepository {
         return updated > 0;
     }
 
+    /**
+     * 原子认领属性抽取任务（CAS）。
+     *
+     * <p>PostgreSQL：单条带条件 UPDATE —— 仅当 {@code attributesStatus} 不是 RUNNING/DONE 时
+     * 才置为 RUNNING 并令命中行数 &gt; 0。并发投递或重复消息中只有第一个事务能命中 1 行、返回
+     * true，其余命中 0、返回 false，从而避免重复调用 LLM。FAILED 不在排除集内，允许失败后重投
+     * 递重新认领。
+     *
+     * <p>H2（测试库，raw_json 为 CLOB、无 jsonb 函数）：退化为宽松认领（行存在即返回 true），
+     * 不保证 CAS —— 仅供单线程测试流程跑通，生产环境走 PostgreSQL。
+     */
     @Override
     public boolean markAttributeExtractionRunning(Long productId) {
         return Boolean.TRUE.equals(jdbc.execute((Connection connection) -> {
@@ -161,9 +172,12 @@ public class JdbcCatalogProductRepository implements CatalogProductRepository {
                            SET raw_json = jsonb_set(coalesce(raw_json, '{}'::jsonb), '{attributesStatus}', to_jsonb(?::text), true),
                                updated_at = now()
                          WHERE id = ?
+                           AND coalesce(raw_json ->> 'attributesStatus', '') NOT IN (?, ?)
                         """)) {
                     statement.setString(1, ATTR_STATUS_RUNNING);
                     statement.setLong(2, productId);
+                    statement.setString(3, ATTR_STATUS_RUNNING);
+                    statement.setString(4, ATTR_STATUS_DONE);
                     return statement.executeUpdate() > 0;
                 }
             }
@@ -180,7 +194,13 @@ public class JdbcCatalogProductRepository implements CatalogProductRepository {
         int updated = jdbc.update(connection -> {
             PreparedStatement statement = connection.prepareStatement(updateAttributesSql(connection));
             statement.setString(1, jsonCodec.write(attributesJson == null ? Map.of() : attributesJson));
-            statement.setLong(2, productId);
+            if (isPostgreSql(connection)) {
+                // PG：抽取成功后把状态推进到 DONE，使后续重复消息在 CAS 条件下被拒绝。
+                statement.setString(2, ATTR_STATUS_DONE);
+                statement.setLong(3, productId);
+            } else {
+                statement.setLong(2, productId);
+            }
             return statement;
         });
         if (updated == 0) {
@@ -190,10 +210,25 @@ public class JdbcCatalogProductRepository implements CatalogProductRepository {
 
     @Override
     public void markAttributeExtractionFailed(Long productId, String errorMessage) {
-        int updated = jdbc.update(
-                "UPDATE catalog_product SET updated_at = now() WHERE id = ?",
-                productId
-        );
+        // errorMessage 暂不落库（catalog_product 无错误列）；仅把状态推进到 FAILED，
+        // 使 CAS 允许后续重投递重新认领（FAILED 不在 markAttributeExtractionRunning 的排除集内）。
+        int updated = jdbc.update(connection -> {
+            if (isPostgreSql(connection)) {
+                PreparedStatement statement = connection.prepareStatement("""
+                        UPDATE catalog_product
+                           SET raw_json = jsonb_set(coalesce(raw_json, '{}'::jsonb), '{attributesStatus}', to_jsonb(?::text), true),
+                               updated_at = now()
+                         WHERE id = ?
+                        """);
+                statement.setString(1, ATTR_STATUS_FAILED);
+                statement.setLong(2, productId);
+                return statement;
+            }
+            PreparedStatement statement = connection.prepareStatement(
+                    "UPDATE catalog_product SET updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+            statement.setLong(1, productId);
+            return statement;
+        });
         if (updated == 0) {
             throw new EmptyResultDataAccessException("catalog_product 不存在: " + productId, 1);
         }
@@ -218,7 +253,13 @@ public class JdbcCatalogProductRepository implements CatalogProductRepository {
 
     private String updateAttributesSql(Connection connection) throws SQLException {
         if (isPostgreSql(connection)) {
-            return "UPDATE catalog_product SET attributes_json = CAST(? AS jsonb), updated_at = now() WHERE id = ?";
+            return """
+                    UPDATE catalog_product
+                       SET attributes_json = CAST(? AS jsonb),
+                           raw_json = jsonb_set(coalesce(raw_json, '{}'::jsonb), '{attributesStatus}', to_jsonb(?::text), true),
+                           updated_at = now()
+                     WHERE id = ?
+                    """;
         }
         return "UPDATE catalog_product SET attributes_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?";
     }

@@ -7,6 +7,7 @@ import com.bytedance.ai.graph.cart.api.CartView;
 import com.bytedance.ai.graph.catalog.api.CatalogInventoryFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
+import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
 import com.bytedance.ai.graph.order.api.DeliveryAddressView;
 import com.bytedance.ai.graph.order.api.OrderCommandFacade;
 import com.bytedance.ai.graph.order.api.OrderItemView;
@@ -21,9 +22,11 @@ import com.bytedance.ai.graph.order.persistence.DeliveryAddressRepository;
 import com.bytedance.ai.graph.order.persistence.OrderItemRecord;
 import com.bytedance.ai.graph.order.persistence.OrderItemRepository;
 import java.math.BigDecimal;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -61,6 +64,14 @@ public class OrderService implements OrderCommandFacade, OrderQueryFacade {
         this.itemRepository = itemRepository;
     }
 
+    /**
+     * 库存扣减顺序：按 (spuId, skuId) 升序。让所有并发下单事务以一致的全局顺序获取
+     * catalog_sku / catalog_product 行锁，消除两笔订单反序扣减引发的 AB-BA 死锁。
+     */
+    private static final Comparator<CartItemView> STOCK_LOCK_ORDER = Comparator
+            .comparing(CartItemView::spuId, Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparing(CartItemView::skuId, Comparator.nullsLast(Comparator.naturalOrder()));
+
     @Override
     @Transactional(propagation = Propagation.REQUIRED, rollbackFor = Exception.class)
     public PlaceOrderResult placeOrder(String userId, String conversationId, Map<String, Object> address, boolean confirmPriceChange) {
@@ -76,24 +87,33 @@ public class OrderService implements OrderCommandFacade, OrderQueryFacade {
         DeliveryAddressRecord deliveryAddress = resolveAddress(userId, address);
         Map<String, Object> addressMap = toAddressMap(deliveryAddress);
         CartView placedCart = cartCommandFacade.checkout(userId, conversationId, addressMap);
-        for (CartItemView item : placedCart.items()) {
-            inventoryFacade.decreaseStock(item.spuId(), item.quantity());
+        // 按统一锁顺序扣减库存，避免并发下单的 AB-BA 死锁（见 STOCK_LOCK_ORDER）。
+        for (CartItemView item : placedCart.items().stream().sorted(STOCK_LOCK_ORDER).toList()) {
+            inventoryFacade.decreaseStock(item.spuId(), item.skuId(), item.quantity());
         }
-        CustomerOrderRecord order = orderRepository.save(
-                placedCart.cartId(),
-                userId,
-                conversationId,
-                placedCart.currency(),
-                placedCart.subtotalAmount(),
-                placedCart.itemCount(),
-                deliveryAddress.id(),
-                addressMap,
-                priceChanges.stream().map(this::priceChangeMap).toList()
-        );
+        CustomerOrderRecord order;
+        try {
+            order = orderRepository.save(
+                    placedCart.cartId(),
+                    userId,
+                    conversationId,
+                    placedCart.currency(),
+                    placedCart.subtotalAmount(),
+                    placedCart.itemCount(),
+                    deliveryAddress.id(),
+                    addressMap,
+                    priceChanges.stream().map(this::priceChangeMap).toList()
+            );
+        } catch (DuplicateKeyException duplicate) {
+            // 命中唯一索引 uq_customer_order_cart_id：同一购物车已生成订单（并发 / 重复提交）。
+            // 抛出后整笔事务回滚，前面的库存扣减与购物车结算一并撤销，杜绝重复下单与重复扣库存。
+            throw new IllegalStateException("该购物车已生成订单，请勿重复下单", duplicate);
+        }
         for (CartItemView item : placedCart.items()) {
             itemRepository.save(
                     order.id(),
                     item.spuId(),
+                    item.skuId(),
                     item.externalRef(),
                     item.title(),
                     item.brand(),
@@ -123,7 +143,7 @@ public class OrderService implements OrderCommandFacade, OrderQueryFacade {
 
     private PriceChangeView detectPriceChange(CartItemView item) {
         CatalogProductView product = catalogQueryFacade.getProduct(item.spuId());
-        BigDecimal current = displayPrice(product);
+        BigDecimal current = displayPrice(product, item.skuId());
         if (item.unitPrice() == null || current == null || item.unitPrice().compareTo(current) == 0) {
             return null;
         }
@@ -138,8 +158,22 @@ public class OrderService implements OrderCommandFacade, OrderQueryFacade {
                 .orElseGet(() -> addressRepository.saveDefaultIfAbsent(userId));
     }
 
-    private BigDecimal displayPrice(CatalogProductView product) {
+    private BigDecimal displayPrice(CatalogProductView product, Long skuId) {
+        CatalogSkuView sku = selectedSku(product, skuId);
+        if (sku != null && sku.price() != null) {
+            return sku.price();
+        }
         return product.priceMin() != null ? product.priceMin() : product.priceMax();
+    }
+
+    private CatalogSkuView selectedSku(CatalogProductView product, Long skuId) {
+        if (skuId == null || product.skus() == null) {
+            return null;
+        }
+        return product.skus().stream()
+                .filter(sku -> sku != null && skuId.equals(sku.id()))
+                .findFirst()
+                .orElse(null);
     }
 
     private Map<String, Object> toAddressMap(DeliveryAddressRecord address) {
@@ -211,6 +245,7 @@ public class OrderService implements OrderCommandFacade, OrderQueryFacade {
         return new OrderItemView(
                 item.id(),
                 item.spuId(),
+                item.skuId(),
                 item.externalRef(),
                 item.title(),
                 item.brand(),

@@ -27,6 +27,7 @@ public class JdbcOrderItemRepository implements OrderItemRepository {
     public void save(
             Long orderId,
             Long spuId,
+            Long skuId,
             String externalRef,
             String title,
             String brand,
@@ -38,12 +39,13 @@ public class JdbcOrderItemRepository implements OrderItemRepository {
         jdbc.update(
                 """
                 INSERT INTO order_item (
-                    order_id, spu_id, external_ref, title, brand, image_url,
+                    order_id, spu_id, sku_id, external_ref, title, brand, image_url,
                     quantity, unit_price, line_amount
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 orderId,
                 spuId,
+                skuId,
                 externalRef,
                 title,
                 brand,
@@ -64,6 +66,7 @@ public class JdbcOrderItemRepository implements OrderItemRepository {
                 rs.getLong("id"),
                 rs.getLong("order_id"),
                 rs.getLong("spu_id"),
+                (Long) rs.getObject("sku_id"),
                 rs.getString("external_ref"),
                 rs.getString("title"),
                 rs.getString("brand"),

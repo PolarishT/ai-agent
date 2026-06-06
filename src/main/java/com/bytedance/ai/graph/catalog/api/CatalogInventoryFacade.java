@@ -5,5 +5,9 @@ package com.bytedance.ai.graph.catalog.api;
  */
 public interface CatalogInventoryFacade {
 
-    void decreaseStock(Long spuId, int quantity);
+    default void decreaseStock(Long productId, int quantity) {
+        decreaseStock(productId, null, quantity);
+    }
+
+    void decreaseStock(Long productId, Long skuId, int quantity);
 }

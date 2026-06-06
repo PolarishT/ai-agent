@@ -16,6 +16,7 @@ import com.bytedance.ai.graph.cart.workflow.CartStateMachineFactory;
 import com.bytedance.ai.graph.cart.workflow.CartTransitionAuditService;
 import com.bytedance.ai.graph.cart.workflow.CartWorkflowException;
 import com.bytedance.ai.graph.catalog.api.CatalogProductView;
+import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
@@ -68,6 +69,7 @@ public class ShoppingCartService implements CartCommandFacade, CartQueryFacade {
             String userId,
             String conversationId,
             Long spuId,
+            Long skuId,
             String externalRef,
             Integer quantity,
             BigDecimal expectedUnitPrice
@@ -77,6 +79,7 @@ public class ShoppingCartService implements CartCommandFacade, CartQueryFacade {
                 userId,
                 conversationId,
                 spuId,
+                skuId,
                 externalRef,
                 quantity,
                 expectedUnitPrice,
@@ -87,10 +90,12 @@ public class ShoppingCartService implements CartCommandFacade, CartQueryFacade {
                 Map.of()
         );
         CatalogProductView product = transition(cart, CartEvent.CONFIRM_ADD, command);
+        CatalogSkuView sku = selectedSku(product, skuId);
         int effectiveQuantity = effectiveQuantity(quantity);
         itemRepository.upsertActive(
                 cart.id(),
                 product.id(),
+                sku == null ? null : sku.id(),
                 // catalog_product 已无 external_ref 列；沿用全代码库的兼容约定填 productId 字符串，
                 // 保证 cart_item.external_ref 非空且与 spu_id 指向同一商品。
                 String.valueOf(product.id()),
@@ -98,8 +103,8 @@ public class ShoppingCartService implements CartCommandFacade, CartQueryFacade {
                 product.brand(),
                 firstImage(product),
                 effectiveQuantity,
-                displayPrice(product),
-                product.totalStock()
+                displayPrice(product, sku),
+                stockSnapshot(product, sku)
         );
         recomputeTotals(cart.id());
         return toView(refresh(cart.id()));
@@ -125,7 +130,14 @@ public class ShoppingCartService implements CartCommandFacade, CartQueryFacade {
         int effectiveQuantity = effectiveQuantity(quantity);
         CartItemRecord item = itemRepository.findActive(cart.id(), itemId, spuId, externalRef)
                 .orElseThrow(() -> new CartWorkflowException("购物车中未找到该商品"));
-        CartCommand command = CartCommand.of(userId, conversationId, item.spuId(), item.externalRef(), effectiveQuantity);
+        CartCommand command = CartCommand.of(
+                userId,
+                conversationId,
+                item.spuId(),
+                item.skuId(),
+                item.externalRef(),
+                effectiveQuantity
+        );
         transition(cart, CartEvent.UPDATE_QTY, command);
         itemRepository.updateQuantity(item.id(), effectiveQuantity);
         recomputeTotals(cart.id());
@@ -142,6 +154,7 @@ public class ShoppingCartService implements CartCommandFacade, CartQueryFacade {
         CartCommand command = new CartCommand(
                 userId,
                 conversationId,
+                null,
                 null,
                 null,
                 null,
@@ -210,7 +223,9 @@ public class ShoppingCartService implements CartCommandFacade, CartQueryFacade {
                     throw new CartWorkflowException("非法购物车状态跃迁: currentState=" + fromState + ", event=" + event);
                 }
                 CartState toState = stateMachine.getState().getId();
-                cartRepository.updateState(cart.id(), toState);
+                // 乐观锁：以读到购物车时的 version 为前置条件推进状态，
+                // 并发修改会命中 0 行并抛 CartConcurrencyConflictException，避免丢更新 / 重复结算。
+                cartRepository.updateState(cart.id(), cart.version(), toState);
                 auditService.record(cart, fromState, toState, event, command, true, null, null);
                 return guardedProduct;
             } finally {
@@ -263,6 +278,7 @@ public class ShoppingCartService implements CartCommandFacade, CartQueryFacade {
         return new CartItemView(
                 item.id(),
                 item.spuId(),
+                item.skuId(),
                 item.externalRef(),
                 item.title(),
                 item.brand(),
@@ -278,8 +294,25 @@ public class ShoppingCartService implements CartCommandFacade, CartQueryFacade {
         return quantity == null || quantity <= 0 ? 1 : quantity;
     }
 
-    private BigDecimal displayPrice(CatalogProductView product) {
+    private BigDecimal displayPrice(CatalogProductView product, CatalogSkuView sku) {
+        if (sku != null && sku.price() != null) {
+            return sku.price();
+        }
         return product.priceMin() != null ? product.priceMin() : product.priceMax();
+    }
+
+    private Integer stockSnapshot(CatalogProductView product, CatalogSkuView sku) {
+        return sku == null ? product.totalStock() : sku.stock();
+    }
+
+    private CatalogSkuView selectedSku(CatalogProductView product, Long skuId) {
+        if (skuId == null || product.skus() == null) {
+            return null;
+        }
+        return product.skus().stream()
+                .filter(sku -> sku != null && skuId.equals(sku.id()))
+                .findFirst()
+                .orElseThrow(() -> new CartWorkflowException("SKU 不属于该商品，无法加入购物车"));
     }
 
     private String firstImage(CatalogProductView product) {

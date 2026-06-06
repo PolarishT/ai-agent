@@ -27,7 +27,11 @@ import org.springframework.util.StringUtils;
  * {@code T_profile + T_marketing} 降到 {@code max(T_profile, T_marketing)}。
  *
  * <p>外层 keyword vs semantic 的并发由 {@code ProductSearchSpiAdapter} 负责，本类只关心
- * keyword 通路内部的多 evidence 并行。两层并行使用同一个虚拟线程执行器。
+ * keyword 通路内部的多 evidence 并行。这里调度的 evidence 子任务是<em>叶子</em>（直接打 JDBC），
+ * 跑在 bounded 的 {@code ragVirtualThreadExecutor} 上受 permit 背压；而<em>调用本类的</em> keyword
+ * 父任务是编排任务，由 {@code ProductSearchSpiAdapter} 提交到无界的 {@code ragOrchestrationExecutor}。
+ * 两层<strong>刻意用不同执行器</strong>：否则父任务持 permit 又向同一 bounded 池提交并 join，
+ * 高并发下会嵌套饥饿/死锁，详见 {@code RagConcurrencyConfiguration}。
  *
  * <p>结果按 {@code evidenceTypes} 的迭代顺序累加到 {@link KeywordSearchResult}，
  * 保证日志和原始 hits 列表的顺序稳定（哪怕 future 完成顺序乱序）。

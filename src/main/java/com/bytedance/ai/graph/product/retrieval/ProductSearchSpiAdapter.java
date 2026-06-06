@@ -22,6 +22,17 @@ import java.util.concurrent.TimeoutException;
  * {@link ProductSearchSpi} 的内部适配器：把上层"商品检索"请求翻译为
  * 商品专用 keyword / semantic 召回，再按 productId 聚合并融合排序。
  *
+ * <p><strong>并发模型：</strong>keyword 与 semantic 两路并行提交后 join，但<em>刻意用不同执行器</em>：
+ * <ul>
+ *   <li>keyword 路是<em>编排</em>任务——它内部还会 fan-out 多路 evidence 子任务并 join（见
+ *       {@code KeywordRetrievalRouter}），自身不直接打外部资源，故提交到无界的
+ *       {@code ragOrchestrationExecutor}，不占 bounded 池 permit；</li>
+ *   <li>semantic 路是<em>叶子</em>任务——直接打 Milvus + JDBC，故提交到 bounded 的
+ *       {@code ragVirtualThreadExecutor} 受 permit 背压。</li>
+ * </ul>
+ * 这样可避免「父任务持 permit、又向同一 bounded 池提交子任务并 join」导致的嵌套饥饿/死锁，
+ * 设计理由详见 {@code RagConcurrencyConfiguration}。
+ *
  * <p>降级原因（{@link ProductSearchResult#degradedNotes()}）规范：
  * <ul>
  *   <li>{@code keyword_unavailable} / {@code semantic_unavailable}：分支抛异常或返回 null；</li>
@@ -40,6 +51,7 @@ class ProductSearchSpiAdapter implements ProductSearchSpi {
     private final ProductBaseRanker productBaseRanker;
     private final RagProperties ragProperties;
     private final Executor ragVirtualThreadExecutor;
+    private final Executor ragOrchestrationExecutor;
 
     ProductSearchSpiAdapter(
             ProductKeywordRagRetriever productKeywordRetriever,
@@ -47,7 +59,8 @@ class ProductSearchSpiAdapter implements ProductSearchSpi {
             ProductRrfFusion productRrfFusion,
             ProductBaseRanker productBaseRanker,
             RagProperties ragProperties,
-            @Qualifier("ragVirtualThreadExecutor") Executor ragVirtualThreadExecutor
+            @Qualifier("ragVirtualThreadExecutor") Executor ragVirtualThreadExecutor,
+            @Qualifier("ragOrchestrationExecutor") Executor ragOrchestrationExecutor
     ) {
         this.productKeywordRetriever = productKeywordRetriever;
         this.productSemanticRetrieverProvider = productSemanticRetrieverProvider;
@@ -55,6 +68,7 @@ class ProductSearchSpiAdapter implements ProductSearchSpi {
         this.productBaseRanker = productBaseRanker;
         this.ragProperties = ragProperties;
         this.ragVirtualThreadExecutor = ragVirtualThreadExecutor;
+        this.ragOrchestrationExecutor = ragOrchestrationExecutor;
     }
 
     @Override
@@ -77,9 +91,11 @@ class ProductSearchSpiAdapter implements ProductSearchSpi {
 
         List<String> degradedNotes = new ArrayList<>();
 
+        // keyword 路是编排任务：内部会 fan-out 多路 evidence 子任务并 join，自身不打外部资源。
+        // 跑在无界编排池，避免占着 bounded permit 又去等占 bounded permit 的子任务（嵌套饥饿/死锁）。
         CompletableFuture<List<ProductSearchHit>> keywordFuture = CompletableFuture
                 .supplyAsync(() -> productKeywordRetriever.search(keywordQuery, condition, intent, keywordCandidateTopK),
-                        ragVirtualThreadExecutor);
+                        ragOrchestrationExecutor);
         long keywordTimeout = ragProperties.productQuery().keywordTimeoutMillis();
         if (keywordTimeout > 0) {
             keywordFuture = keywordFuture.orTimeout(keywordTimeout, TimeUnit.MILLISECONDS);
@@ -91,6 +107,7 @@ class ProductSearchSpiAdapter implements ProductSearchSpi {
             degradedNotes.add("semantic_unavailable");
             semanticFuture = CompletableFuture.completedFuture(List.of());
         } else {
+            // semantic 路是叶子任务：直接打 Milvus + JDBC，受 bounded 池 permit 背压。
             semanticFuture = CompletableFuture
                     .supplyAsync(() -> semanticRetriever.search(semanticQuery, condition, intent, semanticCandidateTopK),
                             ragVirtualThreadExecutor);

@@ -36,6 +36,7 @@ public final class GuideGraphStateKeys {
     public static final String EVIDENCE = "evidence";
     public static final String BUSINESS_RESULT = "businessResult";
     public static final String ANSWER_CONTEXT = "answerContext";
+    public static final String ANSWER_STREAMED = "answerStreamed";
     public static final String WORKFLOW_STATUS = "workflow_status";
     public static final String CLARIFY_REASON = "clarify_reason";
     public static final String CART_ACTION = "cart_action";

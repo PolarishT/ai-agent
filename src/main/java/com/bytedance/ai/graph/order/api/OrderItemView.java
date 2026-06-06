@@ -8,6 +8,7 @@ import java.math.BigDecimal;
 public record OrderItemView(
         Long itemId,
         Long spuId,
+        Long skuId,
         String externalRef,
         String title,
         String brand,

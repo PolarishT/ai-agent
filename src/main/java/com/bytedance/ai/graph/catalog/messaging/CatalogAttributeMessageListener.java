@@ -113,7 +113,7 @@ public class CatalogAttributeMessageListener implements RocketMQListener {
                     payload.triggeredBy(),
                     reason
             );
-            // 抛回 FAILURE 让 RocketMQ 重投递。耗尽次数后 catalog_spu 保留 FAILED 供人工 REST 重发。
+            // 抛回 FAILURE 让 RocketMQ 重投递。耗尽次数后 catalog_product 保留 FAILED 供人工 REST 重发。
             return ConsumeResult.FAILURE;
         }
     }

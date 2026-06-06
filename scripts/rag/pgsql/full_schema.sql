@@ -399,6 +399,13 @@ CREATE TABLE public.shopping_cart
 CREATE INDEX idx_shopping_cart_user_conversation
     ON public.shopping_cart (user_id, conversation_id);
 
+-- 同一 (user_id, conversation_id) 至多一辆「活跃」购物车（排除终态 PLACED / CANCELLED，
+-- 这两态后允许为同一对话再开新车）。配合 JdbcShoppingCartRepository 的
+-- INSERT ... ON CONFLICT DO NOTHING 抢占式创建，消除并发首次请求产生的重复活跃购物车。
+CREATE UNIQUE INDEX uq_shopping_cart_active_owner
+    ON public.shopping_cart (user_id, conversation_id)
+    WHERE state NOT IN ('PLACED', 'CANCELLED');
+
 CREATE INDEX idx_shopping_cart_state
     ON public.shopping_cart (state);
 
@@ -411,6 +418,7 @@ CREATE TABLE public.cart_item
     id             bigserial PRIMARY KEY,
     cart_id        bigint                                    NOT NULL,
     spu_id         bigint                                    NOT NULL,
+    sku_id         bigint,
     external_ref   varchar(64),
     title          varchar(255)                              NOT NULL,
     brand          varchar(64),
@@ -427,11 +435,22 @@ CREATE TABLE public.cart_item
     updated_at     timestamp(6) with time zone DEFAULT now() NOT NULL
 );
 
+-- 同一购物车内「同一 SKU 行」唯一，仅约束 ACTIVE 明细。
+-- NULLS NOT DISTINCT（PG15+）让「无 SKU 的同一 SPU」也视为同一行，避免无 SKU 商品重复成行。
+-- 配合 JdbcCartItemRepository 的 INSERT ... ON CONFLICT DO UPDATE 做到并发加购原子合并，杜绝重复明细。
+CREATE UNIQUE INDEX uq_cart_item_active_line
+    ON public.cart_item (cart_id, spu_id, sku_id) NULLS NOT DISTINCT
+    WHERE status = 'ACTIVE';
+
 CREATE INDEX idx_cart_item_cart_status
     ON public.cart_item (cart_id, status);
 
 CREATE INDEX idx_cart_item_spu
     ON public.cart_item (spu_id);
+
+CREATE INDEX idx_cart_item_sku
+    ON public.cart_item (sku_id)
+    WHERE sku_id IS NOT NULL;
 
 -- =========================================================
 -- Cart transition audit
@@ -510,7 +529,9 @@ CREATE TABLE public.customer_order
 CREATE INDEX idx_customer_order_user_created
     ON public.customer_order (user_id ASC, created_at DESC);
 
-CREATE INDEX idx_customer_order_cart_id
+-- 一个购物车至多对应一笔订单：唯一索引兜底，防止并发 / 重复提交产生重复订单。
+-- cart_id 可空，无购物车来源的订单（多 NULL）不受约束。
+CREATE UNIQUE INDEX uq_customer_order_cart_id
     ON public.customer_order (cart_id);
 
 -- =========================================================
@@ -522,6 +543,7 @@ CREATE TABLE public.order_item
     id           bigserial PRIMARY KEY,
     order_id     bigint                                    NOT NULL,
     spu_id       bigint                                    NOT NULL,
+    sku_id       bigint,
     external_ref varchar(64),
     title        varchar(255)                              NOT NULL,
     brand        varchar(64),
@@ -539,6 +561,10 @@ CREATE INDEX idx_order_item_order_id
 
 CREATE INDEX idx_order_item_spu
     ON public.order_item (spu_id);
+
+CREATE INDEX idx_order_item_sku
+    ON public.order_item (sku_id)
+    WHERE sku_id IS NOT NULL;
 
 -- =========================================================
 -- Catalog product

@@ -21,11 +21,13 @@ class GraphCartCommandAdapterTest {
 
         assertThat(commandFacade.expectedUnitPrice).isNull();
         assertThat(commandFacade.spuId).isEqualTo(101L);
+        assertThat(commandFacade.skuId).isEqualTo(4L);
         assertThat(commandFacade.quantity).isEqualTo(2);
     }
 
     private static final class StubCartCommandFacade implements CartCommandFacade {
         Long spuId;
+        Long skuId;
         Integer quantity;
         BigDecimal expectedUnitPrice;
 
@@ -35,9 +37,10 @@ class GraphCartCommandAdapterTest {
         }
 
         @Override
-        public CartView addItem(String userId, String conversationId, Long spuId, String externalRef,
+        public CartView addItem(String userId, String conversationId, Long spuId, Long skuId, String externalRef,
                                 Integer quantity, BigDecimal expectedUnitPrice) {
             this.spuId = spuId;
+            this.skuId = skuId;
             this.quantity = quantity;
             this.expectedUnitPrice = expectedUnitPrice;
             return null;

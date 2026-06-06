@@ -73,6 +73,7 @@ class ShoppingCartServiceTests {
                 10L,
                 cartId,
                 101L,
+                null,
                 "SPU-101",
                 "轻量通勤双肩包",
                 "brand",
@@ -113,7 +114,7 @@ class ShoppingCartServiceTests {
         }
 
         @Override
-        public void updateState(Long id, CartState state) {
+        public void updateState(Long id, long expectedVersion, CartState state) {
         }
 
         @Override
@@ -129,7 +130,7 @@ class ShoppingCartServiceTests {
         final Map<Long, List<CartItemRecord>> itemsByCart = new HashMap<>();
 
         @Override
-        public CartItemRecord upsertActive(Long cartId, Long spuId, String externalRef, String title, String brand,
+        public CartItemRecord upsertActive(Long cartId, Long spuId, Long skuId, String externalRef, String title, String brand,
                                            String imageUrl, int quantity, BigDecimal unitPrice, Integer stockSnapshot) {
             throw new UnsupportedOperationException();
         }

@@ -9,8 +9,10 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
+import reactor.core.publisher.Flux;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -51,6 +53,42 @@ class AnswerLlmServiceTest {
     }
 
     @Test
+    void generateStreamEmitsChunksAndReturnsTrimmedContent() {
+        AtomicReference<String> capturedPrompt = new AtomicReference<>();
+        AnswerLlmService service = serviceWithChatModel(
+                prompt -> {
+                    throw new AssertionError("blocking call should not be used for stream generation");
+                },
+                prompt -> {
+                    capturedPrompt.set(prompt.getInstructions().get(0).getText());
+                    return Flux.just(
+                            chatResponse("  已为你"),
+                            chatResponse("\n"),
+                            chatResponse("找到 3 款"),
+                            chatResponse("符合条件的防晒霜。  ")
+                    );
+                }
+        );
+        List<String> chunks = new ArrayList<>();
+
+        String result = service.generateStream(new AnswerLlmService.AnswerLlmInput(
+                "找防晒霜",
+                "PRODUCT_SEARCH",
+                "product_query_workflow",
+                Map.of("count", 3, "topName", "理肤泉"),
+                null,
+                "给你推荐 3 款"
+        ), chunks::add);
+
+        assertThat(chunks).containsExactly("  已为你", "\n", "找到 3 款", "符合条件的防晒霜。  ");
+        assertThat(result).isEqualTo("已为你\n找到 3 款符合条件的防晒霜。");
+        assertThat(capturedPrompt.get())
+                .contains("找防晒霜")
+                .contains("PRODUCT_SEARCH")
+                .contains("理肤泉");
+    }
+
+    @Test
     void generateWrapsLlmExceptionAsAnswerLlmException() {
         AnswerLlmService service = serviceWithChatModel(prompt -> {
             throw new RuntimeException("simulated upstream timeout");
@@ -86,19 +124,30 @@ class AnswerLlmServiceTest {
     private static AnswerLlmService service(String chatResponse, AtomicReference<String> capturedPrompt) {
         return serviceWithChatModel(prompt -> {
             capturedPrompt.set(prompt.getInstructions().get(0).getText());
-            return new ChatResponse(List.of(new Generation(new AssistantMessage(chatResponse))));
+            return chatResponse(chatResponse);
         });
     }
 
     private static AnswerLlmService serviceWithChatModel(StubChatModelFn fn) {
+        return serviceWithChatModel(fn, null);
+    }
+
+    private static AnswerLlmService serviceWithChatModel(
+            StubChatModelFn fn,
+            StubChatModelStreamFn streamFn
+    ) {
         AnswerPromptFactory factory = new AnswerPromptFactory(
                 "prompts/answer-generation-v1.txt", 4000, 3000);
         factory.init();
         return new AnswerLlmService(
-                ChatClient.create(new StubChatModel(fn)),
+                ChatClient.create(new StubChatModel(fn, streamFn)),
                 factory,
                 new RagJsonCodec(JsonMapper.builder().build())
         );
+    }
+
+    private static ChatResponse chatResponse(String content) {
+        return new ChatResponse(List.of(new Generation(new AssistantMessage(content))));
     }
 
     @FunctionalInterface
@@ -106,10 +155,23 @@ class AnswerLlmServiceTest {
         ChatResponse call(Prompt prompt);
     }
 
-    private record StubChatModel(StubChatModelFn fn) implements ChatModel {
+    @FunctionalInterface
+    private interface StubChatModelStreamFn {
+        Flux<ChatResponse> stream(Prompt prompt);
+    }
+
+    private record StubChatModel(StubChatModelFn fn, StubChatModelStreamFn streamFn) implements ChatModel {
         @Override
         public ChatResponse call(Prompt prompt) {
             return fn.call(prompt);
+        }
+
+        @Override
+        public Flux<ChatResponse> stream(Prompt prompt) {
+            if (streamFn != null) {
+                return streamFn.stream(prompt);
+            }
+            return Flux.just(call(prompt));
         }
     }
 }

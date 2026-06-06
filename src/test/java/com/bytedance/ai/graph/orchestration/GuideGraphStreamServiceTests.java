@@ -8,6 +8,9 @@ import com.bytedance.ai.graph.api.GuideGraphIntent;
 import com.bytedance.ai.graph.api.GuideGraphRequest;
 import com.bytedance.ai.graph.api.GuideNodeExecutionResult;
 import com.bytedance.ai.graph.api.NodeRunStatus;
+import com.bytedance.ai.graph.api.events.AnswerDeltaPayload;
+import com.bytedance.ai.graph.answer.AnswerLlmService;
+import com.bytedance.ai.graph.answer.AnswerPromptFactory;
 import com.bytedance.ai.graph.cartmanage.application.CartCommandService;
 import com.bytedance.ai.graph.cartmanage.CartManageAction;
 import com.bytedance.ai.graph.cartmanage.application.CartManageSlotFillingService;
@@ -22,7 +25,17 @@ import com.bytedance.ai.graph.conversation.persistence.AgentConversationReposito
 import com.bytedance.ai.graph.conversation.ConversationMessage;
 import com.bytedance.ai.graph.intent.MainIntentDecision;
 import com.bytedance.ai.graph.intent.service.MainIntentRouterService;
+import com.bytedance.ai.shared.support.RagJsonCodec;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.Prompt;
+import reactor.core.publisher.Flux;
+import tools.jackson.databind.json.JsonMapper;
+
 import java.math.BigDecimal;
 import java.net.SocketTimeoutException;
 import java.time.OffsetDateTime;
@@ -112,6 +125,53 @@ class GuideGraphStreamServiceTests {
                 .findFirst()
                 .orElseThrow();
         assertThat(String.valueOf(answer.data())).contains("请选择要加入购物车的商品");
+    }
+
+    @Test
+    void answerLlmChunksAreStreamedAndFinalAnswerIsNotRepeated() {
+        StubRepo streamingRepo = new StubRepo();
+        GuideGraphStreamService streamingService = new GuideGraphStreamService(
+                new GuideStateGraphFactory(
+                        streamingRepo,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        streamingAnswerService(List.of("已为你", "找到 3 款", "符合条件的防晒霜。"))
+                ),
+                streamingRepo
+        );
+        GuideGraphRequest request = new GuideGraphRequest(
+                "u-stream",
+                "c-stream",
+                "推荐防晒霜",
+                "run-stream",
+                "req-stream",
+                null,
+                "corr-stream",
+                GuideGraphIntent.INVENTORY_QUERY,
+                List.of()
+        );
+
+        List<AgentStreamEvent> events = streamingService.turnStream(request).collectList().block();
+
+        assertThat(events).isNotNull();
+        List<String> deltas = events.stream()
+                .filter(event -> AgentStreamEventType.ANSWER_DELTA.eventName().equals(event.event()))
+                .map(event -> ((AnswerDeltaPayload) event.data()).text())
+                .toList();
+        assertThat(deltas).containsExactly("已为你", "找到 3 款", "符合条件的防晒霜。");
+        String fullAnswer = String.join("", deltas);
+        assertThat(fullAnswer).isEqualTo("已为你找到 3 款符合条件的防晒霜。");
+        assertThat(streamingRepo.assistantMessages()).hasSize(1);
+        assertThat(streamingRepo.assistantMessages().get(0).content()).isEqualTo(fullAnswer);
+        assertThat(events).extracting(AgentStreamEvent::event)
+                .contains(AgentStreamEventType.ANSWER_COMPLETED.eventName());
     }
 
     @Test
@@ -425,6 +485,33 @@ class GuideGraphStreamServiceTests {
         public MainIntentDecision route(String userMessage, String conversationMemory) {
             throw new RuntimeException(new SocketTimeoutException("intent service timeout"));
         }
+    }
+
+    private static AnswerLlmService streamingAnswerService(List<String> chunks) {
+        AnswerPromptFactory factory = new AnswerPromptFactory(
+                "prompts/answer-generation-v1.txt", 4000, 3000);
+        factory.init();
+        return new AnswerLlmService(
+                ChatClient.create(new StreamingChatModel(chunks)),
+                factory,
+                new RagJsonCodec(JsonMapper.builder().build())
+        );
+    }
+
+    private record StreamingChatModel(List<String> chunks) implements ChatModel {
+        @Override
+        public ChatResponse call(Prompt prompt) {
+            throw new AssertionError("blocking call should not be used for stream generation");
+        }
+
+        @Override
+        public Flux<ChatResponse> stream(Prompt prompt) {
+            return Flux.fromIterable(chunks).map(GuideGraphStreamServiceTests::chatResponse);
+        }
+    }
+
+    private static ChatResponse chatResponse(String content) {
+        return new ChatResponse(List.of(new Generation(new AssistantMessage(content))));
     }
 
     private static final class StubSlotFilling extends CartManageSlotFillingService {

@@ -33,5 +33,3 @@
 
 [最近对话]
 {{recentContext}}
-
-输出 JSON：

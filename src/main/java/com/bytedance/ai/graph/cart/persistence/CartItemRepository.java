@@ -12,6 +12,7 @@ public interface CartItemRepository {
     CartItemRecord upsertActive(
             Long cartId,
             Long spuId,
+            Long skuId,
             String externalRef,
             String title,
             String brand,

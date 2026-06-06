@@ -272,7 +272,8 @@ public class GuideStateGraphFactory {
             graph.addNode(GuideGraphNodeNames.BUILD_ANSWER_CONTEXT,
                     AsyncNodeAction.node_async(state -> nodeTemplate.execute(
                             GuideGraphNodeNames.BUILD_ANSWER_CONTEXT, state,
-                            actionOverrides.getOrDefault(GuideGraphNodeNames.BUILD_ANSWER_CONTEXT, this::buildAnswerContext))));
+                            actionOverrides.getOrDefault(GuideGraphNodeNames.BUILD_ANSWER_CONTEXT,
+                                    answerState -> buildAnswerContext(answerState, eventSink)))));
 
             graph.addEdge(StateGraph.START, GuideGraphNodeNames.CHECK_CONVERSATION);
             graph.addConditionalEdges(
@@ -734,6 +735,13 @@ public class GuideStateGraphFactory {
     }
 
     private GuideNodeExecutionResult buildAnswerContext(OverAllState state) {
+        return buildAnswerContext(state, null);
+    }
+
+    private GuideNodeExecutionResult buildAnswerContext(
+            OverAllState state,
+            Consumer<AgentStreamEvent> eventSink
+    ) {
         Map<String, Object> answerContext = new LinkedHashMap<>();
         answerContext.put("intent", GuideGraphStateValues.intent(state, GuideGraphStateKeys.INTENT)
                 .orElse(GuideGraphIntent.CLARIFY).name());
@@ -776,19 +784,32 @@ public class GuideStateGraphFactory {
                 .orElseGet(() -> fallbackAnswer(state));
         String answer = ruleAnswer;
         String answerSource = "rule";
-        if (answerLlmService != null) {
-            String llmAnswer = tryLlmAnswer(state, targetWorkflow, workflowResult, ruleAnswer);
+        boolean answerStreamed = false;
+        if (answerLlmService != null && success) {
+            String llmAnswer = eventSink == null
+                    ? tryLlmAnswer(state, targetWorkflow, workflowResult, ruleAnswer)
+                    : tryStreamingLlmAnswer(state, targetWorkflow, workflowResult, ruleAnswer, eventSink);
             if (StringUtils.hasText(llmAnswer)) {
                 answer = llmAnswer;
                 answerSource = "llm";
+                answerStreamed = eventSink != null;
             }
         }
         answerContext.put("answer", answer);
         answerContext.put("answerSource", answerSource);
+        if (answerStreamed) {
+            answerContext.put(GuideGraphStateKeys.ANSWER_STREAMED, true);
+        }
         answerContext.put("todo", false);
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("answerReady", true);
+        metadata.put("todo", false);
+        if (answerStreamed) {
+            metadata.put(GuideGraphStateKeys.ANSWER_STREAMED, true);
+        }
         return GuideNodeExecutionResult.withStateUpdates(
                 Map.of(GuideGraphStateKeys.ANSWER_CONTEXT, Map.copyOf(answerContext)),
-                Map.of("answerReady", true, "todo", false)
+                Map.copyOf(metadata)
         );
     }
 
@@ -799,15 +820,7 @@ public class GuideStateGraphFactory {
     private String tryLlmAnswer(
             OverAllState state, String targetWorkflow, Object workflowResult, String ruleAnswer
     ) {
-        String intent = GuideGraphStateValues.intent(state, GuideGraphStateKeys.INTENT)
-                .map(Enum::name)
-                .orElse(GuideGraphIntent.CLARIFY.name());
-        String userMessage = state.value(GuideGraphStateKeys.MESSAGE, "");
-        String turnId = state.value(GuideGraphStateKeys.RUN_ID, "");
-        String requestId = state.value(GuideGraphStateKeys.REQUEST_ID, "");
-        RuntimeContextView view = RuntimeContextView.from(freshContext(state), turnId, requestId);
-        AnswerLlmService.AnswerLlmInput input = new AnswerLlmService.AnswerLlmInput(
-                userMessage, intent, targetWorkflow, workflowResult, view, ruleAnswer);
+        AnswerLlmService.AnswerLlmInput input = answerLlmInput(state, targetWorkflow, workflowResult, ruleAnswer);
         try {
             return answerLlmService.generate(input);
         } catch (AnswerLlmService.AnswerLlmException ex) {
@@ -817,6 +830,43 @@ public class GuideStateGraphFactory {
             log.warn("unexpected error from answer LLM, falling back to rule answer: {}", ex.toString());
             return null;
         }
+    }
+
+    private String tryStreamingLlmAnswer(
+            OverAllState state,
+            String targetWorkflow,
+            Object workflowResult,
+            String ruleAnswer,
+            Consumer<AgentStreamEvent> eventSink
+    ) {
+        String correlationId = state.value(GuideGraphStateKeys.CORRELATION_ID, "");
+        AnswerLlmService.AnswerLlmInput input = answerLlmInput(state, targetWorkflow, workflowResult, ruleAnswer);
+        try {
+            return answerLlmService.generateStream(
+                    input,
+                    chunk -> eventSink.accept(GuideGraphStreamEvents.answerDelta(correlationId, chunk))
+            );
+        } catch (AnswerLlmService.AnswerLlmException ex) {
+            log.warn("answer LLM stream unavailable, falling back to rule answer: {}", ex.toString());
+            return null;
+        } catch (RuntimeException ex) {
+            log.warn("unexpected error from answer LLM stream, falling back to rule answer: {}", ex.toString());
+            return null;
+        }
+    }
+
+    private AnswerLlmService.AnswerLlmInput answerLlmInput(
+            OverAllState state, String targetWorkflow, Object workflowResult, String ruleAnswer
+    ) {
+        String intent = GuideGraphStateValues.intent(state, GuideGraphStateKeys.INTENT)
+                .map(Enum::name)
+                .orElse(GuideGraphIntent.CLARIFY.name());
+        String userMessage = state.value(GuideGraphStateKeys.MESSAGE, "");
+        String turnId = state.value(GuideGraphStateKeys.RUN_ID, "");
+        String requestId = state.value(GuideGraphStateKeys.REQUEST_ID, "");
+        RuntimeContextView view = RuntimeContextView.from(freshContext(state), turnId, requestId);
+        return new AnswerLlmService.AnswerLlmInput(
+                userMessage, intent, targetWorkflow, workflowResult, view, ruleAnswer);
     }
 
     /**
