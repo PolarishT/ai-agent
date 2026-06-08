@@ -51,6 +51,9 @@ class ReviewSearcherTests {
         searcher.search("有没有人说太甜", ProductQueryCondition.empty("有没有人说太甜"), 5);
         String sql = capturedSql();
         assertThat(sql).contains("r.content");
+        assertThat(sql).contains("to_tsvector('simple'::regconfig, coalesce(r.content, ''::text))");
+        assertThat(sql).contains("plainto_tsquery('simple'::regconfig, :query)");
+        assertThat(sql).contains("lower(coalesce(r.content, ''::text)) LIKE :likeQuery");
         // 不应该用 chunk_text 来 match review 内容
         assertThat(sql).doesNotContain("chunk_text");
     }

@@ -65,12 +65,12 @@ public class MarketingSearcher {
                        p.category  AS category,
                        p.sub_category AS sub_category,
                        MAX(
-                            ts_rank(to_tsvector('simple', coalesce(k.content, '')),
-                                    plainto_tsquery('simple', :query)) * 1.0
-                            + ts_rank(to_tsvector('simple', coalesce(k.title, '')),
-                                      plainto_tsquery('simple', :query)) * 0.6
-                            + CASE WHEN lower(coalesce(k.content, '')) LIKE :likeQuery THEN 0.6 ELSE 0 END
-                            + CASE WHEN lower(coalesce(k.title, '')) LIKE :likeQuery THEN 0.4 ELSE 0 END
+                            ts_rank(to_tsvector('simple'::regconfig, coalesce(k.content, ''::text)),
+                                    plainto_tsquery('simple'::regconfig, :query)) * 1.0
+                            + ts_rank(to_tsvector('simple'::regconfig, coalesce(k.title, ''::text)),
+                                      plainto_tsquery('simple'::regconfig, :query)) * 0.6
+                            + CASE WHEN lower(coalesce(k.content, ''::text)) LIKE :likeQuery THEN 0.6 ELSE 0 END
+                            + CASE WHEN lower(coalesce(k.title, ''::text)) LIKE :likeQuery THEN 0.4 ELSE 0 END
                        ) AS score
                   FROM catalog_product p
                   JOIN catalog_product_knowledge k ON k.product_id = p.id
@@ -81,10 +81,10 @@ public class MarketingSearcher {
                            AND s_mk.status = 'ACTIVE'
                    )
                    AND (
-                        to_tsvector('simple', coalesce(k.content, '') || ' ' || coalesce(k.title, ''))
-                            @@ plainto_tsquery('simple', :query)
-                     OR lower(coalesce(k.content, '')) LIKE :likeQuery
-                     OR lower(coalesce(k.title, '')) LIKE :likeQuery
+                        to_tsvector('simple'::regconfig, coalesce(k.content, ''::text) || ' ' || coalesce(k.title, ''::text))
+                            @@ plainto_tsquery('simple'::regconfig, :query)
+                     OR lower(coalesce(k.content, ''::text)) LIKE :likeQuery
+                     OR lower(coalesce(k.title, ''::text)) LIKE :likeQuery
                    )
                 """);
         MapSqlParameterSource params = new MapSqlParameterSource()

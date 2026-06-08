@@ -1,6 +1,7 @@
 package com.bytedance.ai.graph.catalog.persistence;
 
 import java.math.BigDecimal;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -25,6 +26,8 @@ public interface CatalogProductRepository {
     );
 
     Optional<CatalogProductRecord> findById(Long id);
+
+    List<CatalogProductRecord> findByIds(Collection<Long> ids);
 
     List<CatalogProductRecord> searchActiveByKeyword(String keyword, int limit);
 

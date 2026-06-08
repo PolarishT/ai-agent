@@ -74,16 +74,17 @@ public class FaqSearcher {
                        p.category  AS category,
                        p.sub_category AS sub_category,
                        MAX(
-                            ts_rank(to_tsvector('simple', coalesce(f.%1$s, '')),
-                                    plainto_tsquery('simple', :query)) * 1.6
-                            + CASE WHEN lower(coalesce(f.%1$s, '')) LIKE :likeQuery THEN 0.8 ELSE 0 END
+                            ts_rank(to_tsvector('simple'::regconfig, coalesce(f.%1$s, ''::text)),
+                                    plainto_tsquery('simple'::regconfig, :query)) * 1.6
+                            + CASE WHEN lower(coalesce(f.%1$s, ''::text)) LIKE :likeQuery THEN 0.8 ELSE 0 END
                        ) AS score
                   FROM catalog_product p
                   JOIN catalog_product_faq f ON f.product_id = p.id
                  WHERE p.status = 'ACTIVE'
                    AND (
-                        to_tsvector('simple', coalesce(f.%1$s, '')) @@ plainto_tsquery('simple', :query)
-                     OR lower(coalesce(f.%1$s, '')) LIKE :likeQuery
+                        to_tsvector('simple'::regconfig, coalesce(f.%1$s, ''::text))
+                            @@ plainto_tsquery('simple'::regconfig, :query)
+                     OR lower(coalesce(f.%1$s, ''::text)) LIKE :likeQuery
                    )
                 """;
         StringBuilder sql = new StringBuilder(String.format(sqlTemplate, column));

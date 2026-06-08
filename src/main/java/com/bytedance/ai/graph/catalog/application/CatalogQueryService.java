@@ -3,20 +3,21 @@ package com.bytedance.ai.graph.catalog.application;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogProductReviewView;
+import com.bytedance.ai.graph.catalog.api.CatalogProductSummaryView;
 import com.bytedance.ai.graph.catalog.api.CatalogSkuView;
+import com.bytedance.ai.graph.catalog.persistence.CatalogProductContentRepository;
 import com.bytedance.ai.graph.catalog.persistence.CatalogSkuRecord;
 import com.bytedance.ai.graph.catalog.persistence.CatalogSkuRepository;
 import com.bytedance.ai.graph.catalog.persistence.CatalogProductRecord;
 import com.bytedance.ai.graph.catalog.persistence.CatalogProductRepository;
-import com.bytedance.ai.shared.support.RagJsonCodec;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
-import java.sql.Timestamp;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * 商品目录查询服务，负责组装商品、SKU 和内容视图。
@@ -26,19 +27,16 @@ class CatalogQueryService implements CatalogQueryFacade {
 
     private final CatalogProductRepository productRepository;
     private final CatalogSkuRepository skuRepository;
-    private final JdbcTemplate jdbc;
-    private final RagJsonCodec jsonCodec;
+    private final CatalogProductContentRepository productContentRepository;
 
     CatalogQueryService(
             CatalogProductRepository productRepository,
             CatalogSkuRepository skuRepository,
-            JdbcTemplate jdbc,
-            RagJsonCodec jsonCodec
+            CatalogProductContentRepository productContentRepository
     ) {
         this.productRepository = productRepository;
         this.skuRepository = skuRepository;
-        this.jdbc = jdbc;
-        this.jsonCodec = jsonCodec;
+        this.productContentRepository = productContentRepository;
     }
 
     @Override
@@ -52,35 +50,58 @@ class CatalogQueryService implements CatalogQueryFacade {
     }
 
     @Override
+    public List<CatalogProductSummaryView> findProductSummaries(List<Long> productIds) {
+        List<Long> ids = normalizeProductIds(productIds);
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, CatalogProductRecord> byId = new LinkedHashMap<>();
+        for (CatalogProductRecord record : productRepository.findByIds(ids)) {
+            byId.putIfAbsent(record.id(), record);
+        }
+        List<CatalogProductSummaryView> result = new ArrayList<>(ids.size());
+        for (Long id : ids) {
+            CatalogProductRecord record = byId.get(id);
+            if (record != null) {
+                result.add(toProductSummaryView(record));
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    @Override
     public List<CatalogProductReviewView> listReviews(Long productId, int limit) {
         if (productId == null) {
             return List.of();
         }
-        int safeLimit = limit <= 0 ? 5 : Math.min(limit, 20);
-        return jdbc.query(
-                """
-                SELECT id, product_id, review_index, nickname, rating, content, sentiment,
-                       metadata, created_at, updated_at
-                  FROM catalog_product_review
-                 WHERE product_id = ?
-                 ORDER BY review_index ASC, id ASC
-                 LIMIT ?
-                """,
-                (rs, rowNum) -> new CatalogProductReviewView(
-                        rs.getLong("id"),
-                        rs.getLong("product_id"),
-                        rs.getInt("review_index"),
-                        rs.getString("nickname"),
-                        rs.getObject("rating", Integer.class),
-                        rs.getString("content"),
-                        rs.getString("sentiment"),
-                        readMetadata(rs.getString("metadata")),
-                        toOffsetDateTime(rs.getTimestamp("created_at")),
-                        toOffsetDateTime(rs.getTimestamp("updated_at"))
-                ),
-                productId,
-                safeLimit
-        );
+        return productContentRepository.findReviewsByProductIds(List.of(productId), safeLimit(limit)).stream()
+                .map(CatalogQueryService::toReviewView)
+                .toList();
+    }
+
+    @Override
+    public Map<Long, List<CatalogProductReviewView>> listReviewsByProductIds(
+            List<Long> productIds,
+            int limitPerProduct
+    ) {
+        List<Long> ids = normalizeProductIds(productIds);
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, List<CatalogProductReviewView>> grouped = new LinkedHashMap<>();
+        for (Long id : ids) {
+            grouped.put(id, new ArrayList<>());
+        }
+        for (CatalogProductContentRepository.ReviewRecord record :
+                productContentRepository.findReviewsByProductIds(ids, safeLimit(limitPerProduct))) {
+            List<CatalogProductReviewView> reviews = grouped.get(record.productId());
+            if (reviews != null) {
+                reviews.add(toReviewView(record));
+            }
+        }
+        Map<Long, List<CatalogProductReviewView>> result = new LinkedHashMap<>();
+        grouped.forEach((productId, reviews) -> result.put(productId, List.copyOf(reviews)));
+        return result;
     }
 
     @Override
@@ -124,6 +145,20 @@ class CatalogQueryService implements CatalogQueryFacade {
         );
     }
 
+    private static CatalogProductSummaryView toProductSummaryView(CatalogProductRecord record) {
+        return new CatalogProductSummaryView(
+                record.id(),
+                record.title(),
+                record.brand(),
+                record.category(),
+                record.subCategory(),
+                record.priceMin(),
+                record.priceMax(),
+                record.totalStock(),
+                record.attributesJson()
+        );
+    }
+
     private static CatalogSkuView toSkuView(CatalogSkuRecord record) {
         return new CatalogSkuView(
                 record.id(),
@@ -135,17 +170,33 @@ class CatalogQueryService implements CatalogQueryFacade {
         );
     }
 
-    private Map<String, Object> readMetadata(String metadata) {
-        if (metadata == null || metadata.isBlank()) {
-            return Map.of();
-        }
-        return jsonCodec.readMap(metadata);
+    private static CatalogProductReviewView toReviewView(CatalogProductContentRepository.ReviewRecord record) {
+        return new CatalogProductReviewView(
+                record.id(),
+                record.productId(),
+                record.reviewIndex(),
+                record.nickname(),
+                record.rating(),
+                record.content(),
+                record.sentiment(),
+                record.metadata(),
+                record.createdAt(),
+                record.updatedAt()
+        );
     }
 
-    private static OffsetDateTime toOffsetDateTime(Timestamp timestamp) {
-        if (timestamp == null) {
-            return null;
+    private static int safeLimit(int limit) {
+        return limit <= 0 ? 5 : Math.min(limit, 20);
+    }
+
+    private static List<Long> normalizeProductIds(List<Long> productIds) {
+        if (productIds == null || productIds.isEmpty()) {
+            return List.of();
         }
-        return timestamp.toInstant().atOffset(ZoneOffset.UTC);
+        return productIds.stream()
+                .filter(Objects::nonNull)
+                .collect(LinkedHashSet<Long>::new, LinkedHashSet::add, LinkedHashSet::addAll)
+                .stream()
+                .toList();
     }
 }

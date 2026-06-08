@@ -4,6 +4,8 @@ import com.bytedance.ai.graph.catalog.api.CatalogCommandFacade;
 import com.bytedance.ai.graph.catalog.api.CatalogImportRequest;
 import com.bytedance.ai.graph.catalog.api.CatalogImportSummary;
 import com.bytedance.ai.graph.catalog.api.CatalogProductCreateRequest;
+import com.bytedance.ai.graph.catalog.api.CatalogProductReviewView;
+import com.bytedance.ai.graph.catalog.api.CatalogProductSummaryView;
 import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
 import com.bytedance.ai.graph.catalog.persistence.CatalogAttributeOutboxRecord;
@@ -22,6 +24,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.math.BigDecimal;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -133,6 +136,44 @@ class CatalogModuleTests {
     }
 
     @Test
+    void batchQueriesProductSummariesAndReviews() {
+        CatalogProductCreateRequest first = sampleWithReviews(
+                "p-module-batch-first",
+                List.of(
+                        new CatalogProductCreateRequest.ReviewDraft(
+                                0, "alice", 5, "第一条评价 p-module-batch-first", "POSITIVE", Map.of()),
+                        new CatalogProductCreateRequest.ReviewDraft(
+                                1, "bob", 4, "第二条评价 p-module-batch-first", "POSITIVE", Map.of())
+                )
+        );
+        CatalogProductCreateRequest second = sampleWithReviews(
+                "p-module-batch-second",
+                List.of(new CatalogProductCreateRequest.ReviewDraft(
+                        0, "carol", 3, "第一条评价 p-module-batch-second", "NEUTRAL", Map.of()))
+        );
+
+        CatalogImportSummary summary = catalogCommandFacade.importBatch(new CatalogImportRequest(List.of(first, second)));
+
+        assertThat(summary.failed()).isZero();
+        Long firstId = summary.succeededIds().get(0);
+        Long secondId = summary.succeededIds().get(1);
+
+        assertThat(catalogQueryFacade.findProductSummaries(Arrays.asList(secondId, null, firstId, secondId, 999_999L)))
+                .extracting(CatalogProductSummaryView::id)
+                .containsExactly(secondId, firstId);
+
+        Map<Long, List<CatalogProductReviewView>> reviews =
+                catalogQueryFacade.listReviewsByProductIds(List.of(secondId, firstId, secondId), 1);
+        assertThat(reviews.keySet()).containsExactly(secondId, firstId);
+        assertThat(reviews.get(secondId))
+                .extracting(CatalogProductReviewView::content)
+                .containsExactly("第一条评价 p-module-batch-second");
+        assertThat(reviews.get(firstId))
+                .extracting(CatalogProductReviewView::content)
+                .containsExactly("第一条评价 p-module-batch-first");
+    }
+
+    @Test
     void importBatchPartialSuccessReportsFailures() {
         CatalogProductCreateRequest ok = sample("p-module-ok");
         CatalogProductCreateRequest another = sample("p-module-another");
@@ -211,6 +252,30 @@ class CatalogModuleTests {
                 ),
                 List.of(new CatalogProductCreateRequest.FaqDraft(0, "怎么用", "早晚使用。", Map.of())),
                 List.of(new CatalogProductCreateRequest.ReviewDraft(0, "alice", 5, "很好用", "POSITIVE", Map.of()))
+        );
+    }
+
+    private CatalogProductCreateRequest sampleWithReviews(
+            String rawProductId,
+            List<CatalogProductCreateRequest.ReviewDraft> reviews
+    ) {
+        CatalogProductCreateRequest source = sample(rawProductId);
+        return new CatalogProductCreateRequest(
+                source.title(),
+                source.brand(),
+                source.category(),
+                source.subCategory(),
+                source.basePrice(),
+                source.priceMin(),
+                source.priceMax(),
+                source.totalStock(),
+                source.imagePath(),
+                source.attributesJson(),
+                source.rawJson(),
+                source.skus(),
+                source.knowledge(),
+                source.faqs(),
+                reviews
         );
     }
 

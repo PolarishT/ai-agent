@@ -50,16 +50,17 @@ public class ReviewSearcher {
                        p.category  AS category,
                        p.sub_category AS sub_category,
                        MAX(
-                            ts_rank(to_tsvector('simple', coalesce(r.content, '')),
-                                    plainto_tsquery('simple', :query))
-                            + CASE WHEN lower(coalesce(r.content, '')) LIKE :likeQuery THEN 0.6 ELSE 0 END
+                            ts_rank(to_tsvector('simple'::regconfig, coalesce(r.content, ''::text)),
+                                    plainto_tsquery('simple'::regconfig, :query))
+                            + CASE WHEN lower(coalesce(r.content, ''::text)) LIKE :likeQuery THEN 0.6 ELSE 0 END
                        ) AS score
                   FROM catalog_product p
                   JOIN catalog_product_review r ON r.product_id = p.id
                  WHERE p.status = 'ACTIVE'
                    AND (
-                        to_tsvector('simple', coalesce(r.content, '')) @@ plainto_tsquery('simple', :query)
-                     OR lower(coalesce(r.content, '')) LIKE :likeQuery
+                        to_tsvector('simple'::regconfig, coalesce(r.content, ''::text))
+                            @@ plainto_tsquery('simple'::regconfig, :query)
+                     OR lower(coalesce(r.content, ''::text)) LIKE :likeQuery
                    )
                 """);
         MapSqlParameterSource params = new MapSqlParameterSource()

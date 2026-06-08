@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>用户查询侧性能优化方案</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fa;
+      --panel: #ffffff;
+      --ink: #1f2937;
+      --muted: #6b7280;
+      --line: #d8dee8;
+      --accent: #176b87;
+      --accent-soft: #e5f3f6;
+      --warn: #9a5b00;
+      --warn-soft: #fff4dc;
+      --bad: #a33a3a;
+      --bad-soft: #fde8e8;
+      --good: #19714f;
+      --good-soft: #e7f6ef;
+      --code: #f2f4f7;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.65;
+    }
+
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 40px 24px 64px;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 28px;
+      padding-bottom: 22px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: 34px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 34px 0 14px;
+      font-size: 24px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 24px 0 10px;
+      font-size: 18px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 8px 0 12px;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    code {
+      background: var(--code);
+      border: 1px solid #e5e7eb;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow-x: auto;
+      background: #111827;
+      color: #eef2ff;
+      border-radius: 8px;
+      padding: 16px;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    pre code {
+      background: transparent;
+      border: 0;
+      color: inherit;
+      padding: 0;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 22px;
+      margin: 18px 0;
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .grid.cols-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .grid.cols-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: #fbfcfe;
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 22px;
+      line-height: 1.2;
+      margin-bottom: 6px;
+      color: var(--accent);
+    }
+
+    .tag {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 2px 9px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0;
+      vertical-align: baseline;
+    }
+
+    .tag.p0 {
+      background: var(--bad-soft);
+      color: var(--bad);
+    }
+
+    .tag.p1 {
+      background: var(--warn-soft);
+      color: var(--warn);
+    }
+
+    .tag.p2 {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    .tag.good {
+      background: var(--good-soft);
+      color: var(--good);
+    }
+
+    .note {
+      border-left: 4px solid var(--accent);
+      background: var(--accent-soft);
+      padding: 12px 14px;
+      border-radius: 6px;
+      margin: 14px 0;
+    }
+
+    .warn {
+      border-left: 4px solid var(--warn);
+      background: var(--warn-soft);
+      padding: 12px 14px;
+      border-radius: 6px;
+      margin: 14px 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 18px;
+      font-size: 14px;
+    }
+
+    th,
+    td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: #eef2f7;
+      font-weight: 700;
+    }
+
+    ul,
+    ol {
+      padding-left: 22px;
+    }
+
+    li {
+      margin: 6px 0;
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .toc a {
+      display: inline-block;
+      margin: 4px 14px 4px 0;
+    }
+
+    @media (max-width: 860px) {
+      main {
+        padding: 28px 16px 44px;
+      }
+
+      h1 {
+        font-size: 28px;
+      }
+
+      .grid.cols-3,
+      .grid.cols-2 {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>用户查询侧性能优化方案</h1>
+    <p class="meta">生成时间：2026-06-07。范围：静态扫描当前仓库，重点覆盖 <code>/public/agent/turn</code> 导购 Agent 用户查询链路，尤其是商品查询 <code>product_query_workflow</code>。</p>
+    <p class="meta">说明：本报告基于代码、配置、SQL schema 和已有文档分析，未执行真实压测；建议先用报告末尾的压测与观测清单建立基线后再改动阈值。</p>
+  </header>
+
+  <section class="section toc">
+    <strong>目录</strong><br>
+    <a href="#summary">1. 结论摘要</a>
+    <a href="#chain">2. 当前查询链路</a>
+    <a href="#findings">3. 瓶颈扫描结果</a>
+    <a href="#plan">4. 分阶段优化方案</a>
+    <a href="#sql">5. 数据库与索引建议</a>
+    <a href="#observability">6. 观测与压测</a>
+    <a href="#roadmap">7. 落地路线图</a>
+  </section>
+
+  <section class="section" id="summary">
+    <h2>1. 结论摘要</h2>
+    <div class="grid cols-3">
+      <div class="metric">
+        <strong>3-4 次</strong>
+        <span>一次商品查询可能触发的 LLM 调用：主意图、任务规划、商品条件解析、最终答案生成。</span>
+      </div>
+      <div class="metric">
+        <strong>N+1</strong>
+        <span>商品 hydrate 当前逐个 <code>getProduct</code>，评价场景又逐个 <code>listReviews</code>。</span>
+      </div>
+      <div class="metric">
+        <strong>已并发</strong>
+        <span>keyword / semantic 双路召回已经并发，keyword 内部 evidence 也已经 fan-out 并发。</span>
+      </div>
+    </div>
+
+    <div class="note">
+      <strong>最优先处理的方向：</strong>先减少非必要 LLM 与重复 DB 往返，再补齐 SQL 索引和观测。对纯商品查询，建议优先绕过任务规划 LLM、允许规则答案直出、批量 hydrate catalog，这三项通常比继续调 RRF 权重更直接影响 P95。
+    </div>
+
+    <table>
+      <thead>
+      <tr>
+        <th>优先级</th>
+        <th>优化项</th>
+        <th>主要收益</th>
+        <th>改造风险</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><span class="tag p0">P0</span></td>
+        <td>纯查询绕过任务规划 LLM</td>
+        <td>减少一次同步模型调用，降低平均延迟和模型成本</td>
+        <td>低，需要保留多步骤购买目标的规划入口</td>
+      </tr>
+      <tr>
+        <td><span class="tag p0">P0</span></td>
+        <td>最终答案支持规则直出开关</td>
+        <td>商品列表/对比结果已由 responseBuilder 生成，可省一次 answer LLM</td>
+        <td>中，需要确认体验文案要求</td>
+      </tr>
+      <tr>
+        <td><span class="tag p0">P0</span></td>
+        <td>真正应用 LLM timeout</td>
+        <td>保护 P99，避免用户请求被模型调用长时间挂住</td>
+        <td>低，中断和降级路径要测</td>
+      </tr>
+      <tr>
+        <td><span class="tag p1">P1</span></td>
+        <td>批量 hydrate 商品和评论</td>
+        <td>把 topK 商品详情从 2N 次 JDBC 往返降到 1-2 次</td>
+        <td>中，需要新增 facade 与 repository 查询</td>
+      </tr>
+      <tr>
+        <td><span class="tag p1">P1</span></td>
+        <td>补齐 catalog evidence 文本索引</td>
+        <td>稳定关键词路径，降低 review/FAQ/marketing 场景慢查询风险</td>
+        <td>中，需要生产库并发建索引与 explain 验证</td>
+      </tr>
+      <tr>
+        <td><span class="tag p2">P2</span></td>
+        <td>缓存/复用 Graph 编译结果</td>
+        <td>降低每请求固定 CPU 与对象分配成本</td>
+        <td>中，当前节点闭包捕获 eventSink，需要小重构</td>
+      </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section" id="chain">
+    <h2>2. 当前查询链路</h2>
+    <p>当前用户查询入口是 <code>GuideAgentTurnController.turnStream</code>，SSE API 为 <code>GET /public/agent/turn</code>。主链路经过会话、主意图路由、任务链调度、具体 workflow、答案生成和落库。</p>
+
+    <pre><code>Client
+  -> GuideAgentTurnController /public/agent/turn
+  -> allocateTurnId + GuideGraphStreamService.turnStream
+  -> per-request graphFactory.compile(...)
+  -> check/init/load conversation context
+  -> save user message
+  -> main intent LLM
+  -> task chain orchestration
+       -> possible task planning LLM
+  -> product_query_workflow
+       -> condition parse LLM
+       -> validate / merge previous condition / build filters
+       -> ProductSearchSpiAdapter
+            -> keyword branch in orchestration executor
+                 -> profile / marketing / FAQ / review evidence parallel JDBC search
+            -> semantic branch in bounded virtual-thread executor
+                 -> Milvus search + PostgreSQL vectorId lookup
+            -> RRF fusion + base rank
+       -> ProductRanker hydrate catalog product/reviews
+       -> post filter / comparison / responseBuilder
+       -> persist product candidates, focus, last result
+  -> build answer context
+       -> possible answer LLM stream
+  -> save assistant message
+  -> completed SSE</code></pre>
+
+    <h3>代码证据</h3>
+    <table>
+      <thead>
+      <tr>
+        <th>链路点</th>
+        <th>位置</th>
+        <th>观察</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>每请求编译 Graph</td>
+        <td><code>src/main/java/com/bytedance/ai/graph/orchestration/GuideGraphStreamService.java:53</code></td>
+        <td>代码注释已写明生产应使用 singleton/cached compiled graph；当前 <code>turnStream</code> 每次请求执行 <code>graphFactory.compile(...)</code>。</td>
+      </tr>
+      <tr>
+        <td>主图装配 product query subgraph</td>
+        <td><code>src/main/java/com/bytedance/ai/graph/orchestration/GuideStateGraphFactory.java:261</code></td>
+        <td><code>productQuerySubgraphFactory.build()</code> 在主图编译过程中被调用。</td>
+      </tr>
+      <tr>
+        <td>商品查询 11 节点串行状态图</td>
+        <td><code>src/main/java/com/bytedance/ai/graph/product/query/subgraph/ProductQuerySubgraphFactory.java:132</code></td>
+        <td>子图中节点按 load、transform、validate、filter、retrieve、rank、response 顺序执行。</td>
+      </tr>
+      <tr>
+        <td>检索双路并发</td>
+        <td><code>src/main/java/com/bytedance/ai/graph/product/retrieval/ProductSearchSpiAdapter.java:96</code></td>
+        <td>keyword 与 semantic 已用 <code>CompletableFuture</code> 并发，且有分支超时与降级。</td>
+      </tr>
+      <tr>
+        <td>hydrate N+1</td>
+        <td><code>src/main/java/com/bytedance/ai/graph/product/query/service/ProductRanker.java:73</code></td>
+        <td>遍历 rankedHits 后逐个 <code>lookupCatalog</code>，注释也指出后续应改为 catalog 批量接口。</td>
+      </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section" id="findings">
+    <h2>3. 瓶颈扫描结果</h2>
+
+    <h3><span class="tag p0">P0</span> 一次纯商品查询可能触发过多 LLM</h3>
+    <p>主意图识别、任务规划、商品条件解析、最终答案生成都复用 <code>intentChatClient</code>。其中商品条件解析是核心必要步骤；主意图可通过规则/轻模型缓存优化；任务规划和最终答案生成对纯查询不是总必要。</p>
+    <ul>
+      <li><code>MainIntentRouterService.route(...)</code> 调用 <code>intentChatClient.prompt(prompt).call().entity(...)</code>。</li>
+      <li><code>GuideStateGraphFactory.startNewGoalChain</code> 在 <code>isPlanningWorthy(intent)</code> 为 true 时调用 <code>taskPlanningService.plan(...)</code>，而 <code>PRODUCT_SEARCH/PRODUCT_QUERY/PRODUCT_COMPARE</code> 都被纳入 planning-worthy。</li>
+      <li><code>ProductQuerySubgraphFactory.pqTransformQuery</code> 调用 <code>llmService.parse(...)</code> 将自然语言解析为结构化 condition。</li>
+      <li><code>GuideStateGraphFactory.buildAnswerContext</code> 在成功时调用 <code>tryStreamingLlmAnswer(...)</code>，即使 product query 已经生成了 <code>NODE_MESSAGE</code>。</li>
+    </ul>
+
+    <h3><span class="tag p0">P0</span> LLM timeout 配置被读取但未真正应用</h3>
+    <p><code>OpenAiClientConfiguration.intentChatClient</code> 读取了 <code>graph.agent.intent-llm.timeout</code>，但当前只用于日志，未配置到底层 HTTP client 或模型调用 deadline。主意图、规划、条件解析、答案生成都复用这个 client，因此单个模型慢请求会放大整条链路 P99。</p>
+    <p class="small">证据：<code>src/main/java/com/bytedance/ai/infrastructure/config/OpenAiClientConfiguration.java:160</code> 读取 timeout，<code>:183</code> 只记录日志。</p>
+
+    <h3><span class="tag p1">P1</span> Catalog hydrate 存在 N+1 查询</h3>
+    <p><code>ProductRanker.refine</code> 对每个候选逐条调用 <code>catalogQueryFacade.getProduct</code>；<code>getProduct</code> 内部又查商品主表和 SKU；评论类场景还会逐个商品查 <code>listReviews</code>。</p>
+    <ul>
+      <li><code>ProductRanker.java:73</code> 遍历候选。</li>
+      <li><code>ProductRanker.java:85</code> 逐个 hydrate reviews。</li>
+      <li><code>CatalogQueryService.java:45</code> <code>getProduct</code> 查询商品后再查 SKU。</li>
+      <li><code>CatalogQueryService.java:55</code> <code>listReviews</code> 单商品查询。</li>
+    </ul>
+
+    <h3><span class="tag p1">P1</span> Catalog evidence 文本索引不完整</h3>
+    <p>关键词 evidence 搜索器会对 <code>catalog_product_knowledge.content/title</code>、<code>catalog_product_faq.question/answer</code>、<code>catalog_product_review.content</code> 做 <code>to_tsvector(...)</code> 与 <code>LIKE '%query%'</code>。schema 目前只有 <code>catalog_product.title</code> 的 FTS/trgm 索引，以及 SKU 的 <code>jsonb_path_ops</code>，未覆盖这些表达式。</p>
+    <p class="small">证据：<code>scripts/rag/pgsql/full_schema.sql:619</code> 只给 product title 建 FTS/trgm；<code>:680</code>、<code>:702</code>、<code>:730</code> 只给 knowledge/faq/review 的 product_id 建索引。</p>
+
+    <h3><span class="tag p1">P1</span> queryMode 未用于跳过不必要召回分支</h3>
+    <p><code>ProductQueryCondition</code> 已包含 <code>queryMode</code>，提示词也要求 LLM 输出 <code>KEYWORD_ONLY | SEMANTIC_ONLY | HYBRID</code>，但 <code>ProductSearchSpiAdapter</code> 当前总是提交 keyword 和 semantic 两路。精确型号、库存/价格过滤、上一轮评价追问等场景有机会只跑必要分支。</p>
+
+    <h3><span class="tag p2">P2</span> 调试日志处于 INFO 路径</h3>
+    <p><code>ProductQueryDebugLogger</code> 在 INFO 级别打印 slot、PG filter、Milvus filter、hydration 等多行调试日志。它对竞赛展示很有帮助，但在高 QPS 下会增加字符串构造、日志 IO 和存储成本。</p>
+    <p class="small">证据：<code>ProductQueryDebugLogger.java:49</code>、<code>:85</code>、<code>:91</code>、<code>:107</code>。</p>
+
+    <h3><span class="tag p2">P2</span> 会话与任务链写入次数较多</h3>
+    <p>每轮请求会同步分配 turn、检查/初始化会话、加载最近消息、保存用户消息、更新 turn、推进任务链、持久化候选/焦点/last result、保存 assistant 消息。正确性优先没有问题，但 P95 优化阶段应合并非必要写入，或把非阻塞型上下文持久化移到响应后异步执行。</p>
+  </section>
+
+  <section class="section" id="plan">
+    <h2>4. 分阶段优化方案</h2>
+
+    <h3><span class="tag p0">P0</span> 4.1 纯商品查询绕过任务规划 LLM</h3>
+    <p><strong>目标：</strong>对 <code>PRODUCT_SEARCH</code>、<code>PRODUCT_QUERY</code>、<code>PRODUCT_DETAIL_QUERY</code>、简单 <code>PRODUCT_COMPARE</code> 走单任务路径，只有用户明确表达“推荐并加入购物车”“搜索并下单”“买这个”等多步骤目标时才调用 planning LLM。</p>
+    <p><strong>建议改法：</strong></p>
+    <ul>
+      <li>新增 <code>requiresPlanning(intent, targetWorkflow, message, writeAction)</code>，替换当前纯枚举判断。</li>
+      <li>只读 product query 默认返回 false；包含 <code>加入购物车</code>、<code>下单</code>、<code>结算</code>、<code>购买</code> 等动作，或主意图 writeAction=true 时返回 true。</li>
+      <li>保留 <code>taskPlanningService</code> 失败后的单任务兜底。</li>
+    </ul>
+    <p><strong>验收：</strong>纯查询链路的 <code>task_planning.call</code> 计数降为 0；端到端 P95 至少减少一次模型调用耗时。</p>
+
+    <h3><span class="tag p0">P0</span> 4.2 商品查询结果默认规则直出，按需启用 answer LLM</h3>
+    <p><strong>目标：</strong><code>ProductQueryResponseBuilder</code> 已经生成用户可读的列表、对比和澄清文案。对商品查询成功结果，可默认直接用 <code>ProductQueryGraphStateKeys.NODE_MESSAGE</code>，把 answer LLM 作为可配置增强。</p>
+    <p><strong>建议配置：</strong></p>
+    <pre><code>graph.agent.answer-llm.enabled=true
+graph.agent.answer-llm.product-query-mode=RULE_FIRST
+# 可选值：RULE_ONLY / RULE_FIRST / LLM_ALWAYS</code></pre>
+    <p><strong>规则：</strong>列表/无命中/澄清用 <code>RULE_ONLY</code>；复杂对比或需要自然语言解释时可 <code>RULE_FIRST</code>，LLM 失败仍返回规则答案。</p>
+
+    <h3><span class="tag p0">P0</span> 4.3 为 LLM 调用设置真实 deadline</h3>
+    <p><strong>目标：</strong>把 <code>graph.agent.intent-llm.timeout</code> 从“日志字段”变成真实 HTTP read timeout 或调用层 timeout。</p>
+    <p><strong>建议改法：</strong></p>
+    <ul>
+      <li>为 <code>OpenAiApi</code> 使用带 connect/read timeout 的 <code>RestClient</code> 或底层 request factory。</li>
+      <li>拆分 <code>intentChatClient</code>、<code>productConditionChatClient</code>、<code>planningChatClient</code>、<code>answerChatClient</code>，分别设置 maxTokens、timeout、retry。</li>
+      <li>主意图和条件解析 timeout 建议 1.5s-3s；answer stream 可 8s-12s；planning 只在多步骤目标启用。</li>
+    </ul>
+
+    <h3><span class="tag p1">P1</span> 4.4 批量 hydrate Catalog</h3>
+    <p><strong>目标：</strong>把 topK 商品 hydrate 从 N 次 <code>getProduct</code> + N 次 SKU + N 次 review，降为批量商品/SKU一次查询和批量评论一次查询。</p>
+    <p><strong>接口建议：</strong></p>
+    <pre><code>interface CatalogQueryFacade {
+    List&lt;CatalogProductView&gt; getProducts(List&lt;Long&gt; productIds);
+    Map&lt;Long, List&lt;CatalogProductReviewView&gt;&gt; listReviewsBatch(List&lt;Long&gt; productIds, int perProductLimit);
+}</code></pre>
+    <p><strong>SQL 建议：</strong>商品主表 <code>WHERE id IN (:ids)</code>；SKU <code>WHERE product_id IN (:ids)</code>；评论用 <code>row_number() over(partition by product_id order by review_index, id)</code> 实现每商品 limit。</p>
+
+    <h3><span class="tag p1">P1</span> 4.5 根据 queryMode 跳过召回分支</h3>
+    <p><strong>目标：</strong>利用 LLM 已输出的 <code>queryMode</code> 降低无效 Milvus/DB 调用。</p>
+    <table>
+      <thead>
+      <tr>
+        <th>queryMode</th>
+        <th>执行策略</th>
+        <th>适合场景</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>KEYWORD_ONLY</code></td>
+        <td>只跑 keyword，semantic 返回 completed empty</td>
+        <td>明确品牌/型号/价格/库存/精确字段查询</td>
+      </tr>
+      <tr>
+        <td><code>SEMANTIC_ONLY</code></td>
+        <td>只跑 semantic，保留 PG 二次校验</td>
+        <td>描述性需求、场景化推荐、开放语义</td>
+      </tr>
+      <tr>
+        <td><code>HYBRID</code></td>
+        <td>维持当前双路并发</td>
+        <td>默认策略和低置信召回</td>
+      </tr>
+      </tbody>
+    </table>
+
+    <h3><span class="tag p2">P2</span> 4.6 缓存 Graph 编译结果</h3>
+    <p><strong>目标：</strong>避免每次请求重新构建 StateGraph 和子图。当前挑战是 <code>GuideGraphNodeTemplate</code> 在编译时捕获 per-request <code>eventSink</code>，因此不能简单把 <code>CompiledGraph</code> 作为 singleton。</p>
+    <p><strong>建议路线：</strong></p>
+    <ul>
+      <li>把 event sink 抽象为从 state 中读取的 request-scoped dispatcher，或使用可注入的 <code>AgentStreamEventPublisher</code>。</li>
+      <li>将图结构编译成 singleton，运行时只传入 request state 和 correlationId。</li>
+      <li>如果框架不支持动态 sink，至少缓存 <code>StateGraph</code> shape 或拆出子图 build 缓存，减少对象分配。</li>
+    </ul>
+  </section>
+
+  <section class="section" id="sql">
+    <h2>5. 数据库与索引建议</h2>
+
+    <h3>5.1 补齐 catalog evidence FTS/trgm 索引</h3>
+    <p>当前 keyword searcher 会在 evidence 表上做 <code>to_tsvector</code> 和 <code>lower(...) LIKE :likeQuery</code>。建议用 <code>CREATE INDEX CONCURRENTLY</code> 在生产库分批上线，并配套 <code>EXPLAIN (ANALYZE, BUFFERS)</code> 验证。</p>
+    <pre><code>CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_catalog_knowledge_text_fts
+  ON catalog_product_knowledge
+  USING gin (to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(content, '')));
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_catalog_knowledge_content_trgm
+  ON catalog_product_knowledge
+  USING gin (lower(coalesce(content, '')) gin_trgm_ops);
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_catalog_knowledge_title_trgm
+  ON catalog_product_knowledge
+  USING gin (lower(coalesce(title, '')) gin_trgm_ops);
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_catalog_faq_question_fts
+  ON catalog_product_faq
+  USING gin (to_tsvector('simple', coalesce(question, '')));
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_catalog_faq_answer_fts
+  ON catalog_product_faq
+  USING gin (to_tsvector('simple', coalesce(answer, '')));
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_catalog_faq_question_trgm
+  ON catalog_product_faq
+  USING gin (lower(coalesce(question, '')) gin_trgm_ops);
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_catalog_faq_answer_trgm
+  ON catalog_product_faq
+  USING gin (lower(coalesce(answer, '')) gin_trgm_ops);
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_catalog_review_content_fts
+  ON catalog_product_review
+  USING gin (to_tsvector('simple', coalesce(content, '')));
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_catalog_review_content_trgm
+  ON catalog_product_review
+  USING gin (lower(coalesce(content, '')) gin_trgm_ops);</code></pre>
+
+    <h3>5.2 SKU 与 active product 过滤索引</h3>
+    <p>多个 SQL 使用 <code>EXISTS (SELECT 1 FROM catalog_sku ... product_id = p.id AND status = 'ACTIVE')</code>。建议补一个 partial/composite index：</p>
+    <pre><code>CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_catalog_sku_active_product
+  ON catalog_sku (product_id)
+  WHERE status = 'ACTIVE';</code></pre>
+    <p>如果继续使用 <code>lower(properties_json::text) LIKE</code> 匹配容量/口味，<code>jsonb_path_ops</code> 不能直接支撑该表达式，可补：</p>
+    <pre><code>CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_catalog_sku_properties_text_trgm
+  ON catalog_sku
+  USING gin (lower(coalesce(properties_json::text, '')) gin_trgm_ops);</code></pre>
+
+    <h3>5.3 Milvus scalar 下推</h3>
+    <p><code>RagProperties.Milvus.ProductSchema</code> 已预留 status、stock、price、category、brand 等字段，但默认多数为空。建议离线索引补齐 Milvus metadata，并开启 scalar filter 字段，减少 vector candidates 和后续 PostgreSQL 二次过滤压力。</p>
+    <p class="warn">注意：Milvus schema 与索引数据必须同步演进，不能只改配置。先在影子 collection 验证召回质量和过滤正确性，再切线上 collection。</p>
+  </section>
+
+  <section class="section" id="observability">
+    <h2>6. 观测与压测</h2>
+
+    <h3>6.1 指标缺口</h3>
+    <p>当前 <code>GuideGraphNodeTemplate</code> 会记录节点耗时日志，product query 只对分支降级打了 counter。建议补 Micrometer timers 与 OpenTelemetry spans，按 runId/requestId/correlationId 串起来。</p>
+    <table>
+      <thead>
+      <tr>
+        <th>指标</th>
+        <th>标签</th>
+        <th>用途</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><code>agent_turn_duration</code></td>
+        <td>intent, workflow, status</td>
+        <td>端到端 P50/P95/P99</td>
+      </tr>
+      <tr>
+        <td><code>agent_node_duration</code></td>
+        <td>node, workflow, status</td>
+        <td>定位慢节点，如 main_intent、pq_rank、build_answer</td>
+      </tr>
+      <tr>
+        <td><code>llm_call_duration</code></td>
+        <td>purpose, model, status, timeout</td>
+        <td>区分 intent / condition / planning / answer 成本</td>
+      </tr>
+      <tr>
+        <td><code>product_retrieval_branch_duration</code></td>
+        <td>branch, queryMode, status</td>
+        <td>keyword/semantic 分支耗时和降级率</td>
+      </tr>
+      <tr>
+        <td><code>catalog_hydration_duration</code></td>
+        <td>mode, product_count, include_reviews</td>
+        <td>验证批量 hydrate 收益</td>
+      </tr>
+      </tbody>
+    </table>
+
+    <h3>6.2 基准压测建议</h3>
+    <ol>
+      <li>准备 30-50 条用户查询：精确商品、类目过滤、价格过滤、评价问答、对比、无命中、多轮 refine。</li>
+      <li>对每条记录：端到端耗时、首个 SSE 事件耗时、首个 answer delta 耗时、LLM 次数、JDBC 查询次数、Milvus 耗时、返回商品数。</li>
+      <li>分别测试 <code>RAG_MILVUS_ENABLED=false</code> 和 true；分别打开/关闭 answer LLM。</li>
+      <li>对慢 SQL 使用 <code>EXPLAIN (ANALYZE, BUFFERS)</code>，把计划保存到 <code>docs/perf-explain/</code>。</li>
+      <li>验收阈值建议：纯商品查询 P95 小于 2.5s；无 answer LLM 的规则直出 P95 小于 1.5s；错误/降级请求必须在 timeout budget 内返回。</li>
+    </ol>
+  </section>
+
+  <section class="section" id="roadmap">
+    <h2>7. 落地路线图</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>阶段</th>
+        <th>周期</th>
+        <th>任务</th>
+        <th>验收</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td><span class="tag p0">P0</span> 快速止血</td>
+        <td>1-3 天</td>
+        <td>绕过纯查询 planning LLM；answer LLM 可配置；真实 LLM timeout；product debug 日志降级为 DEBUG 或开关控制。</td>
+        <td>纯商品查询 LLM 次数从 4 次降到 2 次以内；P95 明显下降；timeout 请求可降级返回。</td>
+      </tr>
+      <tr>
+        <td><span class="tag p1">P1</span> 数据访问优化</td>
+        <td>3-7 天</td>
+        <td>Catalog 批量 hydrate；批量 reviews；queryMode 分支跳过；补 catalog evidence 索引。</td>
+        <td>JDBC 查询数下降；review/FAQ/marketing 慢查询消失；keyword/semantic 分支耗时稳定。</td>
+      </tr>
+      <tr>
+        <td><span class="tag p2">P2</span> 结构和观测</td>
+        <td>1-2 周</td>
+        <td>Graph 编译缓存重构；完整 Micrometer/OTel 指标；上下文写入合并或异步化；Milvus scalar schema 演进。</td>
+        <td>仪表盘能定位 P95 来源；固定成本降低；压测结果可回归比较。</td>
+      </tr>
+      </tbody>
+    </table>
+
+    <div class="note">
+      <strong>建议先做的三个 PR：</strong>
+      <ol>
+        <li>在 <code>GuideStateGraphFactory</code> 中将纯只读 product intents 改为单任务，不调 planning LLM。</li>
+        <li>在 answer 阶段增加 <code>product-query-mode=RULE_FIRST/RULE_ONLY</code> 配置，并默认让列表/澄清/无命中规则直出。</li>
+        <li>为 <code>CatalogQueryFacade</code> 增加批量 hydrate 接口，替换 <code>ProductRanker</code> 的逐条查询。</li>
+      </ol>
+    </div>
+  </section>
+</main>
+</body>
+</html>

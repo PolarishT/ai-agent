@@ -1,5 +1,7 @@
 package com.bytedance.ai.graph.catalog.persistence;
 
+import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
@@ -13,6 +15,8 @@ public interface CatalogProductContentRepository {
     void saveFaqs(Long productId, List<FaqDraft> drafts);
 
     void saveReviews(Long productId, List<ReviewDraft> drafts);
+
+    List<ReviewRecord> findReviewsByProductIds(Collection<Long> productIds, int limitPerProduct);
 
     record KnowledgeDraft(
             String knowledgeType,
@@ -41,5 +45,22 @@ public interface CatalogProductContentRepository {
             String sentiment,
             Map<String, Object> metadata
     ) {
+    }
+
+    record ReviewRecord(
+            Long id,
+            Long productId,
+            Integer reviewIndex,
+            String nickname,
+            Integer rating,
+            String content,
+            String sentiment,
+            Map<String, Object> metadata,
+            OffsetDateTime createdAt,
+            OffsetDateTime updatedAt
+    ) {
+        public ReviewRecord {
+            metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+        }
     }
 }

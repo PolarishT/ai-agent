@@ -42,6 +42,9 @@ class FaqSearcherTests {
         String sql = capturedSql();
         assertThat(sql).contains("catalog_product_faq");
         assertThat(sql).contains("f.question");
+        assertThat(sql).contains("to_tsvector('simple'::regconfig, coalesce(f.question, ''::text))");
+        assertThat(sql).contains("plainto_tsquery('simple'::regconfig, :query)");
+        assertThat(sql).contains("lower(coalesce(f.question, ''::text)) LIKE :likeQuery");
         assertThat(sql).doesNotContain("f.answer");
         assertThat(sql).doesNotContain("rag_chunks");
     }
@@ -52,6 +55,9 @@ class FaqSearcherTests {
         String sql = capturedSql();
         assertThat(sql).contains("catalog_product_faq");
         assertThat(sql).contains("f.answer");
+        assertThat(sql).contains("to_tsvector('simple'::regconfig, coalesce(f.answer, ''::text))");
+        assertThat(sql).contains("plainto_tsquery('simple'::regconfig, :query)");
+        assertThat(sql).contains("lower(coalesce(f.answer, ''::text)) LIKE :likeQuery");
         assertThat(sql).doesNotContain("f.question");
         assertThat(sql).doesNotContain("rag_chunks");
     }

@@ -1,8 +1,8 @@
 package com.bytedance.ai.graph.product.query.service;
 
 import com.bytedance.ai.graph.catalog.api.CatalogQueryFacade;
-import com.bytedance.ai.graph.catalog.api.CatalogProductView;
 import com.bytedance.ai.graph.catalog.api.CatalogProductReviewView;
+import com.bytedance.ai.graph.catalog.api.CatalogProductSummaryView;
 import com.bytedance.ai.graph.product.query.ProductHydrationOptions;
 import com.bytedance.ai.graph.product.query.ProductQueryCondition;
 import com.bytedance.ai.graph.product.query.ProductReviewSnippet;
@@ -13,10 +13,11 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
+import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -30,8 +31,7 @@ import org.springframework.stereotype.Component;
  *   <li>{@code sort} 决定终态顺序：PRICE_ASC/DESC 按 price 排，RELEVANCE/RATING 按综合分排。</li>
  * </ul>
  *
- * <p>当前实现按 productId 逐条调 catalog（N 次），由于 topK 通常 ≤ 10，影响可接受；
- * TODO: 加 catalog 批量接口后改成一次性查回。
+ * <p>hydrate 使用 catalog 批量接口，避免 topK 放大成 N+1 JDBC 往返。
  */
 @Component
 public class ProductRanker {
@@ -68,21 +68,26 @@ public class ProductRanker {
         RagProperties.ProductQuery.RankWeights weights = ragProperties.productQuery().rankWeights();
         Map<String, Double> keywordScoreByKey = indexByKey(keywordHits);
         Map<String, Double> semanticScoreByKey = indexByKey(semanticHits);
+        List<Long> productIds = productIds(rankedHits);
+        Map<Long, CatalogProductSummaryView> productsById = lookupCatalog(productIds);
+        Map<Long, List<ProductReviewSnippet>> reviewsByProductId = hydrateReviews(productIds, hydrationOptions);
 
         List<ProductSearchCandidate> enriched = new ArrayList<>(rankedHits.size());
         for (ProductSearchHit hit : rankedHits) {
-            Optional<CatalogProductView> product = lookupCatalog(hit);
-            if (product.isEmpty()) {
+            if (hit.productId() == null) {
+                log.debug("Product hit dropped: productId missing externalRef={}", hit.externalRef());
+                continue;
+            }
+            CatalogProductSummaryView view = productsById.get(hit.productId());
+            if (view == null) {
                 log.debug("Product hit dropped: catalog lookup empty for productId={} externalRef={}",
                         hit.productId(), hit.externalRef());
                 continue;
             }
-            CatalogProductView view = product.get();
             BigDecimal price = pickDisplayPrice(view);
             List<String> matchReasons = new ArrayList<>();
             double conditionBoost = conditionBoost(view, condition, matchReasons, weights);
             double finalScore = hit.score() + conditionBoost;
-            List<ProductReviewSnippet> reviews = hydrateReviews(view.id(), hydrationOptions);
             enriched.add(new ProductSearchCandidate(
                     view.id(),
                     String.valueOf(view.id()),
@@ -97,24 +102,58 @@ public class ProductRanker {
                     semanticScoreByKey.getOrDefault(key(hit), 0.0d),
                     finalScore,
                     matchReasons,
-                    reviews
+                    reviewsByProductId.getOrDefault(view.id(), List.of())
             ));
         }
         return applySort(enriched, condition);
     }
 
-    private List<ProductReviewSnippet> hydrateReviews(Long productId, ProductHydrationOptions hydrationOptions) {
-        if (productId == null || hydrationOptions == null
-                || !hydrationOptions.includeReviews() || hydrationOptions.reviewLimit() <= 0) {
+    private List<Long> productIds(List<ProductSearchHit> hits) {
+        if (hits == null || hits.isEmpty()) {
             return List.of();
         }
+        return hits.stream()
+                .map(ProductSearchHit::productId)
+                .filter(Objects::nonNull)
+                .collect(LinkedHashSet<Long>::new, LinkedHashSet::add, LinkedHashSet::addAll)
+                .stream()
+                .toList();
+    }
+
+    private Map<Long, CatalogProductSummaryView> lookupCatalog(List<Long> productIds) {
+        if (productIds == null || productIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, CatalogProductSummaryView> result = new LinkedHashMap<>();
+        for (CatalogProductSummaryView view : catalogQueryFacade.findProductSummaries(productIds)) {
+            if (view.id() != null) {
+                result.putIfAbsent(view.id(), view);
+            }
+        }
+        return result;
+    }
+
+    private Map<Long, List<ProductReviewSnippet>> hydrateReviews(
+            List<Long> productIds,
+            ProductHydrationOptions hydrationOptions
+    ) {
+        if (productIds == null || productIds.isEmpty() || hydrationOptions == null
+                || !hydrationOptions.includeReviews() || hydrationOptions.reviewLimit() <= 0) {
+            return Map.of();
+        }
         try {
-            return catalogQueryFacade.listReviews(productId, hydrationOptions.reviewLimit()).stream()
-                    .map(this::toReviewSnippet)
-                    .toList();
+            Map<Long, List<CatalogProductReviewView>> reviewsByProductId =
+                    catalogQueryFacade.listReviewsByProductIds(productIds, hydrationOptions.reviewLimit());
+            Map<Long, List<ProductReviewSnippet>> result = new LinkedHashMap<>();
+            reviewsByProductId.forEach((productId, reviews) -> result.put(
+                    productId,
+                    reviews == null ? List.of() : reviews.stream().map(this::toReviewSnippet).toList()
+            ));
+            return result;
         } catch (RuntimeException exception) {
-            log.warn("Product review hydrate failed: productId={}, error={}", productId, exception.toString());
-            return List.of();
+            log.warn("Product review batch hydrate failed: productCount={}, error={}",
+                    productIds.size(), exception.toString());
+            return Map.of();
         }
     }
 
@@ -167,7 +206,7 @@ public class ProductRanker {
     }
 
     private double conditionBoost(
-            CatalogProductView view,
+            CatalogProductSummaryView view,
             ProductQueryCondition condition,
             List<String> matchReasons,
             RagProperties.ProductQuery.RankWeights weights
@@ -210,21 +249,7 @@ public class ProductRanker {
         return boost;
     }
 
-    private Optional<CatalogProductView> lookupCatalog(ProductSearchHit hit) {
-        // 新 DDL 的 catalog_product 没有 external_ref 列；retriever 把 externalRef 填成
-        // productId.toString() 作向后兼容。因此只用 productId 走 getProduct 即可，旧版
-        // 用 externalRef 解析数字的兜底分支是死代码，已删除。
-        if (hit.productId() == null) {
-            return Optional.empty();
-        }
-        try {
-            return Optional.of(catalogQueryFacade.getProduct(hit.productId()));
-        } catch (IllegalArgumentException ignored) {
-            return Optional.empty();
-        }
-    }
-
-    private BigDecimal pickDisplayPrice(CatalogProductView view) {
+    private BigDecimal pickDisplayPrice(CatalogProductSummaryView view) {
         if (view.priceMin() != null) {
             return view.priceMin();
         }

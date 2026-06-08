@@ -6,11 +6,14 @@ import com.bytedance.ai.shared.support.RagJsonCodec;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
+import java.util.Collection;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -20,6 +23,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -34,10 +38,12 @@ public class JdbcCatalogProductRepository implements CatalogProductRepository {
     private static final String ATTR_STATUS_FAILED = "FAILED";
 
     private final JdbcTemplate jdbc;
+    private final NamedParameterJdbcTemplate namedJdbc;
     private final RagJsonCodec jsonCodec;
 
     public JdbcCatalogProductRepository(JdbcTemplate jdbc, RagJsonCodec jsonCodec) {
         this.jdbc = jdbc;
+        this.namedJdbc = new NamedParameterJdbcTemplate(jdbc);
         this.jsonCodec = jsonCodec;
     }
 
@@ -87,6 +93,21 @@ public class JdbcCatalogProductRepository implements CatalogProductRepository {
                 id
         );
         return results.stream().findFirst();
+    }
+
+    @Override
+    public List<CatalogProductRecord> findByIds(Collection<Long> ids) {
+        List<Long> productIds = ids == null
+                ? List.of()
+                : ids.stream().filter(Objects::nonNull).distinct().toList();
+        if (productIds.isEmpty()) {
+            return List.of();
+        }
+        return namedJdbc.query(
+                "SELECT * FROM catalog_product WHERE id IN (:productIds)",
+                new MapSqlParameterSource("productIds", productIds),
+                rowMapper()
+        );
     }
 
     @Override

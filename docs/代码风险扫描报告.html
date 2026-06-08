@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>代码风险扫描报告 · ai-agent</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#161a22; --panel2:#1c212b; --text:#e6e9ef; --muted:#9aa4b2;
+    --border:#2a313d; --accent:#5b9dff;
+    --crit:#e5484d; --crit-bg:#2a1416;
+    --high:#f58138; --high-bg:#2a1c10;
+    --med:#f2c14e; --med-bg:#2a2410;
+    --low:#5b9dff; --low-bg:#0f1d2e;
+    --pass:#46c08a; --pass-bg:#0f241c;
+    --info:#9aa4b2; --info-bg:#1c212b;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.65; font-size:15px;
+  }
+  .wrap{max-width:1080px; margin:0 auto; padding:40px 24px 80px}
+  code,.path{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace; font-size:.85em}
+  .path{background:#0c1622; color:#7fd1ff; padding:1px 6px; border-radius:5px; border:1px solid #1d3146; white-space:nowrap}
+  a{color:var(--accent); text-decoration:none}
+  a:hover{text-decoration:underline}
+
+  header.hero{
+    background:linear-gradient(135deg,#1a2233,#141821); border:1px solid var(--border);
+    border-radius:16px; padding:32px 32px 28px; margin-bottom:28px; position:relative; overflow:hidden;
+  }
+  header.hero::after{content:""; position:absolute; right:-60px; top:-60px; width:220px; height:220px;
+    background:radial-gradient(circle,rgba(91,157,255,.18),transparent 70%);}
+  .eyebrow{color:var(--muted); font-size:13px; letter-spacing:.12em; text-transform:uppercase; margin:0 0 6px}
+  h1{margin:0 0 14px; font-size:30px; letter-spacing:-.01em}
+  .meta{display:flex; flex-wrap:wrap; gap:8px 22px; color:var(--muted); font-size:13.5px; margin-top:6px}
+  .meta b{color:var(--text); font-weight:600}
+
+  .risklevel{display:inline-flex; align-items:center; gap:12px; margin-top:22px; padding:14px 20px;
+    background:var(--high-bg); border:1px solid var(--high); border-radius:12px}
+  .risklevel .dot{width:14px;height:14px;border-radius:50%;background:var(--high);box-shadow:0 0 12px var(--high)}
+  .risklevel .lvl{font-size:22px;font-weight:700;color:var(--high)}
+  .risklevel .desc{color:var(--muted);font-size:13px;max-width:560px}
+
+  h2{margin:42px 0 16px; font-size:21px; padding-bottom:10px; border-bottom:1px solid var(--border);
+    display:flex; align-items:center; gap:10px}
+  h2 .num{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;
+    background:var(--panel2);border:1px solid var(--border);font-size:14px;color:var(--accent)}
+  h3{margin:26px 0 10px; font-size:16.5px}
+
+  .lead{color:var(--muted); background:var(--panel); border-left:3px solid var(--accent);
+    padding:14px 18px; border-radius:0 10px 10px 0; margin:0 0 20px; font-size:14px}
+
+  /* Top 3 cards */
+  .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:14px; margin:18px 0}
+  .card{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:18px 18px 16px;
+    border-top:3px solid var(--crit)}
+  .card .tag{font-family:"SF Mono",monospace; font-size:12px; color:var(--crit); font-weight:700}
+  .card h4{margin:6px 0 8px; font-size:15.5px}
+  .card p{margin:0; color:var(--muted); font-size:13.5px}
+
+  /* severity badges */
+  .badge{display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:700;
+    border:1px solid; white-space:nowrap}
+  .b-crit{color:var(--crit); background:var(--crit-bg); border-color:var(--crit)}
+  .b-high{color:var(--high); background:var(--high-bg); border-color:var(--high)}
+  .b-med{color:var(--med); background:var(--med-bg); border-color:var(--med)}
+  .b-low{color:var(--low); background:var(--low-bg); border-color:var(--low)}
+  .b-pass{color:var(--pass); background:var(--pass-bg); border-color:var(--pass)}
+  .b-info{color:var(--info); background:var(--info-bg); border-color:var(--info)}
+
+  /* counts bar */
+  .counts{display:flex; flex-wrap:wrap; gap:10px; margin:8px 0 24px}
+  .counts .pill{display:flex; align-items:center; gap:8px; padding:8px 14px; border-radius:10px;
+    background:var(--panel); border:1px solid var(--border); font-size:13.5px}
+  .counts .pill b{font-size:17px}
+
+  table{width:100%; border-collapse:collapse; margin:8px 0 6px; font-size:13px;
+    background:var(--panel); border:1px solid var(--border); border-radius:12px; overflow:hidden}
+  thead th{background:var(--panel2); text-align:left; padding:11px 12px; font-size:12px;
+    letter-spacing:.03em; color:var(--muted); border-bottom:1px solid var(--border); position:sticky; top:0}
+  tbody td{padding:11px 12px; border-bottom:1px solid var(--border); vertical-align:top}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:nth-child(even){background:rgba(255,255,255,.015)}
+  td.id{font-family:"SF Mono",monospace; font-weight:700; color:var(--text); white-space:nowrap}
+  .ok{color:var(--pass); font-weight:700}
+  .warn{color:var(--med); font-weight:700}
+
+  /* detail blocks */
+  .detail{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:0; margin:16px 0; overflow:hidden}
+  .detail .dh{padding:16px 20px; background:var(--panel2); border-bottom:1px solid var(--border);
+    display:flex; align-items:center; gap:12px; flex-wrap:wrap}
+  .detail .dh h3{margin:0; font-size:16px}
+  .detail .db{padding:8px 20px 18px}
+  .detail dl{margin:0; display:grid; grid-template-columns:120px 1fr; gap:0}
+  .detail dt{color:var(--muted); font-size:12.5px; padding:11px 0 11px; border-bottom:1px solid var(--border); font-weight:600}
+  .detail dd{margin:0; padding:11px 0; border-bottom:1px solid var(--border); font-size:13.5px}
+  .detail dl > div:last-child dt, .detail dl > div:last-child dd{border-bottom:none}
+  .detail .row{display:contents}
+  ul.tight{margin:6px 0 0; padding-left:20px} ul.tight li{margin:3px 0; font-size:13.5px}
+
+  .left-crit{border-left:4px solid var(--crit)}
+  .left-high{border-left:4px solid var(--high)}
+
+  /* priority bands */
+  .prio{border-radius:12px; border:1px solid var(--border); margin:14px 0; overflow:hidden}
+  .prio .ph{padding:12px 18px; font-weight:700; display:flex; align-items:center; gap:10px; font-size:15px}
+  .prio.p0 .ph{background:var(--crit-bg); color:var(--crit)}
+  .prio.p1 .ph{background:var(--med-bg); color:var(--med)}
+  .prio.p2 .ph{background:var(--low-bg); color:var(--low)}
+  .prio .pb{padding:14px 18px; background:var(--panel)}
+  .prio ul{margin:0; padding-left:20px} .prio li{margin:6px 0; font-size:14px}
+  .prio .note{color:var(--muted); font-size:13px; margin-top:10px; font-style:italic}
+
+  .passgrid{display:grid; grid-template-columns:repeat(auto-fit,minmax(330px,1fr)); gap:12px; margin:8px 0}
+  .passitem{background:var(--pass-bg); border:1px solid #1d3a2e; border-radius:10px; padding:13px 15px; font-size:13.5px}
+  .passitem .t{color:var(--pass); font-weight:700; display:block; margin-bottom:3px}
+
+  footer{margin-top:50px; padding-top:20px; border-top:1px solid var(--border); color:var(--muted); font-size:13px}
+  .toc{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:14px 20px; margin-bottom:8px}
+  .toc a{display:inline-block; margin:4px 14px 4px 0; font-size:13.5px; color:var(--muted)}
+  .toc a:hover{color:var(--accent)}
+
+  @media (max-width:640px){
+    .detail dl{grid-template-columns:1fr} .detail dt{border-bottom:none; padding-bottom:0}
+    .meta{flex-direction:column; gap:4px}
+  }
+  @media print{
+    :root{--bg:#fff;--panel:#fff;--panel2:#f3f5f8;--text:#15181d;--muted:#566;--border:#d7dde5}
+    body{font-size:11.5px} .wrap{max-width:none;padding:0}
+    header.hero::after,.toc{display:none} a{color:#15181d}
+    .card,.detail,table,.prio{break-inside:avoid} h2{break-after:avoid}
+    .path{background:#eef4fb;color:#0b5}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <p class="eyebrow">Read-only Security &amp; Risk Scan</p>
+    <h1>代码风险扫描报告 · ai-agent</h1>
+    <div class="meta">
+      <span>项目：<b>RAG 多模态电商导购 Agent（服务端）</b></span>
+      <span>技术栈：<b>Spring Boot 4 · Spring AI · Spring Modulith</b></span>
+      <span>规模：<b>382 个 Java 文件</b></span>
+      <span>日期：<b>2026-06-07</b></span>
+    </div>
+    <div class="meta" style="margin-top:4px">
+      <span>方式：<b>仅阅读 / 搜索 / 静态分析</b>，未修改任何代码、未执行写操作或环境变更命令</span>
+    </div>
+    <div class="risklevel">
+      <span class="dot"></span>
+      <span class="lvl">High</span>
+      <span class="desc">在「公网直接暴露」假设下接近 Critical；若部署在内网网关 / 仅竞赛演示环境后，实际严重度下降为 Medium。</span>
+    </div>
+  </header>
+
+  <nav class="toc">
+    <a href="#s1">① 总体结论</a>
+    <a href="#s2">② 风险清单</a>
+    <a href="#s3">③ 高风险详情</a>
+    <a href="#s4">④ 并发与事务</a>
+    <a href="#s5">⑤ LLM / Agent</a>
+    <a href="#s6">⑥ 已验证安全点</a>
+    <a href="#s7">⑦ 修复优先级</a>
+  </nav>
+
+  <!-- 1 -->
+  <h2 id="s1"><span class="num">1</span>总体结论</h2>
+  <p class="lead">本仓库工程质量整体偏高（SQL 参数化、并发 / 事务、RAG 硬过滤、LLM 权限边界都做得相当扎实）。
+    核心判断：写操作（购物车 / 下单 / 库存）的<b>业务正确性、并发安全、幂等性设计得很好</b>，但所有 HTTP 接口<b>完全没有身份认证</b>，
+    <code>userId</code> 由调用方在 query 参数里自报，且订单查询存在 IDOR——这意味着"防超卖 / 防重复下单"等护栏都在，却挡不住"冒充任意用户操作"。</p>
+
+  <div class="counts">
+    <span class="pill"><span class="badge b-crit">Critical</span><b>2</b></span>
+    <span class="pill"><span class="badge b-high">High</span><b>1</b></span>
+    <span class="pill"><span class="badge b-med">Medium</span><b>5</b></span>
+    <span class="pill"><span class="badge b-low">Low</span><b>3</b></span>
+    <span class="pill"><span class="badge b-info">Info</span><b>1</b></span>
+  </div>
+
+  <h3>最需要优先修复的 3 个问题（P0）</h3>
+  <div class="cards">
+    <div class="card">
+      <span class="tag">R1 · Critical</span>
+      <h4>全局无认证 / 鉴权</h4>
+      <p>无 Spring Security，<code>userId</code> / <code>conversationId</code> 为客户端自报 query 参数 → 任何人可冒充任意用户读写其购物车、结算、下单、读会话。</p>
+    </div>
+    <div class="card">
+      <span class="tag">R2 · Critical</span>
+      <h4>订单查询越权（IDOR）</h4>
+      <p><code>GET /order/{id}</code> 无归属校验，返回收货人姓名 / 电话 / 地址 → 遍历或猜测订单号即可批量拖取他人订单 PII。</p>
+    </div>
+    <div class="card">
+      <span class="tag">R3 · High</span>
+      <h4>管理 / RAG 写接口无鉴权</h4>
+      <p><code>/admin/catalog/import*</code> 与 <code>/public/rag/documents</code> 增 / 改 / 删 / reindex 全部无鉴权 → 目录篡改、RAG 投毒、文档删除。</p>
+    </div>
+  </div>
+
+  <!-- 2 -->
+  <h2 id="s2"><span class="num">2</span>风险清单表格</h2>
+  <table>
+    <thead><tr>
+      <th>编号</th><th>等级</th><th>类型</th><th>位置</th><th>问题描述</th><th>可能影响</th><th>修复建议</th><th>人工确认</th>
+    </tr></thead>
+    <tbody>
+      <tr>
+        <td class="id">R1</td><td><span class="badge b-crit">Critical</span></td><td>E 越权</td>
+        <td><code>GuideAgentTurnController.java:51</code></td>
+        <td>无认证，<code>userId</code>/<code>conversationId</code> 直接来自 query（仅 <code>@NotBlank/@Size</code>）。全项目无 <code>spring-security</code>、无 Filter/Interceptor/<code>@PreAuthorize</code></td>
+        <td>水平越权：冒充任意用户操作其购物车 / 订单 / 会话</td>
+        <td>引入认证，<code>userId</code> 取自已认证 principal，禁止信任请求参数</td>
+        <td class="warn">是</td>
+      </tr>
+      <tr>
+        <td class="id">R2</td><td><span class="badge b-crit">Critical</span></td><td>E 越权 · F PII</td>
+        <td><code>OrderController.java:25</code></td>
+        <td>仅按 <code>orderId</code> 查，无归属校验；<code>OrderView</code> 含姓名 / 电话 / 省市区 / 详址</td>
+        <td>订单 PII 越权读取（IDOR），可遍历</td>
+        <td>校验订单归属当前用户；订单号用不可枚举 ID</td>
+        <td class="warn">是</td>
+      </tr>
+      <tr>
+        <td class="id">R3</td><td><span class="badge b-high">High</span></td><td>E 越权</td>
+        <td><code>CatalogImportController.java:29</code><br><code>RagDocumentController.java:152</code></td>
+        <td><code>/admin/*</code> 与 <code>/public/rag/documents/*</code> 写接口零鉴权</td>
+        <td>目录篡改、RAG 语料投毒、文档删除（完整性 / DoS）</td>
+        <td><code>/admin/*</code> 加管理员角色；文档写接口加鉴权；公私读写分离</td>
+        <td class="warn">是</td>
+      </tr>
+      <tr>
+        <td class="id">R4</td><td><span class="badge b-med">Medium</span></td><td>H 配置 · DoS</td>
+        <td><code>RateLimit.java</code> / <code>RateLimitAspect.java</code></td>
+        <td><code>@RateLimit</code> 全仓<b>从未被使用</b>（仅出现在 javadoc），限流切面是死代码</td>
+        <td>公网无鉴权 LLM 接口可被刷量 → 成本放大 / DoS</td>
+        <td>在 <code>/public/agent/turn</code>、上传、导入接口落地 <code>@RateLimit</code></td>
+        <td>否</td>
+      </tr>
+      <tr>
+        <td class="id">R5</td><td><span class="badge b-med">Medium</span></td><td>G SSE · DoS</td>
+        <td><code>GuideGraphStreamService.java:51</code></td>
+        <td>图执行在 <code>Mono.fromRunnable(...).subscribe()</code> 中 fire-and-forget，与 SSE 订阅生命周期解耦</td>
+        <td>客户端断连后图 / LLM 仍跑完 → 浪费算力与 token（事务保证数据无损）</td>
+        <td>执行与 Flux 生命周期绑定，断连即取消</td>
+        <td>否</td>
+      </tr>
+      <tr>
+        <td class="id">R6</td><td><span class="badge b-med">Medium</span></td><td>H 配置</td>
+        <td><code>application.properties:4</code></td>
+        <td>默认 profile 为 <code>dev</code>；未设环境变量即以 dev 运行（暴露 <code>loggers</code>、health <code>show-details=always</code>）</td>
+        <td>生产误用 dev 配置，泄露 / 可调日志级别</td>
+        <td>默认改 <code>prod</code> 或缺失即 fail-fast；部署强制校验 profile</td>
+        <td class="warn">是</td>
+      </tr>
+      <tr>
+        <td class="id">R7</td><td><span class="badge b-med">Medium</span></td><td>C LLM</td>
+        <td><code>MainIntentPromptFactory.java:48</code></td>
+        <td>用户输入仅 <code>strip()</code> 后拼入系统提示词；会话记忆原样回灌（仅截断 3000 字），无注入中和</td>
+        <td>prompt 注入可带偏意图分类（被下游枚举化 / 确认门兜底，影响有限）</td>
+        <td>输入用分隔符包裹 + 标注"不可信用户输入"；保留输出侧约束</td>
+        <td>否</td>
+      </tr>
+      <tr>
+        <td class="id">R8</td><td><span class="badge b-med">Medium</span></td><td>B 幂等</td>
+        <td><code>GuideAgentTurnController.java:56</code></td>
+        <td><code>requestId</code> 仅做日志 / 关联，<b>未做幂等键</b>（下单幂等另由购物车快照 + 唯一索引保障）</td>
+        <td>同一 <code>requestId</code> 重放会重复触发加购等写动作</td>
+        <td>用 <code>requestId</code> 做写操作幂等（去重表 / 唯一约束）</td>
+        <td>否</td>
+      </tr>
+      <tr>
+        <td class="id">R9</td><td><span class="badge b-low">Low</span></td><td>G 可观测</td>
+        <td><code>GlobalExceptionHandler.java:45</code></td>
+        <td>REST 500 返回"服务器内部错误"，响应体<b>不回传 requestId/traceId</b>（日志经 MDC 有 trace.id；SSE 错误 payload 则有）</td>
+        <td>线上排障困难，用户报障无法定位</td>
+        <td>统一响应体回传 <code>traceId</code>/<code>requestId</code></td>
+        <td>否</td>
+      </tr>
+      <tr>
+        <td class="id">R10</td><td><span class="badge b-low">Low</span></td><td>G 异常</td>
+        <td><code>GlobalExceptionHandler.java:37</code></td>
+        <td>对 <code>IllegalArgument/IllegalState</code> 直接回 <code>getMessage()</code>；多数受控，个别可能含内部细节</td>
+        <td>轻度信息泄露</td>
+        <td>业务异常用专用类型 + 面向用户文案</td>
+        <td>否</td>
+      </tr>
+      <tr>
+        <td class="id">R11</td><td><span class="badge b-low">Low</span></td><td>D RAG</td>
+        <td><code>ProductCandidatePostFilter.java:74</code></td>
+        <td><code>candidate.price()==null</code> 时跳过价格过滤 → 价格未知商品可穿过价格区间</td>
+        <td>数据质量边界，偶发不符合价格条件</td>
+        <td>价格缺失按策略丢弃或显式标注</td>
+        <td>否</td>
+      </tr>
+      <tr>
+        <td class="id">R12</td><td><span class="badge b-info">Info</span></td><td>E 上传</td>
+        <td><code>RagDocumentController.java:177</code></td>
+        <td>代码放行 <code>.mdx</code> 但拒绝文案只写 .md/.markdown；文件全量读入内存为 String（有 10MB 上限兜底）</td>
+        <td>提示不一致；大文件内存占用</td>
+        <td>统一文案；大文件考虑流式</td>
+        <td>否</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="lead" style="border-left-color:var(--pass)"><b>B（SQL 注入 / 拼接）</b>、<b>F（硬编码密钥）</b>两类<b>未发现可利用问题</b>——属于通过项，详见第 6 节"已验证安全点"。</p>
+
+  <!-- 3 -->
+  <h2 id="s3"><span class="num">3</span>高风险（Critical / High）详细说明</h2>
+
+  <div class="detail left-crit">
+    <div class="dh"><span class="badge b-crit">Critical</span><h3>R1 — 全局缺少认证 / 鉴权</h3></div>
+    <div class="db"><dl>
+      <div class="row"><dt>触发路径</dt><dd>所有 <code>/public/agent/turn</code>、购物车、下单、会话接口；<code>userId</code>/<code>conversationId</code> 来自 <code>GuideAgentTurnController.java:53-54</code> 的 <code>@RequestParam</code>，透传至 <code>ShoppingCartService.findOrCreate</code>、<code>OrderCommandService.createMockOrderFromContext</code>。</dd></div>
+      <div class="row"><dt>攻击场景</dt><dd>攻击者 <code>GET /public/agent/turn?userId=&lt;受害者ID&gt;&amp;conversationId=&lt;猜测&gt;&amp;message=结算购物车</code> 即可操作他人购物车 / 触发其下单确认流程，或读取他人会话上下文。</dd></div>
+      <div class="row"><dt>为什么危险</dt><dd>所有"防超卖、乐观锁、下单幂等"护栏都假设 <code>userId</code> 可信；一旦可伪造，水平越权绕过全部业务隔离。</dd></div>
+      <div class="row"><dt>推荐修复</dt><dd><ul class="tight"><li>接入认证（网关 JWT / Session / mTLS 皆可）；</li><li><code>userId</code> 一律从已认证 principal 取，DTO 里的 <code>userId</code> 仅作比对或删除；</li><li>所有按 <code>userId</code> 作用域的查询改为"认证用户作用域"。</li></ul></dd></div>
+      <div class="row"><dt>建议测试</dt><dd><ul class="tight"><li>用户 A 的 token 携带 <code>userId=B</code> → 期望 403；</li><li>无 token 访问业务接口 → 期望 401；</li><li>A 只能命中自己的购物车（构造 B 的会话 ID 不应命中 B 的车）。</li></ul></dd></div>
+    </dl></div>
+  </div>
+
+  <div class="detail left-crit">
+    <div class="dh"><span class="badge b-crit">Critical</span><h3>R2 — <code>GET /order/{id}</code> 越权读取订单 PII</h3></div>
+    <div class="db"><dl>
+      <div class="row"><dt>触发路径</dt><dd><code>OrderController.getOrder</code> → <code>OrderService.getOrder</code> → <code>toView</code> 返回 <code>DeliveryAddressView</code>（姓名 / 电话 / 省市区 / 详址）。</dd></div>
+      <div class="row"><dt>攻击场景</dt><dd>无需登录，遍历或猜测订单号即可拉取任意订单收货 PII。mock 订单号格式 <code>ORD-yyyyMMdd-HHmmss-&lt;6位hex&gt;</code>（<code>OrderCommandService.nextOrderNo</code>），时间前缀大幅缩小猜测空间。</dd></div>
+      <div class="row"><dt>为什么危险</dt><dd>直接的个人隐私（PII）泄露，且可规模化。</dd></div>
+      <div class="row"><dt>推荐修复</dt><dd><ul class="tight"><li>校验订单归属当前认证用户后才返回；</li><li>订单对外 ID 使用不可枚举值（UUID / 雪花 + 随机）；</li><li>返回体按需脱敏（电话掩码）。</li></ul></dd></div>
+      <div class="row"><dt>建议测试</dt><dd>A 请求 B 的订单号 → 403；未认证请求 → 401；订单号枚举脚本命中率应为 0。</dd></div>
+    </dl></div>
+  </div>
+
+  <div class="detail left-high">
+    <div class="dh"><span class="badge b-high">High</span><h3>R3 — admin 与 RAG 文档写接口无鉴权</h3></div>
+    <div class="db"><dl>
+      <div class="row"><dt>触发路径</dt><dd><code>CatalogImportController</code> 的 <code>/admin/catalog/import</code>、<code>/json</code>；<code>RagDocumentController</code> 的 <code>create/update/del/reindex</code>（路径前缀 <code>/public</code>，但执行删除 / 改写）。</dd></div>
+      <div class="row"><dt>攻击场景</dt><dd><ul class="tight"><li>调 <code>/admin/catalog/import</code> 注入虚假商品并触发离线索引 → <b>RAG 投毒</b>，污染后续给用户的回答与推荐；</li><li>调 <code>DELETE /public/rag/documents/del/{id}</code> 批量删除知识库；</li><li>改写商品价格 / 库存元数据。</li></ul></dd></div>
+      <div class="row"><dt>为什么危险</dt><dd>"admin"仅靠 URL 命名约定，无任何角色校验；RAG 投毒会让"看似可信"的导购回答携带攻击者内容。</dd></div>
+      <div class="row"><dt>推荐修复</dt><dd><code>/admin/*</code> 强制管理员角色；文档写接口纳入认证；公开只读与受保护写分离；导入 / 删除加审计日志（已有部分 upload 审计日志，可扩展）。</dd></div>
+      <div class="row"><dt>建议测试</dt><dd>匿名调 <code>/admin/catalog/import</code> → 401/403；匿名 <code>DELETE .../del/{id}</code> → 401/403；普通用户 token 调 admin → 403。</dd></div>
+    </dl></div>
+  </div>
+
+  <!-- 4 -->
+  <h2 id="s4"><span class="num">4</span>并发与事务专项检查</h2>
+  <p class="lead" style="border-left-color:var(--pass)">整体结论：<b>这一块做得很好</b>，是本仓库的亮点。</p>
+  <table>
+    <thead><tr><th>检查项</th><th>结论</th><th>证据</th></tr></thead>
+    <tbody>
+      <tr><td>购物车 add/remove/update</td><td class="ok">✅ 事务 + 乐观锁</td><td><code>ShoppingCartService.transition</code>：<code>updateState(id, version, toState)</code> 按 version 推进，并发命中 0 行抛冲突</td></tr>
+      <tr><td>库存扣减</td><td class="ok">✅ 原子条件扣减，无超卖</td><td><code>JdbcCatalogSkuRepository:84</code> / <code>JdbcCatalogProductRepository:142</code>：<code>SET stock=stock-? WHERE ... AND stock&gt;=?</code>，按返回行数判断</td></tr>
+      <tr><td>创建订单</td><td class="ok">✅ 事务内完成；唯一索引防重</td><td><code>OrderService.placeOrder:107</code>：<code>uq_customer_order_cart_id</code> 命中 <code>DuplicateKeyException</code> → 整单回滚（含已扣库存）</td></tr>
+      <tr><td>死锁规避</td><td class="ok">✅ 统一锁顺序</td><td><code>STOCK_LOCK_ORDER</code>：按 <code>(spuId,skuId)</code> 升序扣减，消除 AB-BA 死锁</td></tr>
+      <tr><td>确认下单（mock 链路）</td><td class="ok">✅ 条件状态机 + 快照校验</td><td><code>OrderCommandService:75</code>：<code>WAITING_CONFIRMATION→CREATING</code> 条件转移（重复确认返回失败）+ 购物车快照 hash 比对 + 过期校验 + 库存复核</td></tr>
+      <tr><td>重复请求 <code>requestId</code> 幂等</td><td class="warn">⚠️ 见 R8</td><td><code>requestId</code> 未做幂等键；下单幂等由"购物车快照 + 唯一索引 / 状态转移"保证，但加购等写动作可被同 <code>requestId</code> 重放</td></tr>
+    </tbody>
+  </table>
+  <p class="lead">设计点：加购（<code>CartExecuteActionNode ADD</code>）<b>没有</b>独立二次确认，仅下单有确认门。加购可逆、作用于本人车，属可接受，但建议在文档中明确"危险动作 = 下单 / 扣库存才需 human confirmation"的边界。</p>
+
+  <!-- 5 -->
+  <h2 id="s5"><span class="num">5</span>LLM / Agent 专项检查</h2>
+  <p class="lead" style="border-left-color:var(--pass)">整体结论：<b>LLM 不被信任执行危险动作</b>，权限边界做得好；主要遗留是"输入侧无注入中和"（R7）与上游"无认证 / 限流"（R1/R4）。</p>
+  <table>
+    <thead><tr><th>组件</th><th>结论</th><th>证据 / 说明</th></tr></thead>
+    <tbody>
+      <tr><td>intent_router</td><td class="ok">✅ 输出强约束</td><td><code>MainIntentDecisionNormalizer:53,59</code>：<code>writeAction</code>、<code>targetWorkflow</code> 由服务端按枚举重算，不信任 LLM 自报；置信度 clamp + 低置信转 CLARIFY；意图强制枚举化</td></tr>
+      <tr><td>slot_filling</td><td class="ok">✅ 禁止编造 ID</td><td><code>cart-manage-slot-filling-v1.txt</code>："不能编造 productId/skuId"，后端按实时购物车快照解析 <code>cartItemId</code></td></tr>
+      <tr><td>product_query_workflow</td><td class="ok">✅ 三层硬过滤</td><td>PG 预过滤（<code>ProductPostgresFilterBuilder</code>，全命名参数）→ RRF 融合 → 融合后 <code>ProductCandidatePostFilter</code> 用<b>目录真实字段</b>复核 价格 / 库存 / 类目 / 品牌 / 排除词 / 属性</td></tr>
+      <tr><td>cart_manage_workflow</td><td class="ok">✅ 不信任 LLM 产物</td><td><code>CartExecuteActionNode</code>：商品经 catalog guard 校验（<code>CONFIRM_ADD</code> 返回真实 <code>CatalogProductView</code>），删除 / 改量按真实车快照 <code>cartItemLookup</code> 解析</td></tr>
+      <tr><td>order_manage_workflow</td><td class="ok">✅ 必须人工确认</td><td>LLM 无法直接下单：需先进入 <code>WAITING_CONFIRMATION</code> 再由确认回合触发；快照 hash 变化即拒绝</td></tr>
+      <tr><td>conversation memory</td><td class="warn">⚠️ 原样回灌（R7）</td><td><code>MainIntentPromptFactory.sanitizeConversationMemory:55</code>：仅截断 3000 字，历史中的注入文本会进入当前意图判断；影响被输出侧枚举化 / 确认门限制为"至多带偏分类"</td></tr>
+      <tr><td>prompt injection（输入侧）</td><td class="warn">⚠️ 无中和（R7）</td><td><code>sanitizeUserMessage</code> 仅 <code>strip()</code>；用户原文直拼进系统提示词的 <code>{{userMessage}}</code></td></tr>
+      <tr><td>tool executor 权限边界</td><td class="ok">✅ 风险低</td><td>路由器明确"不能调用工具"；实际"工具"是固定 workflow 节点，由服务端枚举映射调度，LLM 无法越权选择任意可执行单元</td></tr>
+      <tr><td>RAG 事实来源</td><td class="ok">✅ 用业务原表非 chunk</td><td><code>FaqSearcher</code> 只查 <code>catalog_product_faq</code>，不拿 <code>rag_chunks</code> 当事实来源；embedding PREFERRED 空命中 → FALLBACK 仅放宽 chunkType，硬过滤仍生效</td></tr>
+      <tr><td>LLM 幻觉致危险动作</td><td class="ok">✅ 已阻断</td><td>下单 / 扣库存均需真实快照 + 确认 + 原子库存校验；幻觉的"下单这个"会被路由规则改写为先加购、并经确认门</td></tr>
+    </tbody>
+  </table>
+
+  <!-- 6 -->
+  <h2 id="s6"><span class="num">6</span>已验证的安全点（通过项，供对账）</h2>
+  <div class="passgrid">
+    <div class="passitem"><span class="t">SQL 注入 / 拼接（B）— 未发现</span>动态 SQL 全部用 <code>?</code>/命名参数；<code>FaqSearcher</code> 的 <code>String.format</code> 仅插入<b>白名单列名</b>（question/answer），查询值绑定为命名参数；LIKE 经 <code>escapeLike</code> 转义；Milvus filter 仅由枚举名生成。</div>
+    <div class="passitem"><span class="t">硬编码密钥（F）— 未发现</span>Java 源零硬编码凭据；<code>.env</code> 已 gitignore 且未被 git 跟踪；<code>.env.example</code> 全为占位符；配置一律 <code>${ENV:default}</code> 注入。</div>
+    <div class="passitem"><span class="t">敏感信息日志（F/G）— 未发现明显泄露</span>甚至有 <code>ProductQueryConditionSanitizer</code> 主动剔除 LLM 泄漏的 ID 型 token；查询 / 文件名日志多为 preview / 截断。</div>
+    <div class="passitem"><span class="t">CORS（H）— 不存在过宽</span>无任何 <code>@CrossOrigin</code> / 全局 CORS 配置 → 默认关闭。</div>
+    <div class="passitem"><span class="t">Actuator（H）— 已收敛</span>prod 仅暴露 <code>health,info,metrics</code>，<code>show-details=never</code>，<code>loggers</code> 只读。</div>
+    <div class="passitem"><span class="t">文件上传校验（E）— 健壮</span>大小上限 10MB、扩展名白名单、危险 content-type 拦截、路径穿越 <code>cleanPath</code> + 去目录、空字节注入检测（问题仅在该接口无鉴权，见 R3）。</div>
+    <div class="passitem"><span class="t">500 响应 — 不外泄堆栈</span><code>GlobalExceptionHandler</code> 返回通用文案（关联 ID 缺失见 R9）。</div>
+  </div>
+
+  <!-- 7 -->
+  <h2 id="s7"><span class="num">7</span>修复优先级</h2>
+
+  <div class="prio p0">
+    <div class="ph">P0 · 必须马上修（上线即风险）</div>
+    <div class="pb">
+      <ul>
+        <li><b>R1</b> 接入认证，<code>userId</code> 取自 principal，停止信任客户端自报身份。</li>
+        <li><b>R2</b> <code>GET /order/{id}</code> 增加归属校验 + 不可枚举订单号。</li>
+        <li><b>R3</b> <code>/admin/*</code> 与 RAG 文档写 / 删接口加鉴权（管理员角色）。</li>
+      </ul>
+      <p class="note">R1/R2/R3 同源——本质是"补一层认证 + 资源归属校验"。建议作为一个安全基线一并落地。</p>
+    </div>
+  </div>
+
+  <div class="prio p1">
+    <div class="ph">P1 · 上线前必须修</div>
+    <div class="pb"><ul>
+      <li><b>R4</b> 给公网 LLM 接口、上传、导入落地 <code>@RateLimit</code>（限流切面已就绪，只差注解）。</li>
+      <li><b>R6</b> 默认 profile 改 <code>prod</code> 或缺失即 fail-fast，避免 dev 配置进生产。</li>
+      <li><b>R5</b> SSE 断连取消后台图执行（绑定 Flux 生命周期），抑制成本放大。</li>
+      <li><b>R8</b> 用 <code>requestId</code> 为写操作补幂等键（与既有购物车 / 订单幂等互补）。</li>
+    </ul></div>
+  </div>
+
+  <div class="prio p2">
+    <div class="ph">P2 · 后续优化</div>
+    <div class="pb"><ul>
+      <li><b>R7</b> 输入侧 prompt 注入加固（分隔 / 标注不可信输入），会话记忆同理。</li>
+      <li><b>R9</b> 统一在错误响应体回传 <code>traceId/requestId</code>。</li>
+      <li><b>R10</b> 业务异常专用类型 + 面向用户文案。</li>
+      <li><b>R11 / R12</b> 价格缺失过滤策略、上传文案一致性与大文件流式。</li>
+    </ul></div>
+  </div>
+
+  <footer>
+    <p>本报告为只读静态分析结论，未修改 / 删除任何代码，未执行数据库或环境变更命令。所有安全修复建议均以"先出报告、后改代码"为原则，待确认后再实施。</p>
+    <p>文件位置：<code>docs/代码风险扫描报告.html</code> · 生成日期：2026-06-07</p>
+  </footer>
+
+</div>
+</body>
+</html>

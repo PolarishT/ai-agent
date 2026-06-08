@@ -680,6 +680,18 @@ CREATE TABLE public.catalog_product_knowledge
 CREATE INDEX idx_catalog_product_knowledge_product_id
     ON public.catalog_product_knowledge (product_id);
 
+CREATE INDEX idx_catalog_product_knowledge_text_fts
+    ON public.catalog_product_knowledge
+        USING gin (to_tsvector('simple'::regconfig, COALESCE(content, ''::text) || ' ' || COALESCE(title, ''::text)));
+
+CREATE INDEX idx_catalog_product_knowledge_content_trgm
+    ON public.catalog_product_knowledge
+        USING gin (lower(COALESCE(content, ''::text)) public.gin_trgm_ops);
+
+CREATE INDEX idx_catalog_product_knowledge_title_trgm
+    ON public.catalog_product_knowledge
+        USING gin (lower(COALESCE(title, ''::text)) public.gin_trgm_ops);
+
 -- =========================================================
 -- Catalog product FAQ
 -- =========================================================
@@ -701,6 +713,22 @@ CREATE TABLE public.catalog_product_faq
 
 CREATE INDEX idx_catalog_product_faq_product_id
     ON public.catalog_product_faq (product_id);
+
+CREATE INDEX idx_catalog_product_faq_question_fts
+    ON public.catalog_product_faq
+        USING gin (to_tsvector('simple'::regconfig, COALESCE(question, ''::text)));
+
+CREATE INDEX idx_catalog_product_faq_answer_fts
+    ON public.catalog_product_faq
+        USING gin (to_tsvector('simple'::regconfig, COALESCE(answer, ''::text)));
+
+CREATE INDEX idx_catalog_product_faq_question_trgm
+    ON public.catalog_product_faq
+        USING gin (lower(COALESCE(question, ''::text)) public.gin_trgm_ops);
+
+CREATE INDEX idx_catalog_product_faq_answer_trgm
+    ON public.catalog_product_faq
+        USING gin (lower(COALESCE(answer, ''::text)) public.gin_trgm_ops);
 
 -- =========================================================
 -- Catalog product review
@@ -729,6 +757,14 @@ CREATE TABLE public.catalog_product_review
 
 CREATE INDEX idx_catalog_product_review_product_id
     ON public.catalog_product_review (product_id);
+
+CREATE INDEX idx_catalog_product_review_content_fts
+    ON public.catalog_product_review
+        USING gin (to_tsvector('simple'::regconfig, COALESCE(content, ''::text)));
+
+CREATE INDEX idx_catalog_product_review_content_trgm
+    ON public.catalog_product_review
+        USING gin (lower(COALESCE(content, ''::text)) public.gin_trgm_ops);
 
 -- =========================================================
 -- Catalog attribute outbox

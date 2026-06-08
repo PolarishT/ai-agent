@@ -65,6 +65,14 @@ class MarketingSearcherTests {
         searcher.search("适合什么场景", ProductQueryCondition.empty("适合什么场景"), 5);
         String sql = capturedSql();
         assertThat(sql).contains("k.content");
+        assertThat(sql).contains("to_tsvector('simple'::regconfig, coalesce(k.content, ''::text))");
+        assertThat(sql).contains("to_tsvector('simple'::regconfig, coalesce(k.title, ''::text))");
+        assertThat(sql).contains(
+                "to_tsvector('simple'::regconfig, coalesce(k.content, ''::text) || ' ' || coalesce(k.title, ''::text))"
+        );
+        assertThat(sql).contains("plainto_tsquery('simple'::regconfig, :query)");
+        assertThat(sql).contains("lower(coalesce(k.content, ''::text)) LIKE :likeQuery");
+        assertThat(sql).contains("lower(coalesce(k.title, ''::text)) LIKE :likeQuery");
     }
 
     @SuppressWarnings("unchecked")
