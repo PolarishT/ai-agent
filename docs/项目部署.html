@@ -116,9 +116,9 @@
   <aside>
     <div class="brand">RAG 电商导购 Agent<small>服务端文档集 · UNSW 竞赛</small></div>
     <div class="docnav">
-      <a class="cur" href="deployment.html"><span class="n">1</span> 部署文档</a>
-      <a href="architecture-pipelines.html"><span class="n">2</span> 离线 / 在线链路技术文档</a>
-      <a href="e2e-guide.html"><span class="n">3</span> E2E 体验指南</a>
+      <a class="cur" href="项目部署.html"><span class="n">1</span> 部署文档</a>
+      <a href="架构设计.html"><span class="n">2</span> 离线 / 在线链路技术文档</a>
+      <a href="端到端验收技术指南.html"><span class="n">3</span> E2E 体验指南</a>
     </div>
     <nav class="toc">
       <span class="lbl">目录</span>
@@ -173,7 +173,7 @@
         <div class="node g">SSE 流式回答<small>导购对话</small></div>
       </div>
       <p>部署一套完整环境需要：<b>1 个应用进程</b> + <b>PostgreSQL</b>（主存）+ <b>Milvus</b>（向量库）+ <b>RocketMQ</b>（离线索引消息）+ 一个 <b>OpenAI 兼容的大模型/Embedding 服务</b>（竞赛使用火山方舟 Doubao）。其中 Milvus 与 RocketMQ 均可关闭并自动降级（见 <a href="#degrade">§11</a>），便于最小化起步。</p>
-      <div class="callout note"><span class="ct">阅读建议</span><p>本文档负责"如何把服务跑起来"。链路内部如何工作请看 <a href="architecture-pipelines.html">《离线 / 在线链路技术文档》</a>；按场景走一遍完整体验请看 <a href="e2e-guide.html">《E2E 体验指南》</a>。</p></div>
+      <div class="callout note"><span class="ct">阅读建议</span><p>本文档负责"如何把服务跑起来"。链路内部如何工作请看 <a href="架构设计.html">《离线 / 在线链路技术文档》</a>；按场景走一遍完整体验请看 <a href="端到端验收技术指南.html">《E2E 体验指南》</a>。</p></div>
     </section>
 
     <section id="stack">
@@ -440,7 +440,7 @@ kubectl -n rag rollout status deploy/backend</code></pre></div>
         <li><b>离线链路冒烟</b>：导入一条商品（见 E2E 指南 §3），轮询 <code>rag_documents.status</code> 直到 <code>INDEXED</code>。</li>
         <li><b>在线链路冒烟</b>：调用 <code>/api/v1/public/agent/turn</code>（SSE），确认收到 <code>turn.started → … → turn.completed</code> 事件序列。</li>
       </ol>
-      <div class="callout note"><span class="ct">完整脚本</span><p>逐场景的端到端验收（推荐 / 筛选 / 对比 / 价格 / 库存 / 加购 / 下单）见 <a href="e2e-guide.html">《E2E 体验指南》</a>。</p></div>
+      <div class="callout note"><span class="ct">完整脚本</span><p>逐场景的端到端验收（推荐 / 筛选 / 对比 / 价格 / 库存 / 加购 / 下单）见 <a href="端到端验收技术指南.html">《E2E 体验指南》</a>。</p></div>
     </section>
 
     <section id="degrade">
@@ -500,7 +500,7 @@ kubectl -n rag rollout status deploy/backend</code></pre></div>
 
     <footer class="page">
       <span>RAG 多模态电商导购 Agent · 服务端部署文档</span>
-      <span>下一篇 → <a href="architecture-pipelines.html">离线 / 在线链路技术文档</a></span>
+      <span>下一篇 → <a href="架构设计.html">离线 / 在线链路技术文档</a></span>
     </footer>
   </main>
 </div>
