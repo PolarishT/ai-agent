@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>离线 / 在线链路技术文档 · RAG 多模态电商导购 Agent</title>
+<style>
+  :root{
+    --bg:#0f172a; --bg2:#1e293b; --ink:#1f2937; --ink-soft:#475569;
+    --line:#e2e8f0; --line2:#cbd5e1; --paper:#ffffff; --paper2:#f8fafc;
+    --brand:#4f46e5; --brand2:#6366f1; --brand-soft:#eef2ff;
+    --green:#059669; --green-soft:#ecfdf5; --amber:#d97706; --amber-soft:#fffbeb;
+    --red:#dc2626; --red-soft:#fef2f2; --cyan:#0891b2; --cyan-soft:#ecfeff;
+    --code:#0b1220; --radius:12px;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",Segoe UI,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--paper2);color:var(--ink);font-family:var(--sans);line-height:1.7;font-size:15px}
+  a{color:var(--brand);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:var(--mono);background:#eef0f4;padding:.12em .4em;border-radius:5px;font-size:.88em;color:#b91c1c;white-space:nowrap}
+  pre{margin:0;background:var(--code);color:#e6edf3;padding:16px 18px;border-radius:10px;overflow:auto;font-family:var(--mono);font-size:13px;line-height:1.6}
+  pre code{background:none;color:inherit;padding:0;white-space:pre;font-size:inherit}
+  .pre-wrap{position:relative;margin:14px 0}
+  .pre-wrap .tag{position:absolute;top:0;right:0;background:#334155;color:#cbd5e1;font-size:11px;padding:2px 10px;border-radius:0 10px 0 8px;font-family:var(--mono);letter-spacing:.04em}
+
+  .wrap{display:grid;grid-template-columns:280px 1fr;max-width:1400px;margin:0 auto;min-height:100vh}
+  aside{position:sticky;top:0;height:100vh;overflow-y:auto;background:var(--bg);color:#cbd5e1;padding:24px 18px;border-right:1px solid #0b1220}
+  aside .brand{font-weight:700;color:#fff;font-size:15px;letter-spacing:.02em;margin-bottom:2px}
+  aside .brand small{display:block;font-weight:400;color:#94a3b8;font-size:12px;margin-top:4px}
+  aside .docnav{display:flex;flex-direction:column;gap:6px;margin:18px 0;padding:14px 0;border-top:1px solid #1e293b;border-bottom:1px solid #1e293b}
+  aside .docnav a{display:flex;align-items:center;gap:8px;color:#cbd5e1;font-size:13px;padding:7px 10px;border-radius:8px}
+  aside .docnav a:hover{background:#1e293b;text-decoration:none}
+  aside .docnav a.cur{background:var(--brand);color:#fff;font-weight:600}
+  aside .docnav a .n{width:20px;height:20px;flex:none;display:grid;place-items:center;background:#334155;border-radius:6px;font-size:11px;font-weight:700}
+  aside .docnav a.cur .n{background:rgba(255,255,255,.25)}
+  nav.toc{font-size:13px;display:flex;flex-direction:column;gap:1px}
+  nav.toc .lbl{color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.12em;margin:14px 0 6px}
+  nav.toc a{color:#94a3b8;padding:5px 10px;border-radius:7px;border-left:2px solid transparent}
+  nav.toc a:hover{color:#fff;background:#1e293b;text-decoration:none}
+  nav.toc a.sub{padding-left:22px;font-size:12px}
+
+  main{padding:0 48px 120px;max-width:1000px}
+  header.page{padding:46px 0 26px;border-bottom:1px solid var(--line);margin-bottom:8px}
+  .eyebrow{color:var(--brand);font-weight:700;font-size:12.5px;letter-spacing:.16em;text-transform:uppercase}
+  h1{font-size:32px;line-height:1.25;margin:10px 0 8px;color:#0f172a;letter-spacing:-.01em}
+  .lede{color:var(--ink-soft);font-size:16px;margin:0 0 18px;max-width:72ch}
+  .badges{display:flex;flex-wrap:wrap;gap:7px;margin-top:14px}
+  .badge{font-size:12px;padding:4px 11px;border-radius:999px;background:var(--brand-soft);color:var(--brand);font-weight:600;border:1px solid #e0e7ff}
+  .badge.g{background:var(--green-soft);color:var(--green);border-color:#d1fae5}
+  .badge.c{background:var(--cyan-soft);color:var(--cyan);border-color:#cffafe}
+  .badge.a{background:var(--amber-soft);color:var(--amber);border-color:#fef3c7}
+
+  h2{font-size:23px;margin:54px 0 6px;padding-top:14px;color:#0f172a;letter-spacing:-.01em;display:flex;align-items:baseline;gap:12px}
+  h2 .hash{color:var(--brand);font-size:15px;font-weight:700;font-family:var(--mono)}
+  h2 + .sec-sub{color:var(--ink-soft);margin:0 0 18px;font-size:14.5px}
+  h3{font-size:18px;margin:32px 0 8px;color:#1e293b}
+  h4{font-size:14px;margin:20px 0 6px;color:#334155;text-transform:uppercase;letter-spacing:.04em}
+  p{margin:10px 0}
+  ul,ol{margin:10px 0;padding-left:22px}
+  li{margin:5px 0}
+  .part{margin:60px 0 0;padding:22px 26px;border-radius:14px;color:#fff;background:linear-gradient(120deg,#4f46e5,#6366f1)}
+  .part.off{background:linear-gradient(120deg,#0891b2,#0e7490)}
+  .part .eyebrow{color:rgba(255,255,255,.8)}
+  .part h2{color:#fff;margin:6px 0 4px;padding:0;border:0}
+  .part h2 .hash{color:rgba(255,255,255,.7)}
+  .part p{color:rgba(255,255,255,.92);margin:6px 0 0;max-width:72ch}
+
+  table{border-collapse:collapse;width:100%;margin:16px 0;font-size:13.5px;background:var(--paper);border-radius:10px;overflow:hidden;box-shadow:0 0 0 1px var(--line)}
+  th,td{text-align:left;padding:9px 13px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:var(--paper2);font-weight:700;color:#334155;font-size:12.5px;text-transform:uppercase;letter-spacing:.03em}
+  tr:last-child td{border-bottom:none}
+  td code{white-space:normal}
+
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;margin:14px 0;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+  @media(max-width:760px){.grid2,.grid3{grid-template-columns:1fr}}
+  .card h4{margin-top:0}
+  .card.mod{border-left:4px solid var(--brand)}
+  .card.mod.off{border-left-color:var(--cyan)}
+  .card.mod small{color:#64748b;font-family:var(--mono);font-size:11.5px}
+
+  .callout{border-radius:10px;padding:13px 16px;margin:16px 0;border:1px solid;font-size:14px}
+  .callout .ct{font-weight:700;font-size:12.5px;text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:3px}
+  .callout p{margin:4px 0}
+  .note{background:var(--brand-soft);border-color:#dbe1ff;color:#3730a3}.note .ct{color:var(--brand)}
+  .tip{background:var(--green-soft);border-color:#bbf7d0;color:#065f46}.tip .ct{color:var(--green)}
+  .warn{background:var(--amber-soft);border-color:#fde68a;color:#92400e}.warn .ct{color:var(--amber)}
+  .danger{background:var(--red-soft);border-color:#fecaca;color:#991b1b}.danger .ct{color:var(--red)}
+
+  /* horizontal pipeline */
+  .pipe{display:flex;flex-wrap:wrap;align-items:stretch;gap:0;margin:18px 0;background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:18px 14px}
+  .pipe .node{flex:1 1 0;min-width:92px;background:var(--paper2);border:1px solid var(--line2);border-radius:10px;padding:10px 8px;text-align:center;font-size:12.5px;font-weight:600;color:#1e293b;display:flex;flex-direction:column;justify-content:center;gap:3px}
+  .pipe .node small{font-weight:400;color:#64748b;font-size:11px}
+  .pipe .node.b{background:var(--brand-soft);border-color:#c7d2fe;color:var(--brand)}
+  .pipe .node.g{background:var(--green-soft);border-color:#a7f3d0;color:var(--green)}
+  .pipe .node.c{background:var(--cyan-soft);border-color:#a5f3fc;color:var(--cyan)}
+  .pipe .arr{flex:0 0 24px;display:grid;place-items:center;color:var(--brand2);font-size:17px;font-weight:700}
+
+  /* vertical flow */
+  .vflow{margin:18px 0;display:flex;flex-direction:column;align-items:center;gap:0}
+  .vflow .vn{width:100%;max-width:620px;background:var(--paper);border:1px solid var(--line2);border-radius:10px;padding:11px 16px;display:flex;gap:12px;align-items:flex-start;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+  .vflow .vn .ix{flex:none;width:26px;height:26px;border-radius:7px;background:var(--brand);color:#fff;display:grid;place-items:center;font-size:12px;font-weight:700;font-family:var(--mono)}
+  .vflow .vn .bd{flex:1}
+  .vflow .vn .bd b{color:#0f172a;font-size:14px}
+  .vflow .vn .bd small{display:block;color:#64748b;font-size:12px;margin-top:2px}
+  .vflow .vn code{font-size:11.5px}
+  .vflow .vn.cond{background:#fffbeb;border-color:#fde68a}
+  .vflow .vn.cond .ix{background:var(--amber)}
+  .vflow .vn.term{background:#ecfdf5;border-color:#a7f3d0}
+  .vflow .vn.term .ix{background:var(--green)}
+  .vflow .dn{height:18px;width:2px;background:var(--line2)}
+  .vflow .dn::after{content:"▼";color:var(--line2);font-size:10px;position:relative;top:8px;left:-4px}
+
+  .tags{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+  .t{font-size:11.5px;font-family:var(--mono);padding:2px 9px;border-radius:6px;background:#eef2ff;color:#4338ca;border:1px solid #e0e7ff}
+  .t.g{background:#ecfdf5;color:#047857;border-color:#d1fae5}
+  .t.c{background:#ecfeff;color:#0e7490;border-color:#cffafe}
+  .hr{height:1px;background:var(--line);margin:36px 0;border:0}
+  .pill{display:inline-block;font-size:11px;font-weight:700;padding:1px 8px;border-radius:5px;font-family:var(--mono)}
+  .pill.get{background:#ecfdf5;color:#047857}.pill.post{background:#eff6ff;color:#1d4ed8}
+  .evt{font-family:var(--mono);font-size:12px;color:#4338ca;background:#eef2ff;padding:1px 7px;border-radius:5px;white-space:nowrap}
+  footer.page{margin-top:60px;padding:24px 0;border-top:1px solid var(--line);color:#94a3b8;font-size:12.5px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+  @media(max-width:1000px){.wrap{grid-template-columns:1fr}aside{display:none}main{padding:0 22px 80px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <aside>
+    <div class="brand">RAG 电商导购 Agent<small>服务端文档集 · UNSW 竞赛</small></div>
+    <div class="docnav">
+      <a href="deployment.html"><span class="n">1</span> 部署文档</a>
+      <a class="cur" href="architecture-pipelines.html"><span class="n">2</span> 离线 / 在线链路技术文档</a>
+      <a href="e2e-guide.html"><span class="n">3</span> E2E 体验指南</a>
+    </div>
+    <nav class="toc">
+      <span class="lbl">总览</span>
+      <a href="#overview">0 · 模块化架构总览</a>
+      <a href="#modules">模块地图与边界</a>
+      <span class="lbl">离线链路</span>
+      <a href="#off-intro">A · 索引链路总览</a>
+      <a href="#off-ingress" class="sub">两条数据入口</a>
+      <a href="#off-event" class="sub">模块间事件解耦</a>
+      <a href="#off-statemachine" class="sub">索引状态机</a>
+      <a href="#off-outbox" class="sub">Outbox 可靠投递</a>
+      <a href="#off-chunk" class="sub">切块与 chunkType</a>
+      <a href="#off-vector" class="sub">向量化与代际提交</a>
+      <a href="#off-catalog" class="sub">商品属性抽取</a>
+      <a href="#off-reliable" class="sub">对账与告警</a>
+      <span class="lbl">在线链路</span>
+      <a href="#on-intro">B · Agent 链路总览</a>
+      <a href="#on-entry" class="sub">SSE 入口与事件</a>
+      <a href="#on-graph" class="sub">主 StateGraph</a>
+      <a href="#on-intent" class="sub">意图路由</a>
+      <a href="#on-taskchain" class="sub">多轮任务链</a>
+      <a href="#on-product" class="sub">商品查询子图</a>
+      <a href="#on-retrieval" class="sub">混合检索内核</a>
+      <a href="#on-resilience" class="sub">检索降级与重试</a>
+      <a href="#on-cart" class="sub">购物车子图</a>
+      <a href="#on-order" class="sub">下单子图</a>
+      <a href="#on-answer" class="sub">答案生成</a>
+      <a href="#on-memory" class="sub">会话记忆</a>
+      <span class="lbl">横切</span>
+      <a href="#x-concurrency">并发模型</a>
+      <a href="#x-resilience">幂等与降级</a>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="page">
+      <div class="eyebrow">Architecture · Offline &amp; Online Pipelines</div>
+      <h1>离线 / 在线链路技术文档</h1>
+      <p class="lede">深入剖析服务端两条核心链路：<b>离线链路</b>把商品与文档可靠地索引进知识库（PostgreSQL + Milvus），<b>在线链路</b>用 StateGraph 编排的多轮 Agent 把用户一句话变成带商品卡片的流式导购回答。所有描述均对应当前实现代码。</p>
+      <div class="badges">
+        <span class="badge">Spring Modulith</span>
+        <span class="badge c">Alibaba StateGraph</span>
+        <span class="badge c">Spring AI RAG</span>
+        <span class="badge">Spring Statemachine</span>
+        <span class="badge g">RocketMQ Outbox</span>
+        <span class="badge g">Milvus 混合检索</span>
+        <span class="badge a">SSE 流式</span>
+      </div>
+    </header>
+
+    <section id="overview">
+      <h2><span class="hash">#0</span> 模块化架构总览</h2>
+      <p class="sec-sub">单一可部署进程，内部按 Spring Modulith 约束切分模块；模块之间只能经"具名接口"（<code>@NamedInterface</code>）或<b>领域事件</b>通信，由 <code>ApplicationModules.verify()</code> 测试守护边界。</p>
+      <div class="pipe">
+        <div class="node">客户端<small>iOS / Android</small></div>
+        <div class="arr">→</div>
+        <div class="node b">graph<small>在线 Agent 编排 + 电商域</small></div>
+        <div class="arr">→</div>
+        <div class="node g">PostgreSQL + Milvus<small>知识库 / 业务库</small></div>
+        <div class="arr">←</div>
+        <div class="node c">indexing<small>离线索引</small></div>
+        <div class="arr">←</div>
+        <div class="node">document / catalog<small>数据入口</small></div>
+      </div>
+
+      <h3 id="modules">模块地图</h3>
+      <div class="grid3">
+        <div class="card mod off"><h4>document</h4><small>com.bytedance.ai.document</small><p>文档 CRUD、上传校验、来源管理。通过领域事件把"需要索引/清理"通知给 indexing。</p><div class="tags"><span class="t c">api</span><span class="t c">spi</span><span class="t">web</span></div></div>
+        <div class="card mod off"><h4>indexing</h4><small>com.bytedance.ai.indexing</small><p>离线索引引擎：状态机工作流、Outbox、切块、向量化、对账恢复、失败告警。</p><div class="tags"><span class="t c">workflow</span><span class="t c">messaging</span><span class="t">service</span></div></div>
+        <div class="card mod"><h4>graph</h4><small>com.bytedance.ai.graph</small><p>在线 Agent + 电商域：意图路由、StateGraph 主图与子图、商品检索、购物车、订单、目录、会话、答案生成。</p><div class="tags"><span class="t">orchestration</span><span class="t">product</span><span class="t">cart</span><span class="t">order</span></div></div>
+        <div class="card mod"><h4>common</h4><small>com.bytedance.ai.common</small><p>统一响应 <code>ApiResponse</code>、全局异常处理、注解式限流 <code>@RateLimit</code>。</p></div>
+        <div class="card mod"><h4>shared</h4><small>com.bytedance.ai.shared</small><p>跨模块共享：Markdown、chunk metadata、日志辅助 <code>RagLogHelper</code> / <code>RagLogFields</code>。</p></div>
+        <div class="card mod"><h4>infrastructure</h4><small>com.bytedance.ai.infrastructure</small><p>配置（并发调度器）、MQ、定时任务、可观测性、Native Hints。</p></div>
+      </div>
+      <div class="callout note"><span class="ct">两链路的交汇点</span><p>离线链路写出的 <code>rag_chunks</code>（PostgreSQL 行 + Milvus 向量）正是在线链路检索读取的对象。两者通过<b>索引代际（index generation）</b>对齐：只有 COMMIT 后的"活跃代"才会进入在线回答，避免半提交向量污染结果。</p></div>
+    </section>
+
+    <!-- ============ OFFLINE ============ -->
+    <div class="part off">
+      <div class="eyebrow">Part A · Offline</div>
+      <h2 style="display:block"><span class="hash">A</span> 离线链路 · 索引</h2>
+      <p>目标：把"商品 JSON / 文档"可靠、可重试、可观测地转成"可被语义+关键词检索的 chunk"。强调<b>事务一致性</b>（Outbox）、<b>可恢复</b>（状态机 + 对账）与<b>零半提交</b>（代际提交）。</p>
+    </div>
+
+    <section id="off-intro">
+      <h2><span class="hash">A.1</span> 索引链路总览</h2>
+      <div class="pipe">
+        <div class="node c">数据入口<small>文档 / 商品导入</small></div>
+        <div class="arr">→</div>
+        <div class="node">领域事件 + Outbox<small>事务内登记</small></div>
+        <div class="arr">→</div>
+        <div class="node">RocketMQ<small>或进程内</small></div>
+        <div class="arr">→</div>
+        <div class="node">状态机流水线<small>切块·向量化</small></div>
+        <div class="arr">→</div>
+        <div class="node g">PG + Milvus<small>代际提交</small></div>
+      </div>
+    </section>
+
+    <section id="off-ingress">
+      <h2><span class="hash">A.2</span> 两条数据入口</h2>
+      <div class="grid2">
+        <div class="card"><h4>① 文档入口</h4><p><span class="pill post">POST</span> <code>/public/rag/documents/create</code>（JSON 或 multipart 文件）。</p><p><code>document</code> 模块落库 <code>rag_documents</code>，并在<b>同一事务</b>内发布 <code>DocumentIndexRequestedEvent</code>。删除/重建走 <code>DocumentIndexCleanupRequestedEvent</code>。</p></div>
+        <div class="card"><h4>② 商品入口</h4><p><span class="pill post">POST</span> <code>/admin/catalog/import</code>（批量草稿）与 <code>/admin/catalog/import/json</code>（外部 snake_case 资料）。</p><p>事务化写入 <code>catalog_product / catalog_sku / catalog_product_knowledge / catalog_product_faq / catalog_product_review</code>，渲染商品 Markdown，<b>双写</b> <code>rag_documents</code>（<code>source_type=catalog-spu</code> 等），再触发离线索引。</p></div>
+      </div>
+      <p>两条入口最终都汇入<b>同一条索引流水线</b>。商品与既有 Markdown 文档在同一 <code>rag_documents / rag_chunks</code> 表内混合存放，互不影响。</p>
+    </section>
+
+    <section id="off-event">
+      <h2><span class="hash">A.3</span> 模块间事件解耦</h2>
+      <p class="sec-sub"><code>document</code> 不直接调用 <code>indexing</code>，而是发事件——这是 Spring Modulith 的边界纪律。</p>
+      <div class="pre-wrap"><span class="tag">indexing/application/IndexingDocumentEventListener</span><pre><code>@TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+void onDocumentIndexRequested(DocumentIndexRequestedEvent event) {
+    indexingCommandFacade.enqueue(...);   // 登记索引作业 + Outbox
+}</code></pre></div>
+      <p>使用 <code>BEFORE_COMMIT</code> 阶段监听：业务写入与"索引作业登记 / Outbox 行"在<b>同一个数据库事务</b>内提交，从根上杜绝"业务落库成功、索引丢失"的不一致。</p>
+    </section>
+
+    <section id="off-statemachine">
+      <h2><span class="hash">A.4</span> 索引状态机</h2>
+      <p class="sec-sub">每个文档的索引进度由 Spring Statemachine 驱动（<code>IndexWorkflowStateMachineFactory</code>），状态与跃迁全程审计到 <code>rag_index_job_transitions</code>，因此任意时刻都能回答"这篇文档卡在哪一步"。</p>
+      <div class="pipe">
+        <div class="node">NEW</div><div class="arr">→</div>
+        <div class="node">QUEUED</div><div class="arr">→</div>
+        <div class="node">DISPATCHING</div><div class="arr">→</div>
+        <div class="node">PREPARING</div><div class="arr">→</div>
+        <div class="node b">CHUNKING</div><div class="arr">→</div>
+        <div class="node b">SAVE_CHUNKS</div><div class="arr">→</div>
+        <div class="node b">VECTOR_INDEXING</div><div class="arr">→</div>
+        <div class="node b">COMMIT_INDEX</div><div class="arr">→</div>
+        <div class="node g">COMPLETED</div>
+      </div>
+      <p>另有两个终态：<code>FAILED</code>（不可恢复或重试耗尽）与 <code>SKIPPED</code>（内容哈希未变化，无需重复索引）。状态机的"幂等性"由内容 <code>shortSha</code> + 索引代际共同保证：重复提交同一内容会被 SKIP。</p>
+      <table>
+        <thead><tr><th>阶段</th><th>动作</th><th>落地对象</th></tr></thead>
+        <tbody>
+          <tr><td>PREPARING</td><td>读取文档原文、规范化</td><td><code>rag_index_jobs</code></td></tr>
+          <tr><td>CHUNKING</td><td><code>RagTextChunker</code> 切块 + chunkType 归类</td><td>内存草稿 <code>RagChunkDraft</code></td></tr>
+          <tr><td>SAVE_CHUNKS</td><td>写入切片行（新代际）</td><td><code>rag_chunks</code></td></tr>
+          <tr><td>VECTOR_INDEXING</td><td>Embedding + 写向量</td><td>Milvus（带 generation/vectorId）</td></tr>
+          <tr><td>COMMIT_INDEX</td><td>原子切换活跃代际</td><td><code>rag_documents.status=INDEXED</code></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="off-outbox">
+      <h2><span class="hash">A.5</span> Outbox 可靠投递</h2>
+      <p class="sec-sub">跨进程异步严格按优先级选型：<b>RocketMQ（含 Outbox）&gt; Reactor 阻塞调度 &gt; @Async 虚拟线程</b>。索引派发用的就是最高级的 Outbox 模式。</p>
+      <div class="vflow">
+        <div class="vn"><div class="ix">1</div><div class="bd"><b>事务内写 Outbox 行</b><small>业务写入与 <code>rag_index_outbox</code> 登记同一事务提交（PENDING）</small></div></div>
+        <div class="dn"></div>
+        <div class="vn"><div class="ix">2</div><div class="bd"><b>定时派发</b><small><code>RagIndexOutboxDispatcher</code> 按 <code>rag.outbox.dispatch-fixed-delay-millis</code> 扫描 PENDING，发往 RocketMQ，置 SENDING</small></div></div>
+        <div class="dn"></div>
+        <div class="vn"><div class="ix">3</div><div class="bd"><b>消费执行</b><small><code>RagIndexMessageListener</code> 收到消息 → <code>RagIndexingService</code> 跑状态机流水线</small></div></div>
+        <div class="dn"></div>
+        <div class="vn term"><div class="ix">✓</div><div class="bd"><b>幂等收敛</b><small>成功置 SENT；超时(<code>sending-stale-millis</code>)的 SENDING 行由对账重投，重复消息因代际/哈希被 SKIP</small></div></div>
+      </div>
+      <p>当 <code>rag.rocketmq.enabled=false</code> 时，<code>RagDirectIndexEventPublisher</code> 在进程内直接驱动流水线——同一套状态机，省去 MQ 依赖，便于本地与最小化部署。</p>
+    </section>
+
+    <section id="off-chunk">
+      <h2><span class="hash">A.6</span> 切块与 chunkType 归类</h2>
+      <p><code>RagTextChunker</code> 按 <code>rag.chunk-size=400</code> / <code>rag.chunk-overlap=80</code> 切块。商品文档经 <code>ProductChunkTypeNormalizer</code> 启发式归类 chunkType（如 <code>TITLE / DESC / ATTR</code> 等），普通 Markdown 文档统一归 <code>BODY</code>。</p>
+      <div class="callout tip"><span class="ct">为什么要分类型</span><p>chunkType 是在线检索的"路由依据"：检索阶段会按意图把召回下推到特定 chunkType（如详情类问题优先 <code>ATTR/DESC</code>，标题命中权重更高），显著提升商品场景的召回精度。详见 <a href="#on-retrieval">B.6 混合检索内核</a>。</p></div>
+    </section>
+
+    <section id="off-vector">
+      <h2><span class="hash">A.7</span> 向量化与代际提交</h2>
+      <p><code>RagMilvusVectorIndexer</code> 用 Doubao 多模态 Embedding 把每个 chunk 向量化，写入 Milvus collection <code>rag_chunks</code>，每条向量携带 <b>indexGeneration</b> 与 <b>vectorId</b>。</p>
+      <div class="vflow">
+        <div class="vn"><div class="ix">A</div><div class="bd"><b>写新代际</b><small>本次索引产出的向量标记为新的 generation，与旧代际并存</small></div></div>
+        <div class="dn"></div>
+        <div class="vn cond"><div class="ix">⎇</div><div class="bd"><b>COMMIT 切换</b><small>全部写成功后，原子地把"活跃代际"指向新代</small></div></div>
+        <div class="dn"></div>
+        <div class="vn term"><div class="ix">✓</div><div class="bd"><b>在线只读活跃代</b><small>检索回查 <code>findSearchableByVectorIds</code> 时只对齐活跃代际，半提交向量永不进入回答</small></div></div>
+      </div>
+      <div class="callout danger"><span class="ct">维度一致性</span><p>Embedding 维度必须与 Milvus collection 维度一致（如 Doubao 2048），否则写入"成功"但检索报错。这是部署期最常见的坑（见部署文档 §4.3）。</p></div>
+    </section>
+
+    <section id="off-catalog">
+      <h2><span class="hash">A.8</span> 商品属性抽取（并行 Outbox）</h2>
+      <p>商品导入除了走索引流水线，还会触发一条<b>独立的属性抽取链路</b>：把非结构化的商品描述用 LLM 抽成结构化属性，供检索时做标量过滤。</p>
+      <div class="pipe">
+        <div class="node c">导入商品<small>catalog_*</small></div>
+        <div class="arr">→</div>
+        <div class="node">属性 Outbox<small>catalog_attribute_outbox</small></div>
+        <div class="arr">→</div>
+        <div class="node">RocketMQ<small>catalog-attribute-extract</small></div>
+        <div class="arr">→</div>
+        <div class="node b">LlmAttributeExtractor<small>LLM 抽 JSON</small></div>
+        <div class="arr">→</div>
+        <div class="node g">回写属性<small>attributes_status=DONE</small></div>
+      </div>
+      <p><code>CatalogAttributeOutboxDispatcher → CatalogAttributeMessageListener → LlmAttributeExtractor</code>。LLM 输出非纯 JSON 或限流时该条目标记 FAILED（少量可接受），不阻塞索引主链路；并发由 <code>rag.catalog.*</code> 控制。</p>
+    </section>
+
+    <section id="off-reliable">
+      <h2><span class="hash">A.9</span> 对账、恢复与告警</h2>
+      <table>
+        <thead><tr><th>机制</th><th>组件</th><th>职责</th></tr></thead>
+        <tbody>
+          <tr><td>对账恢复</td><td><code>RagIndexRecoveryTask</code> / <code>RagIndexMaintenanceService</code></td><td>定时重驱卡住的 PENDING/PROCESSING 作业，FAILED 退避后重试</td></tr>
+          <tr><td>消息解析失败审计</td><td><code>RagIndexMessageFailureAuditService</code></td><td>坏消息落 <code>rag_index_message_failures</code>，超阈值告警</td></tr>
+          <tr><td>最终失败通知</td><td><code>RagFinalFailureEmailNotifier</code></td><td>重试耗尽后发邮件（开关默认关）</td></tr>
+          <tr><td>指标</td><td><code>RagIndexingMetrics</code></td><td>各阶段计数 / 耗时</td></tr>
+          <tr><td>进度查询</td><td><span class="pill get">GET</span> <code>/public/rag/documents/index-job/{id}</code><br/><span class="pill get">GET</span> <code>…/index-timeline/{id}</code></td><td>作业当前态 + 完整状态跃迁时间线</td></tr>
+        </tbody>
+      </table>
+
+      <h3>重试金字塔</h3>
+      <p class="sec-sub">与在线检索的"快速失败"相反，离线索引把"重试"做厚——四级递进，确保每篇文档最终一定被索引成功，或被明确标记为终态失败。</p>
+      <div class="pipe">
+        <div class="node">① 尝试级<small>进程内退避重试</small></div>
+        <div class="arr">→</div>
+        <div class="node">② 消息级<small>RocketMQ 重投</small></div>
+        <div class="arr">→</div>
+        <div class="node">③ Outbox 级<small>滞留重投</small></div>
+        <div class="arr">→</div>
+        <div class="node g">④ 对账级<small>兜底重驱</small></div>
+      </div>
+      <table>
+        <thead><tr><th>层级</th><th>机制</th><th>配置 / 触发</th></tr></thead>
+        <tbody>
+          <tr><td>① 尝试级</td><td>单次索引失败的进程内重试 + 退避</td><td><code>rag.indexing.max-retries=3</code> · <code>retry-backoff-millis</code></td></tr>
+          <tr><td>② 消息级</td><td>RocketMQ 消费失败自动重投</td><td><code>rag.rocketmq.max-attempt-times=3</code></td></tr>
+          <tr><td>③ Outbox 级</td><td>处于 SENDING 但滞留的派发行重新投递</td><td><code>rag.outbox.sending-stale-millis</code> · <code>retry-backoff-millis</code></td></tr>
+          <tr><td>④ 对账级</td><td>卡住作业重驱、终态 FAILED 退避后再试</td><td><code>RagIndexRecoveryTask</code>：<code>processing/pending-stale-millis</code> · <code>failed-retry-millis</code>（默认 1h）</td></tr>
+        </tbody>
+      </table>
+      <p>失败是否值得重试由 <code>RagIndexingFailureClassifier</code> 判定：可重试异常进入退避重试，不可重试或达到 <code>max-retries</code> 则落终态 <code>FAILED</code> 并按需邮件告警。重复消息因内容哈希 + 索引代际被 SKIP，重试天然幂等（见 <a href="#off-vector">A.7</a>）。</p>
+    </section>
+
+    <!-- ============ ONLINE ============ -->
+    <div class="part">
+      <div class="eyebrow">Part B · Online</div>
+      <h2 style="display:block"><span class="hash">B</span> 在线链路 · Agent 编排</h2>
+      <p>目标：把用户一句自然语言，经"意图识别 → 任务规划 → 子图执行（检索/购物车/下单）→ 流式答案"变成带商品卡片的导购回复。核心是一张用 <b>Spring AI Alibaba StateGraph</b> 编排的主图，按意图路由到各业务子图。</p>
+    </div>
+
+    <section id="on-intro">
+      <h2><span class="hash">B.1</span> Agent 链路总览</h2>
+      <div class="pipe">
+        <div class="node">用户消息<small>SSE 请求</small></div>
+        <div class="arr">→</div>
+        <div class="node b">会话装载<small>记忆 / 上下文</small></div>
+        <div class="arr">→</div>
+        <div class="node b">意图路由<small>规则 + LLM</small></div>
+        <div class="arr">→</div>
+        <div class="node">任务链编排<small>多轮规划</small></div>
+        <div class="arr">→</div>
+        <div class="node b">业务子图<small>检索/车/单</small></div>
+        <div class="arr">→</div>
+        <div class="node g">流式答案<small>answer.delta</small></div>
+      </div>
+    </section>
+
+    <section id="on-entry">
+      <h2><span class="hash">B.2</span> SSE 入口与事件协议</h2>
+      <p class="sec-sub">唯一在线入口：<span class="pill get">GET</span> <code>/api/v1/public/agent/turn</code>，返回 <code>text/event-stream</code>。</p>
+      <table>
+        <thead><tr><th>参数</th><th>必填</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><code>userId</code> / <code>conversationId</code></td><td>是</td><td>用户与会话标识（多轮记忆键）</td></tr>
+          <tr><td><code>message</code></td><td>是</td><td>用户本轮自然语言（≤2000）</td></tr>
+          <tr><td><code>requestId</code></td><td>否</td><td>幂等键，缺省自动生成 UUID</td></tr>
+          <tr><td><code>imageRef</code></td><td>否</td><td>多模态图片引用（预留）</td></tr>
+          <tr><td><code>streamMode</code></td><td>否</td><td><code>prod</code>（默认，精简事件）/ <code>trace</code>（全量节点事件，调试用）</td></tr>
+        </tbody>
+      </table>
+      <h4>事件类型（AgentStreamEventType）</h4>
+      <table>
+        <thead><tr><th>事件</th><th>prod 暴露</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td><span class="evt">turn.started</span></td><td>✅</td><td>回合开始（turnId / requestId / conversationId）</td></tr>
+          <tr><td><span class="evt">workflow.started</span></td><td>✅</td><td>意图判定完成，目标 workflow 选定</td></tr>
+          <tr><td><span class="evt">node.started</span></td><td>仅 trace</td><td>子图节点开始</td></tr>
+          <tr><td><span class="evt">node.completed</span></td><td>仅 trace</td><td>子图节点完成</td></tr>
+          <tr><td><span class="evt">node.failed</span></td><td>仅 trace</td><td>子图节点失败</td></tr>
+          <tr><td><span class="evt">answer.delta</span></td><td>✅</td><td>答案 token 流式片段</td></tr>
+          <tr><td><span class="evt">answer.completed</span></td><td>✅</td><td>答案落库完成（messageId）</td></tr>
+          <tr><td><span class="evt">turn.completed</span></td><td>✅</td><td>回合收尾（status / intent / targetWorkflow）</td></tr>
+          <tr><td><span class="evt">error</span></td><td>✅</td><td>不可恢复错误（白名单化文案 + recoverable 标记）</td></tr>
+        </tbody>
+      </table>
+      <div class="callout note"><span class="ct">prod vs trace</span><p>生产模式只下发面向用户体验的事件子集（开气泡、流式追加、收尾）；<code>streamMode=trace</code> 会原样下发每个图节点的 started/completed/failed——演示与排障时能直观看到 Agent "走了哪条路"。</p></div>
+      <div class="callout warn"><span class="ct">限流保护</span><p>该入口标注了注解式限流 <code>@RateLimit</code>（<code>common.ratelimit</code> AOP 切面），按「<code>userId:conversationId</code>」维度计数（1min ≤ 20 / 10min ≤ 120），超限返回 <code>429</code> + <code>Retry-After</code>，保护下游 LLM/检索等昂贵调用。</p></div>
+    </section>
+
+    <section id="on-graph">
+      <h2><span class="hash">B.3</span> 主 StateGraph 骨架</h2>
+      <p class="sec-sub"><code>GuideStateGraphFactory</code> 装配的有向图 <code>ecommerce-guide-state-graph-v1</code>。节点共享一份 <code>OverAllState</code>，节点产出经事件下沉到 SSE。</p>
+      <div class="vflow">
+        <div class="vn"><div class="ix">S</div><div class="bd"><b>START → check_conversation</b><small>判断会话是否存在</small></div></div>
+        <div class="dn"></div>
+        <div class="vn cond"><div class="ix">⎇</div><div class="bd"><b>条件路由</b><small>存在 → <code>load_conversation_context</code>；不存在 → <code>init_conversation</code> → load</small></div></div>
+        <div class="dn"></div>
+        <div class="vn"><div class="ix">1</div><div class="bd"><b>load_conversation_context</b><small>装载近 24 条消息、会话记忆、活跃任务链、购物车/订单上下文</small></div></div>
+        <div class="dn"></div>
+        <div class="vn"><div class="ix">2</div><div class="bd"><b>save_user_message</b><small>落库用户消息，创建/更新 turn 记录（RUNNING）</small></div></div>
+        <div class="dn"></div>
+        <div class="vn"><div class="ix">3</div><div class="bd"><b>main_intent_router</b><small>意图识别 + 任务链编排，写入 target_workflow，发 <span class="evt">workflow.started</span></small></div></div>
+        <div class="dn"></div>
+        <div class="vn cond"><div class="ix">⎇</div><div class="bd"><b>按意图条件路由 → 业务子图</b><small>product_query / cart_manage / order_manage / price / inventory / order / logistics / policy_qa / clarify / small_talk</small></div></div>
+        <div class="dn"></div>
+        <div class="vn"><div class="ix">4</div><div class="bd"><b>build_answer_context</b><small>推进任务链 → 生成答案（规则或 LLM 流式）</small></div></div>
+        <div class="dn"></div>
+        <div class="vn term"><div class="ix">E</div><div class="bd"><b>→ END</b><small>发 <span class="evt">turn.completed</span></small></div></div>
+      </div>
+    </section>
+
+    <section id="on-intent">
+      <h2><span class="hash">B.4</span> 意图路由</h2>
+      <p class="sec-sub">"确定性规则前置 + LLM 兜底"两层策略，覆盖 21 种主意图（<code>MainIntent</code>）。</p>
+      <h4>① 确定性前置（零 token、最快）</h4>
+      <p>对结算与待办订单跟进做关键词硬路由：消息含"结算购物车 / 提交购物车订单"或在有 pending 订单时的"确认 / 取消 / 地址"→ 直接路由 <code>order_manage_workflow</code>，跳过 LLM。</p>
+      <h4>② LLM 路由（main-intent-router-v1 prompt）</h4>
+      <p><code>MainIntentRouterService</code> 调用意图专用模型，输出严格 JSON：</p>
+      <div class="pre-wrap"><span class="tag">MainIntentDecision (JSON)</span><pre><code>{ "intent": "PRICE_QUERY", "confidence": 0.91,
+  "needClarify": false, "writeAction": false,
+  "targetWorkflow": "price_query_workflow",
+  "reason": "用户询问商品价格", "slots": {}, "missingSlots": [] }</code></pre></div>
+      <p>LLM 超时/失败 → <code>clarify_workflow</code> 兜底（错误码 <code>MAIN_INTENT_LLM_TIMEOUT</code> / <code>MAIN_INTENT_ROUTER_FAILED</code>），请用户换种说法，主流程不崩。</p>
+      <h4>意图 → workflow 映射（MainIntentWorkflowMapping）</h4>
+      <table>
+        <thead><tr><th>意图</th><th>目标 workflow</th></tr></thead>
+        <tbody>
+          <tr><td><code>PRODUCT_RECOMMEND / SEARCH / COMPARE / DETAIL_QUERY / QUERY</code>、<code>REVIEW_SUMMARY</code></td><td><code>product_query_workflow</code>（统一商品子图）</td></tr>
+          <tr><td><code>PRICE_QUERY</code> / <code>INVENTORY_QUERY</code></td><td><code>price_query_workflow</code> / <code>inventory_query_workflow</code></td></tr>
+          <tr><td><code>ORDER_QUERY</code> / <code>LOGISTICS_QUERY</code></td><td><code>order_query_workflow</code> / <code>logistics_query_workflow</code></td></tr>
+          <tr><td><code>ADD_TO_CART / REMOVE_FROM_CART / UPDATE_CART_ITEM / CART_MANAGE</code></td><td><code>cart_manage_workflow</code>（统一购物车子图）</td></tr>
+          <tr><td><code>CREATE_ORDER / CONFIRM_ORDER / CANCEL_ORDER</code></td><td><code>order_manage_workflow</code></td></tr>
+          <tr><td><code>POLICY_QA</code></td><td><code>policy_qa_workflow</code></td></tr>
+          <tr><td><code>CLARIFY / UNKNOWN</code> / <code>SMALL_TALK</code></td><td><code>clarify_workflow</code> / <code>small_talk_workflow</code></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="on-taskchain">
+      <h2><span class="hash">B.5</span> 多轮任务链</h2>
+      <p class="sec-sub">意图识别后，<code>orchestrateTaskChain</code> 按"活跃任务链"决定本轮真正执行哪个任务，可覆盖意图给出的 workflow。这让"推荐并下单"这类<b>复合目标</b>能跨多轮自动推进。</p>
+      <div class="grid2">
+        <div class="card"><h4>复合目标（规划）</h4><p><code>TaskPlanningService</code> 把"先推荐再加购再下单"拆成有序任务链（PLANNING → EXECUTING），逐轮取 next pending task 执行，路由随计划走。</p></div>
+        <div class="card"><h4>原子目标</h4><p>单一动作（如"查价格"）→ 单任务 EXECUTING 链，路由保持意图给出的 workflow。</p></div>
+      </div>
+      <p>每个子图执行完，<code>build_answer_context</code> 调 <code>advanceTaskChain</code>：成功标 SUCCEEDED 并追加执行明细 step，失败标 FAILED；无剩余 pending 任务则链收尾为 SUCCEEDED。链/任务状态持久化于 <code>agent_context_items</code>，由 <code>TaskChainCoordinator</code> 管理。元意图（澄清/闲聊/未知）不形成任务链。</p>
+    </section>
+
+    <section id="on-product">
+      <h2><span class="hash">B.6</span> 商品查询子图</h2>
+      <p class="sec-sub"><code>ProductQuerySubgraphFactory</code> 构建的子图，承接全部 PRODUCT_* 与 REVIEW_SUMMARY 意图——推荐、筛选、对比、详情都收敛于此。</p>
+      <div class="vflow">
+        <div class="vn"><div class="ix">1</div><div class="bd"><b>条件抽取</b><small><code>ProductQueryConditionLlmService</code> 把自然语言抽成 <code>ProductQueryCondition</code>（属性 include/exclude、价格区间、类目、品牌），经 sanitizer / validator / merger 校验合并</small></div></div>
+        <div class="dn"></div>
+        <div class="vn"><div class="ix">2</div><div class="bd"><b>混合检索</b><small><code>ProductSearchSpi</code> → 语义(Milvus) + 关键词(PG) 双路召回 → RRF 融合（详见 B.7）</small></div></div>
+        <div class="dn"></div>
+        <div class="vn"><div class="ix">3</div><div class="bd"><b>硬过滤 + 排序</b><small><code>ProductHardFilter</code> 落实硬性约束，<code>ProductRanker / ProductBaseRanker</code> 综合排序</small></div></div>
+        <div class="dn"></div>
+        <div class="vn"><div class="ix">4</div><div class="bd"><b>场景证据检索</b><small>按意图取 <code>ProductProfileSearcher / ReviewSearcher / FaqSearcher / MarketingSearcher</code> 的证据片段（来自 knowledge/faq/review 表）</small></div></div>
+        <div class="dn"></div>
+        <div class="vn"><div class="ix">5</div><div class="bd"><b>实时数据回填</b><small><code>CatalogQueryFacade.getSpu</code> 拉最新 price/stock，避免用索引时的快照</small></div></div>
+        <div class="dn"></div>
+        <div class="vn term"><div class="ix">6</div><div class="bd"><b>构建结果</b><small>对比意图额外走 <code>ProductComparisonBuilder + ProductComparisonDimensionSelector</code> 生成对比矩阵；<code>ProductQueryResponseBuilder</code> 产出 workflow 结果</small></div></div>
+      </div>
+      <div class="callout tip"><span class="ct">商品对比</span><p>PRODUCT_COMPARE 会自动选取差异化维度（价格、规格、成分、适用场景等）并构建对比矩阵，让"A 和 B 哪个更适合"得到结构化、可解释的回答。</p></div>
+    </section>
+
+    <section id="on-retrieval">
+      <h2><span class="hash">B.7</span> 混合检索内核</h2>
+      <p class="sec-sub">检索是 RAG 的心脏。本系统采用<b>语义 + 关键词双路召回 → RRF 融合</b>，并针对电商商品做了多项下推优化。</p>
+      <div class="pipe">
+        <div class="node b">语义检索<small>Milvus<br/>ProductSemanticRagRetriever</small></div>
+        <div class="arr">↘</div>
+        <div class="node">RRF 融合<small>ProductRrfFusion</small></div>
+        <div class="arr">↗</div>
+        <div class="node b">关键词检索<small>PostgreSQL<br/>ProductKeywordRagRetriever</small></div>
+      </div>
+      <table>
+        <thead><tr><th>优化点</th><th>实现</th><th>价值</th></tr></thead>
+        <tbody>
+          <tr><td>chunkType 下推</td><td>按意图把召回限定到特定 chunkType，PREFERRED / FALLBACK 两阶段</td><td>详情问题优先 ATTR/DESC，提升精度且不丢召回</td></tr>
+          <tr><td>标量过滤下推</td><td><code>MilvusScalarFilterBuilder</code>（Milvus 原生表达式）+ <code>ProductPostgresFilterBuilder</code></td><td>品牌/类目/价格在引擎侧过滤，减少回捞</td></tr>
+          <tr><td>词典归一</td><td><code>BrandDictionaryService / CategoryDictionaryService</code></td><td>把"苹果/Apple"等别名归一到标准品牌/类目</td></tr>
+          <tr><td>RRF 融合</td><td><code>score += 1/(rrfK + rank + 1)</code></td><td>无需调权即可稳健融合两路排名</td></tr>
+          <tr><td>代际对齐</td><td>回查只取活跃代际 chunk</td><td>杜绝半提交向量进入回答（见 A.7）</td></tr>
+          <tr><td>关键词路由</td><td>PG 上 <code>to_tsvector + plainto_tsquery</code>，<code>pg_trgm</code> / <code>ILIKE</code> 兜底</td><td>非 PG 环境也能退化运行</td></tr>
+        </tbody>
+      </table>
+      <p>未启用 Milvus 时，仅关键词路生效，链路依旧可用（优雅降级）。</p>
+    </section>
+
+    <section id="on-resilience">
+      <h2><span class="hash">B.7+</span> 检索的降级与重试</h2>
+      <p class="sec-sub">检索对"部分可用"高度容忍：任一子能力（向量库 / 某一路 / LLM / 词典）退化，链路都尽力返回结果而非报错。在线检索<b>请求内不重试</b>——采用 fail-fast + 分层降级，把"重试"留给离线索引（见 <a href="#off-reliable">A.9</a>）。</p>
+
+      <h3>分层降级</h3>
+      <div class="vflow">
+        <div class="vn"><div class="ix">L1</div><div class="bd"><b>分支级 · 双路并发 + 独立超时</b><small>语义(Milvus) 与 关键词(PG) 并发执行，各自受 <code>semanticTimeoutMillis</code> / <code>keywordTimeoutMillis</code> 限时（<code>CompletableFuture.orTimeout</code>）。单路超时/异常 → 标 <code>*_timeout</code> / <code>*_unavailable</code> 并返回空，<b>另一路结果照常融合</b>；Milvus 未启用 → <code>semantic_unavailable</code>，纯关键词跑</small></div></div>
+        <div class="dn"></div>
+        <div class="vn"><div class="ix">L2</div><div class="bd"><b>语义两阶段 · PREFERRED → FALLBACK</b><small>先按 intent 下推精确 chunkType 检索；<b>仅当 PREFERRED 零命中</b>才用更宽的 chunkType 集合（<code>buildFallback</code>）重搜一次，先精后宽，兼顾精度与召回</small></div></div>
+        <div class="dn"></div>
+        <div class="vn"><div class="ix">L3</div><div class="bd"><b>关键词场景级 · 多 searcher 并行</b><small>FAQ / 营销 / 卖点 / 评价 evidence searcher 并行召回；单 searcher 失败独立降级，<b>不拖累其它通道</b>（<code>KeywordRetrievalRouter</code> 内逐路 catch）</small></div></div>
+        <div class="dn"></div>
+        <div class="vn"><div class="ix">L4</div><div class="bd"><b>前置条件抽取兜底</b><small>LLM 抽 <code>ProductQueryCondition</code> 失败 / 超时 / 非 JSON → 返回 <code>empty</code> 条件，<b>退化为纯文本检索</b>，绝不阻断主链路</small></div></div>
+        <div class="dn"></div>
+        <div class="vn"><div class="ix">L5</div><div class="bd"><b>词典归一兜底</b><small>品牌 / 类目词典加载或归一异常 → 跳过归一、按原词检索（<code>BrandDictionaryService</code> / <code>CategoryDictionaryService</code>）</small></div></div>
+        <div class="dn"></div>
+        <div class="vn term"><div class="ix">∅</div><div class="bd"><b>双路皆失败 / 零命中</b><small>返回空上下文并标降级 → 答案转"没有完全匹配的商品"话术（见 <a href="#on-answer">B.10</a>），仍给用户一个可读回复</small></div></div>
+      </div>
+
+      <h3>降级可观测</h3>
+      <p>每一次降级都会把原因写入 <code>degradedNotes</code>（如 <code>semantic_timeout</code> / <code>keyword_unavailable</code> / <code>semantic_unavailable</code>），随 <code>ProductSearchResult</code> 透传到 <code>ProductQueryWorkflowResult.degradedNotes</code>，并打结构化日志：<code>product hybrid retrieval degraded / zero hit / unavailable</code>。客户端与排障都能据此判断"这次回答是否在降级态下产出"。</p>
+      <table>
+        <thead><tr><th>degradedNotes 标记</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td><code>semantic_timeout</code> / <code>keyword_timeout</code></td><td>该路超时被放弃，结果仅来自另一路</td></tr>
+          <tr><td><code>semantic_unavailable</code></td><td>Milvus 未启用或语义路异常，纯关键词召回</td></tr>
+          <tr><td><code>keyword_unavailable</code></td><td>关键词路异常，仅语义召回</td></tr>
+          <tr><td>两者同时出现</td><td>双路皆失败 → 空上下文 + <code>log.error</code>，答案走兜底话术</td></tr>
+        </tbody>
+      </table>
+
+      <h3>为什么请求内不重试</h3>
+      <div class="callout note"><span class="ct">fail-fast 而非 retry</span><p>在线检索面向 SSE 实时回答：① 请求内重试会拉长首字延迟、破坏流式体验；② 反复打 LLM / 向量库会撞 RPM / TPM 限流，把局部故障放大成雪崩。因此每一路只给一次机会、超时即放弃，<b>宁可降级也要快速给出结果</b>。真正需要"重试到成功"的可靠性诉求，由离线索引链路承担（下表）。</p></div>
+    </section>
+
+    <section id="on-cart">
+      <h2><span class="hash">B.8</span> 购物车子图</h2>
+      <p class="sec-sub"><code>CartManageSubgraphFactory</code> 构建的子状态图，统一承接查看/加购/删除/改数量/清空（具体动作由槽位填充判定，意图层不细分）。</p>
+      <div class="pipe">
+        <div class="node">load_context</div><div class="arr">→</div>
+        <div class="node">resolve_action</div><div class="arr">→</div>
+        <div class="node">resolve_target<br/>/candidate</div><div class="arr">→</div>
+        <div class="node">search_catalog</div><div class="arr">→</div>
+        <div class="node b">check_stock</div><div class="arr">→</div>
+        <div class="node b">execute_action</div><div class="arr">→</div>
+        <div class="node g">final_response</div>
+      </div>
+      <ul>
+        <li><b>槽位填充</b>：<code>CartManageSlotFillingService</code>（cart-manage-slot-filling-v1 prompt）从消息+上下文解析动作与目标商品；引用"第二个/那个洗面奶"等可借助会话记忆解析候选。</li>
+        <li><b>状态机 + 乐观锁</b>：购物车变更经 Spring Statemachine（<code>CartStateMachineFactory</code> + <code>CartGuard</code>）驱动，乐观并发冲突抛 <code>CartConcurrencyConflictException</code>，全部跃迁审计到 <code>cart_transition_audit</code>。</li>
+        <li><b>库存校验</b>：执行前 <code>check_stock</code> 防止超卖。</li>
+        <li>持久化于 <code>shopping_cart / cart_item</code>。</li>
+      </ul>
+    </section>
+
+    <section id="on-order">
+      <h2><span class="hash">B.9</span> 下单子图</h2>
+      <p><code>OrderManageSubgraphFactory</code> 承接 CREATE/CONFIRM/CANCEL_ORDER：</p>
+      <ul>
+        <li><b>地址解析</b>：<code>OrderAddressResolver</code> 从自然语言抽取收货地址（<code>delivery_address</code>）。</li>
+        <li><b>购物车快照</b>：<code>OrderCartSnapshotService</code> 锁定下单时的商品/价格快照。</li>
+        <li><b>价格变动检测</b>：下单前比对快照与实时价，<code>PriceChangeView</code> 提示用户价格已变。</li>
+        <li><b>落单</b>：<code>OrderCommandService</code> 写 <code>customer_order / order_item</code>；演示用 <code>mock_orders</code> 兜底。状态见 <code>OrderManageStatus</code>。</li>
+      </ul>
+      <div class="callout warn"><span class="ct">不允许越级直购</span><p>路由策略明确禁止"直接对某个未加购商品下单"——必须先加购再结算。这由意图 prompt 规则 + 确定性前置共同保证，避免误下单。</p></div>
+    </section>
+
+    <section id="on-answer">
+      <h2><span class="hash">B.10</span> 答案生成（流式）</h2>
+      <p class="sec-sub"><code>build_answer_context</code> 节点：先推进任务链，再生成最终答复。</p>
+      <div class="vflow">
+        <div class="vn cond"><div class="ix">⎇</div><div class="bd"><b>成功且 LLM 可用？</b><small>是 → LLM 答案；否 → 规则兜底</small></div></div>
+        <div class="dn"></div>
+        <div class="vn"><div class="ix">L</div><div class="bd"><b>LLM 流式</b><small><code>AnswerLlmService.generateStream</code> 逐 token 回调 → 发 <span class="evt">answer.delta</span>（answerSource=llm）</small></div></div>
+        <div class="dn"></div>
+        <div class="vn term"><div class="ix">R</div><div class="bd"><b>规则兜底</b><small>LLM 超时/失败 → 用节点显式消息或 fallback 文案（answerSource=rule），保证一定有回复</small></div></div>
+      </div>
+      <p>答案 prompt（answer-generation-v1）以子图产出的商品卡片/业务结果为 context，强约束"只复述真实字段、不编造价格库存"。这正是最近"最终输出改为流式输出"的实现：用户能看到答案逐字蹦出，而非等待整段。</p>
+    </section>
+
+    <section id="on-memory">
+      <h2><span class="hash">B.11</span> 会话记忆与上下文</h2>
+      <table>
+        <thead><tr><th>对象</th><th>载体</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td>会话 / 消息</td><td><code>agent_conversations</code> / <code>agent_conversation_messages</code></td><td>多轮历史（装载近 24 条）</td></tr>
+          <tr><td>回合</td><td><code>agent_turn</code></td><td>turnId / requestId / 状态 / 意图 / workflow</td></tr>
+          <tr><td>运行时上下文</td><td><code>agent_context_items</code></td><td>任务链、活跃任务、步骤输出</td></tr>
+        </tbody>
+      </table>
+      <p><code>ConversationContextManager</code> 把上述聚合成 <code>ConversationRuntimeContext</code>，再序列化为 <code>RuntimeContextView</code> 注入图状态——意图路由、槽位填充、答案生成都基于同一份"新鲜上下文"，这是"那个""刚才那款""再便宜点"等指代能被正确解析的基础。</p>
+    </section>
+
+    <hr class="hr"/>
+    <section id="x-concurrency">
+      <h2><span class="hash">#X1</span> 并发模型</h2>
+      <p>全局启用<b>虚拟线程</b>（<code>spring.threads.virtual.enabled=true</code>）。所有阻塞 I/O（JDBC / Milvus / Spring AI 调用）经 <code>RagConcurrencyConfiguration.ragBlockingScheduler</code> 隔离到虚拟线程承载；fire-and-forget 用 <code>ragVirtualThreadExecutor</code>。多路检索 query 经 WebFlux <code>Flux.flatMap</code> 并发。<b>禁止</b>新增固定大小线程池——既避免无谓占用，也防止撞模型 RPM 限流。</p>
+    </section>
+
+    <section id="x-resilience">
+      <h2><span class="hash">#X2</span> 幂等与降级</h2>
+      <div class="grid2">
+        <div class="card"><h4>幂等</h4><ul><li>在线：<code>requestId / turnId</code> 贯穿一次回合，重复请求可识别</li><li>离线：内容 <code>shortSha</code> + 索引代际，重复内容 SKIP</li><li>Outbox：消息重投靠代际/哈希收敛</li></ul></div>
+        <div class="card"><h4>降级</h4><ul><li>Milvus 关 → 仅关键词检索</li><li>RocketMQ 关 → 进程内索引</li><li>答案 LLM 失败 → 规则兜底</li><li>意图 LLM 失败 → clarify 兜底</li><li>检索内部分层降级 → 见 <a href="#on-resilience">B.7+</a></li></ul></div>
+      </div>
+      <p>错误一律经 <code>GlobalExceptionHandler</code> 收口，对外白名单化文案，不泄漏堆栈与内部类名；SSE <code>error</code> 事件携带 <code>recoverable</code> 标记指导客户端是否可重试。</p>
+    </section>
+
+    <footer class="page">
+      <span>RAG 多模态电商导购 Agent · 离线 / 在线链路技术文档</span>
+      <span><a href="deployment.html">← 部署文档</a> · <a href="e2e-guide.html">E2E 体验指南 →</a></span>
+    </footer>
+  </main>
+</div>
+</body>
+</html>

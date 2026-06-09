@@ -1,5 +1,7 @@
 package com.bytedance.ai.graph.web;
 
+import com.bytedance.ai.common.ratelimit.RateLimit;
+import com.bytedance.ai.common.ratelimit.RateWindow;
 import com.bytedance.ai.graph.api.AgentStreamEvent;
 import com.bytedance.ai.graph.api.AgentTurnRequest;
 import com.bytedance.ai.graph.api.events.AnswerCompletedPayload;
@@ -48,6 +50,16 @@ public class GuideAgentTurnController {
         this.conversationRepository = conversationRepository;
     }
 
+    // 按「用户:会话」维度限流，保护下游 LLM/检索等昂贵调用，防止单会话刷爆配额。
+    // 窗口比默认更贴合多轮导购节奏（默认 1min/6 会误伤连续追问）；超限返回 429 + Retry-After。
+    @RateLimit(
+            key = "#userId + ':' + #conversationId",
+            windows = {
+                    @RateWindow(seconds = 60, permits = 20),
+                    @RateWindow(seconds = 600, permits = 120)
+            },
+            message = "导购对话太频繁了，请稍后再试"
+    )
     @GetMapping(value = "/turn", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<Object>> turnStream(
             @RequestParam @NotBlank @Size(max = 64) String userId,

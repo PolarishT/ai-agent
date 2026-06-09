@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>E2E 体验指南 · RAG 多模态电商导购 Agent</title>
+<style>
+  :root{
+    --bg:#0f172a; --bg2:#1e293b; --ink:#1f2937; --ink-soft:#475569;
+    --line:#e2e8f0; --line2:#cbd5e1; --paper:#ffffff; --paper2:#f8fafc;
+    --brand:#4f46e5; --brand2:#6366f1; --brand-soft:#eef2ff;
+    --green:#059669; --green-soft:#ecfdf5; --amber:#d97706; --amber-soft:#fffbeb;
+    --red:#dc2626; --red-soft:#fef2f2; --cyan:#0891b2; --cyan-soft:#ecfeff;
+    --code:#0b1220; --radius:12px;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",Segoe UI,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--paper2);color:var(--ink);font-family:var(--sans);line-height:1.7;font-size:15px}
+  a{color:var(--brand);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:var(--mono);background:#eef0f4;padding:.12em .4em;border-radius:5px;font-size:.88em;color:#b91c1c;white-space:nowrap}
+  pre{margin:0;background:var(--code);color:#e6edf3;padding:16px 18px;border-radius:10px;overflow:auto;font-family:var(--mono);font-size:13px;line-height:1.6}
+  pre code{background:none;color:inherit;padding:0;white-space:pre;font-size:inherit}
+  pre .c{color:#7d8590}
+  pre .k{color:#79c0ff}
+  pre .s{color:#a5d6ff}
+  pre .e{color:#d2a8ff}
+  .pre-wrap{position:relative;margin:14px 0}
+  .pre-wrap .tag{position:absolute;top:0;right:0;background:#334155;color:#cbd5e1;font-size:11px;padding:2px 10px;border-radius:0 10px 0 8px;font-family:var(--mono);letter-spacing:.04em}
+
+  .wrap{display:grid;grid-template-columns:280px 1fr;max-width:1400px;margin:0 auto;min-height:100vh}
+  aside{position:sticky;top:0;height:100vh;overflow-y:auto;background:var(--bg);color:#cbd5e1;padding:24px 18px;border-right:1px solid #0b1220}
+  aside .brand{font-weight:700;color:#fff;font-size:15px;letter-spacing:.02em;margin-bottom:2px}
+  aside .brand small{display:block;font-weight:400;color:#94a3b8;font-size:12px;margin-top:4px}
+  aside .docnav{display:flex;flex-direction:column;gap:6px;margin:18px 0;padding:14px 0;border-top:1px solid #1e293b;border-bottom:1px solid #1e293b}
+  aside .docnav a{display:flex;align-items:center;gap:8px;color:#cbd5e1;font-size:13px;padding:7px 10px;border-radius:8px}
+  aside .docnav a:hover{background:#1e293b;text-decoration:none}
+  aside .docnav a.cur{background:var(--brand);color:#fff;font-weight:600}
+  aside .docnav a .n{width:20px;height:20px;flex:none;display:grid;place-items:center;background:#334155;border-radius:6px;font-size:11px;font-weight:700}
+  aside .docnav a.cur .n{background:rgba(255,255,255,.25)}
+  nav.toc{font-size:13px;display:flex;flex-direction:column;gap:1px}
+  nav.toc .lbl{color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.12em;margin:14px 0 6px}
+  nav.toc a{color:#94a3b8;padding:5px 10px;border-radius:7px}
+  nav.toc a:hover{color:#fff;background:#1e293b;text-decoration:none}
+  nav.toc a.sub{padding-left:22px;font-size:12px}
+
+  main{padding:0 48px 120px;max-width:1000px}
+  header.page{padding:46px 0 26px;border-bottom:1px solid var(--line);margin-bottom:8px}
+  .eyebrow{color:var(--brand);font-weight:700;font-size:12.5px;letter-spacing:.16em;text-transform:uppercase}
+  h1{font-size:32px;line-height:1.25;margin:10px 0 8px;color:#0f172a;letter-spacing:-.01em}
+  .lede{color:var(--ink-soft);font-size:16px;margin:0 0 18px;max-width:72ch}
+  .badges{display:flex;flex-wrap:wrap;gap:7px;margin-top:14px}
+  .badge{font-size:12px;padding:4px 11px;border-radius:999px;background:var(--brand-soft);color:var(--brand);font-weight:600;border:1px solid #e0e7ff}
+  .badge.g{background:var(--green-soft);color:var(--green);border-color:#d1fae5}
+  .badge.a{background:var(--amber-soft);color:var(--amber);border-color:#fef3c7}
+
+  h2{font-size:23px;margin:54px 0 6px;padding-top:14px;color:#0f172a;letter-spacing:-.01em;display:flex;align-items:baseline;gap:12px}
+  h2 .hash{color:var(--brand);font-size:15px;font-weight:700;font-family:var(--mono)}
+  h2 + .sec-sub{color:var(--ink-soft);margin:0 0 18px;font-size:14.5px}
+  h3{font-size:18px;margin:30px 0 8px;color:#1e293b}
+  h4{font-size:14px;margin:18px 0 6px;color:#334155}
+  p{margin:10px 0}
+  ul,ol{margin:10px 0;padding-left:22px}
+  li{margin:5px 0}
+
+  table{border-collapse:collapse;width:100%;margin:16px 0;font-size:13.5px;background:var(--paper);border-radius:10px;overflow:hidden;box-shadow:0 0 0 1px var(--line)}
+  th,td{text-align:left;padding:9px 13px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:var(--paper2);font-weight:700;color:#334155;font-size:12.5px;text-transform:uppercase;letter-spacing:.03em}
+  tr:last-child td{border-bottom:none}
+  td code{white-space:normal}
+
+  .callout{border-radius:10px;padding:13px 16px;margin:16px 0;border:1px solid;font-size:14px}
+  .callout .ct{font-weight:700;font-size:12.5px;text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:3px}
+  .callout p{margin:4px 0}
+  .note{background:var(--brand-soft);border-color:#dbe1ff;color:#3730a3}.note .ct{color:var(--brand)}
+  .tip{background:var(--green-soft);border-color:#bbf7d0;color:#065f46}.tip .ct{color:var(--green)}
+  .warn{background:var(--amber-soft);border-color:#fde68a;color:#92400e}.warn .ct{color:var(--amber)}
+
+  .steps{list-style:none;padding:0;margin:18px 0;counter-reset:s}
+  .steps>li{position:relative;padding:2px 0 18px 46px;margin:0}
+  .steps>li::before{counter-increment:s;content:counter(s);position:absolute;left:0;top:0;width:30px;height:30px;background:var(--brand);color:#fff;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:14px}
+  .steps>li::after{content:"";position:absolute;left:14px;top:34px;bottom:0;width:2px;background:var(--line2)}
+  .steps>li:last-child::after{display:none}
+  .steps>li b{color:#0f172a}
+
+  .pipe{display:flex;flex-wrap:wrap;align-items:stretch;gap:0;margin:18px 0;background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:18px 14px}
+  .pipe .node{flex:1 1 0;min-width:90px;background:var(--paper2);border:1px solid var(--line2);border-radius:10px;padding:10px 8px;text-align:center;font-size:12.5px;font-weight:600;color:#1e293b;display:flex;flex-direction:column;justify-content:center;gap:3px}
+  .pipe .node small{font-weight:400;color:#64748b;font-size:11px}
+  .pipe .node.b{background:var(--brand-soft);border-color:#c7d2fe;color:var(--brand)}
+  .pipe .node.g{background:var(--green-soft);border-color:#a7f3d0;color:var(--green)}
+  .pipe .arr{flex:0 0 22px;display:grid;place-items:center;color:var(--brand2);font-size:16px;font-weight:700}
+
+  /* chat playbook */
+  .chat{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:14px;margin:18px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+  .chat .turn{margin:10px 0}
+  .bubble{max-width:82%;padding:9px 14px;border-radius:14px;font-size:14px;line-height:1.55;display:inline-block}
+  .u{margin-left:auto;background:var(--brand);color:#fff;border-bottom-right-radius:4px}
+  .u-row{display:flex}
+  .a{background:#f1f5f9;color:#1e293b;border-bottom-left-radius:4px;border:1px solid var(--line)}
+  .meta{font-size:11.5px;color:#64748b;margin:3px 2px 0;font-family:var(--mono)}
+  .meta .ev{color:#4338ca}
+  .chip{display:inline-block;font-size:11px;font-weight:700;font-family:var(--mono);padding:1px 8px;border-radius:6px;background:#eef2ff;color:#4338ca;border:1px solid #e0e7ff;margin-left:6px}
+
+  .pill{display:inline-block;font-size:11px;font-weight:700;padding:1px 8px;border-radius:5px;font-family:var(--mono)}
+  .pill.get{background:#ecfdf5;color:#047857}.pill.post{background:#eff6ff;color:#1d4ed8}
+  .evt{font-family:var(--mono);font-size:12px;color:#4338ca;background:#eef2ff;padding:1px 7px;border-radius:5px;white-space:nowrap}
+  .hr{height:1px;background:var(--line);margin:36px 0;border:0}
+  footer.page{margin-top:60px;padding:24px 0;border-top:1px solid var(--line);color:#94a3b8;font-size:12.5px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+  @media(max-width:1000px){.wrap{grid-template-columns:1fr}aside{display:none}main{padding:0 22px 80px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <aside>
+    <div class="brand">RAG 电商导购 Agent<small>服务端文档集 · UNSW 竞赛</small></div>
+    <div class="docnav">
+      <a href="deployment.html"><span class="n">1</span> 部署文档</a>
+      <a href="architecture-pipelines.html"><span class="n">2</span> 离线 / 在线链路技术文档</a>
+      <a class="cur" href="e2e-guide.html"><span class="n">3</span> E2E 体验指南</a>
+    </div>
+    <nav class="toc">
+      <span class="lbl">目录</span>
+      <a href="#journey">0 · 体验全景</a>
+      <a href="#prep">1 · 准备</a>
+      <a href="#import">2 · 灌入商品数据</a>
+      <a href="#verify-index">3 · 验收离线索引</a>
+      <a href="#chat">4 · 体验在线导购</a>
+      <a href="#how-call" class="sub">如何调用 SSE</a>
+      <a href="#read-events" class="sub">看懂事件流</a>
+      <a href="#ratelimit" class="sub">限流保护</a>
+      <a href="#playbook">5 · 对话剧本</a>
+      <a href="#guided" class="sub">连贯多轮演示</a>
+      <a href="#matrix" class="sub">场景速查矩阵</a>
+      <a href="#trace">6 · 看 Agent 思考路径</a>
+      <a href="#troubleshoot">7 · 验收与排错</a>
+      <a href="#cheatsheet">附录 · 速查</a>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="page">
+      <div class="eyebrow">End-to-End Experience Guide</div>
+      <h1>E2E 体验指南</h1>
+      <p class="lede">面向评委的"一遍走通"手册：从启动服务、灌入商品数据，到与导购 Agent 多轮对话（推荐 → 筛选 → 对比 → 加购 → 下单），再到验收与排错。照着做，约 15 分钟即可完整体验离线 + 在线两条链路。</p>
+      <div class="badges">
+        <span class="badge">curl 即可体验</span>
+        <span class="badge g">SSE 流式</span>
+        <span class="badge">多轮记忆</span>
+        <span class="badge a">21 种意图</span>
+      </div>
+    </header>
+
+    <section id="journey">
+      <h2><span class="hash">#0</span> 体验全景</h2>
+      <p class="sec-sub">整个体验是一条直线：把商品变成知识库（离线），再用一句话把知识库变成导购回答（在线）。</p>
+      <div class="pipe">
+        <div class="node">① 启动<small>服务就绪</small></div>
+        <div class="arr">→</div>
+        <div class="node b">② 灌商品<small>import/json</small></div>
+        <div class="arr">→</div>
+        <div class="node g">③ 验索引<small>INDEXED</small></div>
+        <div class="arr">→</div>
+        <div class="node b">④ 对话<small>agent/turn (SSE)</small></div>
+        <div class="arr">→</div>
+        <div class="node">⑤ 验收<small>多场景</small></div>
+      </div>
+      <div class="callout note"><span class="ct">配套文档</span><p>把服务跑起来 → <a href="deployment.html">《部署文档》</a>；想知道每一步底层怎么工作 → <a href="architecture-pipelines.html">《离线 / 在线链路技术文档》</a>。本文只管"怎么体验"。</p></div>
+    </section>
+
+    <section id="prep">
+      <h2><span class="hash">#1</span> 准备</h2>
+      <ol class="steps">
+        <li><b>服务已就绪</b>：按部署文档启动后，确认健康检查通过。
+          <div class="pre-wrap"><span class="tag">shell</span><pre><code><span class="k">curl</span> -s http://localhost:8080/api/v1/actuator/health
+<span class="c"># {"status":"UP"}</span></code></pre></div>
+        </li>
+        <li><b>设个基础变量</b>，后续命令复用：
+          <div class="pre-wrap"><span class="tag">shell</span><pre><code><span class="k">export</span> BASE=http://localhost:8080/api/v1</code></pre></div>
+        </li>
+        <li><b>工具</b>：仅需 <code>curl</code>（带 <code>-N</code> 看 SSE 流）；<code>psql</code> 可选（做 SQL 级验收）；浏览器/Postman 亦可。</li>
+      </ol>
+      <div class="callout tip"><span class="ct">最省事的起步</span><p>不想配 Milvus / RocketMQ？在部署时把它们关掉即可——检索走关键词、索引走进程内，<b>本指南所有场景依然能跑通</b>，只是召回质量略降。</p></div>
+    </section>
+
+    <section id="import">
+      <h2><span class="hash">#2</span> 灌入商品数据</h2>
+      <p class="sec-sub">真实工作流是「采集商品资料 → 落成 JSON 文件 → 导入」。这里用最贴近采集格式的 <code>/admin/catalog/import/json</code>（snake_case 字段）。一次导入会落库 商品 / SKU / 知识 / FAQ / 评价，并自动触发离线索引。</p>
+      <h3>2.1 准备商品 JSON 文件</h3>
+      <p>把一条商品资料保存成 <code>catalog-bag-001.json</code>（实际项目里通常由采集脚本产出）：</p>
+      <div class="pre-wrap"><span class="tag">catalog-bag-001.json</span><pre><code><span class="k">cat</span> &gt; catalog-bag-001.json &lt;&lt;<span class="s">'JSON'</span>
+{
+  "product_id": "p_bag_001",
+  "title": "轻量通勤防泼水双肩包 15.6寸",
+  "brand": "NovaPack",
+  "category": "箱包",
+  "sub_category": "双肩包",
+  "base_price": 219.0,
+  "image_path": "https://example.com/img/bag001.jpg",
+  "skus": [
+    {"sku_id": "s_bag_001_black", "properties": {"颜色":"曜石黑","容量":"22L"}, "price": 219.0},
+    {"sku_id": "s_bag_001_grey",  "properties": {"颜色":"雾岩灰","容量":"22L"}, "price": 229.0}
+  ],
+  "rag_knowledge": {
+    "marketing_description": "320g 轻量机身，防泼水面料，专为通勤设计；独立笔记本仓适配 15.6 寸。",
+    "official_faq": [
+      {"question":"可以放下 15.6 寸笔记本吗？","answer":"可以，独立缓冲仓适配 15.6 寸及以下。"},
+      {"question":"下雨天能用吗？","answer":"面料防泼水，小雨无忧，不建议长时间浸泡。"}
+    ],
+    "user_reviews": [
+      {"nickname":"通勤族小林","rating":5,"content":"很轻，背一天肩膀不累，防水也到位。"},
+      {"nickname":"出差党","rating":4,"content":"隔层够用，颜值高，就是颜色比图片深一点。"}
+    ]
+  }
+}
+JSON</code></pre></div>
+
+      <h3>2.2 导入 JSON 文件</h3>
+      <p>用 <code>--data @文件名</code> 把 JSON 文件作为请求体提交：</p>
+      <div class="pre-wrap"><span class="tag">POST /admin/catalog/import/json</span><pre><code><span class="k">curl</span> -s -X POST <span class="s">"$BASE/admin/catalog/import/json"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  --data @catalog-bag-001.json</code></pre></div>
+      <p>成功响应示例（<code>message</code> 会提示"已触发 RAG 离线索引"）：</p>
+      <div class="pre-wrap"><span class="tag">200 OK</span><pre><code>{ "success": true, "message": "商品已导入并触发 RAG 离线索引",
+  "data": { "total": 1, "succeeded": 1, "failed": 0, "failures": [] } }</code></pre></div>
+
+      <h3>2.3 批量导入多个文件</h3>
+      <p>对比 / 筛选场景需要多条商品。把每条商品各存成一个 JSON 文件（如 <code>catalog-bag-002.json</code> 超大旅行背包 349 元、<code>catalog-bag-003.json</code> 极简轻商务背包 159 元），循环导入：</p>
+      <div class="pre-wrap"><span class="tag">shell</span><pre><code><span class="k">for</span> f <span class="k">in</span> catalog-bag-*.json; <span class="k">do</span>
+  <span class="k">curl</span> -s -X POST <span class="s">"$BASE/admin/catalog/import/json"</span> \
+    -H <span class="s">"Content-Type: application/json"</span> --data @<span class="s">"$f"</span>; <span class="k">echo</span>
+<span class="k">done</span></code></pre></div>
+      <div class="callout note"><span class="ct">另一种批量方式</span><p>若采集产物是「单个文件含多条商品」，可改用批量接口 <span class="pill post">POST</span> <code>/admin/catalog/import</code>，文件内容为 <code>{"items":[ … ]}</code>（item 为 catalog 草稿格式，字段更全），同样用 <code>--data @文件名</code> 提交。</p></div>
+    </section>
+
+    <section id="verify-index">
+      <h2><span class="hash">#3</span> 验收离线索引</h2>
+      <p class="sec-sub">导入后索引是异步的，等几秒到状态变 <code>INDEXED</code> 即可。两种验收方式任选。</p>
+      <h3>3.1 方式 A · 接口查进度</h3>
+      <div class="pre-wrap"><span class="tag">shell</span><pre><code><span class="c"># documentId 可从导入返回或文档列表获取；查作业当前态与状态时间线</span>
+<span class="k">curl</span> -s <span class="s">"$BASE/public/rag/documents/index-job/1"</span>
+<span class="k">curl</span> -s <span class="s">"$BASE/public/rag/documents/index-timeline/1"</span></code></pre></div>
+      <h3>3.2 方式 B · SQL 验收清单</h3>
+      <table>
+        <thead><tr><th>#</th><th>检查</th><th>SQL</th><th>预期</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>商品主数据</td><td><code>SELECT count(*) FROM catalog_product;</code></td><td>≥ 导入数</td></tr>
+          <tr><td>2</td><td>SKU</td><td><code>SELECT count(*) FROM catalog_sku;</code></td><td>≥ 商品数</td></tr>
+          <tr><td>3</td><td>双写 RAG 文档</td><td><code>SELECT count(*) FROM rag_documents WHERE source_type='catalog-spu';</code></td><td>= 商品数</td></tr>
+          <tr><td>4</td><td>索引完成</td><td><code>SELECT status,count(*) FROM rag_documents GROUP BY status;</code></td><td>全部 <code>INDEXED</code></td></tr>
+          <tr><td>5</td><td>切片分类</td><td><code>SELECT metadata-&gt;&gt;'chunkType', count(*) FROM rag_chunks GROUP BY 1;</code></td><td>TITLE / DESC / ATTR 等均有</td></tr>
+          <tr><td>6</td><td>属性抽取</td><td><code>SELECT attributes_status,count(*) FROM catalog_product GROUP BY 1;</code></td><td><code>DONE</code> 为主（少量 FAILED 可接受）</td></tr>
+        </tbody>
+      </table>
+      <div class="callout warn"><span class="ct">卡住了？</span><p>状态长期停在 <code>PENDING</code>：多半是启用了 RocketMQ 但端点不通——查 <code>rag_index_outbox</code> 是否堆积，或临时把 <code>RAG_ROCKETMQ_ENABLED=false</code> 改走进程内。状态 <code>FAILED</code> 且报 dimension mismatch：embedding 维度 ≠ Milvus 维度（见部署文档 §4.3）。</p></div>
+    </section>
+
+    <section id="chat">
+      <h2><span class="hash">#4</span> 体验在线导购</h2>
+      <p class="sec-sub">核心来了。所有对话都打到同一个 SSE 入口：<span class="pill get">GET</span> <code>/public/agent/turn</code>。</p>
+
+      <h3 id="how-call">4.1 如何调用 SSE</h3>
+      <p>用 <code>curl -N</code> 保持流不断开；中文参数用 <code>-G --data-urlencode</code> 自动编码：</p>
+      <div class="pre-wrap"><span class="tag">shell</span><pre><code><span class="k">curl</span> -N -G <span class="s">"$BASE/public/agent/turn"</span> \
+  --data-urlencode <span class="s">"userId=judge-001"</span> \
+  --data-urlencode <span class="s">"conversationId=demo-1"</span> \
+  --data-urlencode <span class="s">"message=推荐一款适合通勤的轻量双肩包"</span></code></pre></div>
+      <div class="callout tip"><span class="ct">多轮记忆的关键</span><p>同一段对话请<b>保持 <code>userId</code> 与 <code>conversationId</code> 不变</b>。这样"那个""第一个""再便宜点""结算购物车"才能联系上文。换一段新对话就换一个 <code>conversationId</code>。</p></div>
+
+      <h3 id="read-events">4.2 看懂事件流</h3>
+      <p>生产模式（默认）会按顺序吐出这些事件：</p>
+      <div class="pre-wrap"><span class="tag">text/event-stream</span><pre><code><span class="e">event:</span> turn.started      <span class="c"># 回合开始，开聊天气泡</span>
+<span class="e">event:</span> workflow.started  <span class="c"># 意图已判定，进入对应业务子图</span>
+<span class="e">event:</span> answer.delta      <span class="c"># 答案逐字流出（会有很多条）</span>
+<span class="e">event:</span> answer.delta
+<span class="e">event:</span> answer.completed   <span class="c"># 答案落库完成</span>
+<span class="e">event:</span> turn.completed    <span class="c"># 收尾：带 intent / targetWorkflow / status</span></code></pre></div>
+      <table>
+        <thead><tr><th>事件</th><th>客户端该做什么</th></tr></thead>
+        <tbody>
+          <tr><td><span class="evt">turn.started</span></td><td>打开一个 AI 回复气泡</td></tr>
+          <tr><td><span class="evt">workflow.started</span></td><td>可显示"正在为你查找…"</td></tr>
+          <tr><td><span class="evt">answer.delta</span></td><td>把 <code>text</code> 追加到气泡（打字机效果）</td></tr>
+          <tr><td><span class="evt">turn.completed</span></td><td>关闭光标；可读取 <code>intent</code> 展示意图标签</td></tr>
+          <tr><td><span class="evt">error</span></td><td>展示错误文案；看 <code>recoverable</code> 决定是否可重试</td></tr>
+        </tbody>
+      </table>
+      <p>想看 Agent 内部"走了哪些节点"？加 <code>streamMode=trace</code>，详见 <a href="#trace">§6</a>。</p>
+
+      <h3 id="ratelimit">4.3 限流保护（@RateLimit）</h3>
+      <p>导购对话每一轮都会触发意图识别、检索、答案生成等一连串昂贵调用，因此 <code>/public/agent/turn</code> 上加了注解式限流 <code>@RateLimit</code>，按「用户 + 会话」维度独立计数，保护下游 LLM 配额、防止单会话刷爆。正常逐轮体验不会触发。</p>
+      <table>
+        <thead><tr><th>项</th><th>值</th></tr></thead>
+        <tbody>
+          <tr><td>限流维度</td><td>每个「<code>userId</code> + <code>conversationId</code>」独立计数</td></tr>
+          <tr><td>时间窗（与关系）</td><td>1 分钟内 ≤ <b>20</b> 次；10 分钟内 ≤ <b>120</b> 次（任一窗口超限即拒绝）</td></tr>
+          <tr><td>超限响应</td><td>HTTP <code>429 Too Many Requests</code> + <code>Retry-After</code> 响应头（建议等待秒数）</td></tr>
+          <tr><td>实现</td><td><code>common.ratelimit</code> 模块的 AOP 切面，在方法执行前校验；SpEL key 求值失败会自动退化为方法级全局限流，不阻断链路</td></tr>
+        </tbody>
+      </table>
+      <div class="callout warn"><span class="ct">脚本连发可能触发</span><p>若用脚本对同一会话极快连发请求而收到 <code>429</code>，这是正常保护：读 <code>Retry-After</code> 秒数等待后重试，或换一个 <code>conversationId</code> 分摊。手动逐轮体验几乎不会碰到。</p></div>
+    </section>
+
+    <section id="playbook">
+      <h2><span class="hash">#5</span> 对话剧本</h2>
+      <p class="sec-sub">下面是一段<b>连贯的多轮对话</b>（全程用 <code>conversationId=demo-1</code>），一口气体验推荐、筛选、对比、加购、下单的完整闭环；其后是覆盖全部意图的速查矩阵。</p>
+
+      <h3 id="guided">5.1 连贯多轮演示</h3>
+      <p>把每条 <code>message</code> 依次发给 <code>/public/agent/turn</code>（同一 <code>userId/conversationId</code>）。右侧标注的是预期识别到的意图。</p>
+
+      <div class="chat">
+        <div class="turn u-row"><div><div class="bubble u">推荐一款适合通勤的轻量双肩包</div><div class="meta" style="text-align:right">轮 1 <span class="chip">PRODUCT_RECOMMEND</span></div></div></div>
+        <div class="turn"><div class="bubble a">为你推荐 NovaPack 轻量通勤双肩包：320g 机身、防泼水、独立 15.6 寸笔记本仓……（流式逐字输出，并附商品卡片）</div><div class="meta">→ <span class="ev">product_query_workflow</span> · 混合检索召回 + 实时价格回填</div></div>
+
+        <div class="turn u-row"><div><div class="bubble u">有没有 200 块以下的</div><div class="meta" style="text-align:right">轮 2 <span class="chip">PRODUCT_QUERY</span></div></div></div>
+        <div class="turn"><div class="bubble a">在上一轮基础上加了"价格&lt;200"的筛选——为你找到「极简轻商务背包 159 元」……</div><div class="meta">→ 复用上文，价格区间下推过滤</div></div>
+
+        <div class="turn u-row"><div><div class="bubble u">这两个哪个更适合出差</div><div class="meta" style="text-align:right">轮 3 <span class="chip">PRODUCT_COMPARE</span></div></div></div>
+        <div class="turn"><div class="bubble a">从容量、重量、隔层、价格四个维度对比：出差更看重容量与隔层，推荐 22L 那款……（结构化对比矩阵）</div><div class="meta">→ ProductComparisonBuilder 自动选差异维度</div></div>
+
+        <div class="turn u-row"><div><div class="bubble u">第一个有货吗，多少钱</div><div class="meta" style="text-align:right">轮 4 <span class="chip">INVENTORY_QUERY</span> / <span class="chip">PRICE_QUERY</span></div></div></div>
+        <div class="turn"><div class="bubble a">「曜石黑 22L」现货，219 元；雾岩灰 229 元。</div><div class="meta">→ 指代"第一个"由会话记忆解析；实时库存/价格</div></div>
+
+        <div class="turn u-row"><div><div class="bubble u">把第一个加到购物车</div><div class="meta" style="text-align:right">轮 5 <span class="chip">ADD_TO_CART</span></div></div></div>
+        <div class="turn"><div class="bubble a">已加入购物车：曜石黑 22L ×1，219 元。购物车合计 219 元。</div><div class="meta">→ <span class="ev">cart_manage_workflow</span> · 库存校验 + 状态机落库</div></div>
+
+        <div class="turn u-row"><div><div class="bubble u">购物车里有什么</div><div class="meta" style="text-align:right">轮 6 <span class="chip">CART_MANAGE</span></div></div></div>
+        <div class="turn"><div class="bubble a">当前购物车：1 件商品，NovaPack 双肩包 曜石黑 ×1，合计 219 元。</div><div class="meta">→ 槽位填充判定"查看"动作</div></div>
+
+        <div class="turn u-row"><div><div class="bubble u">结算购物车</div><div class="meta" style="text-align:right">轮 7 <span class="chip">CREATE_ORDER</span></div></div></div>
+        <div class="turn"><div class="bubble a">好的，正在为你结算。请提供收货地址。</div><div class="meta">→ <span class="ev">order_manage_workflow</span> · 确定性前置路由命中</div></div>
+
+        <div class="turn u-row"><div><div class="bubble u">寄到广州市天河区xx路1号，张三，13800000000</div><div class="meta" style="text-align:right">轮 8 <span class="chip">CREATE_ORDER</span>（续）</div></div></div>
+        <div class="turn"><div class="bubble a">已生成订单草稿：曜石黑 ×1，219 元，寄往广州市天河区……确认下单吗？</div><div class="meta">→ 地址解析 + 购物车快照 + 价格变动检测</div></div>
+
+        <div class="turn u-row"><div><div class="bubble u">确认</div><div class="meta" style="text-align:right">轮 9 <span class="chip">CONFIRM_ORDER</span></div></div></div>
+        <div class="turn"><div class="bubble a">订单已提交 ✅ 订单号 …，预计尽快发货。</div><div class="meta">→ 写 customer_order / order_item，任务链收尾 SUCCEEDED</div></div>
+      </div>
+
+      <div class="callout note"><span class="ct">复合目标加分项</span><p>想看"多轮任务链"自动推进：开一段新对话直接说 <b>"帮我推荐一款通勤双肩包并加入购物车"</b>。Agent 会规划"先推荐 → 再加购"的任务链，跨节点自动执行。</p></div>
+
+      <h3 id="matrix">5.2 场景速查矩阵</h3>
+      <p>想单点验证某类意图，直接发对应话术：</p>
+      <table>
+        <thead><tr><th>体验场景</th><th>示例话术</th><th>预期意图</th><th>目标 workflow</th></tr></thead>
+        <tbody>
+          <tr><td>模糊推荐</td><td>"推荐适合油皮的洗面奶"</td><td><code>PRODUCT_RECOMMEND</code></td><td>product_query</td></tr>
+          <tr><td>条件筛选</td><td>"300 元以下的防水双肩包"</td><td><code>PRODUCT_SEARCH</code></td><td>product_query</td></tr>
+          <tr><td>商品对比</td><td>"A 和 B 哪个更保湿"</td><td><code>PRODUCT_COMPARE</code></td><td>product_query</td></tr>
+          <tr><td>商品详情</td><td>"这款能装下 15 寸笔记本吗"</td><td><code>PRODUCT_DETAIL_QUERY</code></td><td>product_query</td></tr>
+          <tr><td>价格</td><td>"这个多少钱 / 有没有优惠"</td><td><code>PRICE_QUERY</code></td><td>price_query</td></tr>
+          <tr><td>库存</td><td>"雾岩灰还有货吗"</td><td><code>INVENTORY_QUERY</code></td><td>inventory_query</td></tr>
+          <tr><td>评价总结</td><td>"大家对这款评价怎么样"</td><td><code>REVIEW_SUMMARY</code></td><td>product_query</td></tr>
+          <tr><td>政策问答</td><td>"支持七天无理由退货吗"</td><td><code>POLICY_QA</code></td><td>policy_qa</td></tr>
+          <tr><td>加购</td><td>"把这个加到购物车"</td><td><code>ADD_TO_CART</code></td><td>cart_manage</td></tr>
+          <tr><td>购物车管理</td><td>"数量改成 2 / 删掉第二个 / 清空购物车"</td><td><code>CART_MANAGE</code></td><td>cart_manage</td></tr>
+          <tr><td>结算下单</td><td>"结算购物车"</td><td><code>CREATE_ORDER</code></td><td>order_manage</td></tr>
+          <tr><td>订单查询</td><td>"我的订单状态"</td><td><code>ORDER_QUERY</code></td><td>order_query</td></tr>
+          <tr><td>物流</td><td>"我的快递到哪了"</td><td><code>LOGISTICS_QUERY</code></td><td>logistics_query</td></tr>
+          <tr><td>闲聊</td><td>"你好 / 谢谢"</td><td><code>SMALL_TALK</code></td><td>small_talk</td></tr>
+          <tr><td>越界 / 模糊</td><td>"帮我写段代码" / "那个呢"</td><td><code>UNKNOWN</code> / <code>CLARIFY</code></td><td>clarify</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="trace">
+      <h2><span class="hash">#6</span> 看 Agent 的"思考路径"</h2>
+      <p class="sec-sub">演示时最能体现工程含量的一招：用 <code>streamMode=trace</code> 把图节点事件全量打出来，直观看到 Agent 走了哪条路。</p>
+      <div class="pre-wrap"><span class="tag">shell</span><pre><code><span class="k">curl</span> -N -G <span class="s">"$BASE/public/agent/turn"</span> \
+  --data-urlencode <span class="s">"userId=judge-001"</span> \
+  --data-urlencode <span class="s">"conversationId=trace-1"</span> \
+  --data-urlencode <span class="s">"message=300以内的轻量双肩包对比一下"</span> \
+  --data-urlencode <span class="s">"streamMode=trace"</span></code></pre></div>
+      <p>除了生产事件，你会额外看到每个节点的 <span class="evt">node.started</span> / <span class="evt">node.completed</span>：</p>
+      <div class="pre-wrap"><span class="tag">trace 模式（节选）</span><pre><code><span class="e">node.started</span>   check_conversation
+<span class="e">node.completed</span> load_conversation_context   <span class="c"># 装载多轮记忆</span>
+<span class="e">node.completed</span> save_user_message
+<span class="e">node.completed</span> main_intent_router          <span class="c"># 判定 PRODUCT_COMPARE</span>
+<span class="e">node.started</span>   product_query_workflow      <span class="c"># 进入商品子图</span>
+<span class="e">node.completed</span> product_query_workflow      <span class="c"># 检索+对比完成</span>
+<span class="e">node.completed</span> build_answer_context        <span class="c"># 流式答案</span></code></pre></div>
+      <div class="callout tip"><span class="ct">演示建议</span><p>给评委演示时，先用默认模式展示"丝滑流式回答"，再用 trace 模式展示"背后这套图编排"——一柔一刚，既有体验也有深度。</p></div>
+    </section>
+
+    <section id="troubleshoot">
+      <h2><span class="hash">#7</span> 验收与排错</h2>
+      <table>
+        <thead><tr><th>现象</th><th>可能原因</th><th>处理</th></tr></thead>
+        <tbody>
+          <tr><td>SSE 立刻断开 / 无事件</td><td>未加 <code>-N</code>，或参数缺失被校验拒绝</td><td>加 <code>-N</code>；确认 userId/conversationId/message 都传了</td></tr>
+          <tr><td>回答说"没有匹配的商品"</td><td>还没导入数据 / 索引未完成</td><td>先做 §2、§3，确认 <code>INDEXED</code></td></tr>
+          <tr><td>意图识别成 CLARIFY</td><td>话术太模糊或上下文不足</td><td>说得具体些；保持同一 conversationId 延续上下文</td></tr>
+          <tr><td>收到 <span class="evt">error</span> + <code>MAIN_INTENT_LLM_TIMEOUT</code></td><td>LLM 超时</td><td><code>recoverable=true</code>，重发一次即可</td></tr>
+          <tr><td>收到 HTTP <code>429</code></td><td>触发限流（同一会话发太快）</td><td>按 <code>Retry-After</code> 秒数等待后重试，或换 <code>conversationId</code>（见 §4.3）</td></tr>
+          <tr><td>对比/筛选效果不明显</td><td>商品太少</td><td>多导入几条不同价格/规格的商品（§2）</td></tr>
+          <tr><td>"结算"没进下单流程</td><td>表述不够明确</td><td>用"结算购物车 / 提交购物车订单"等明确措辞</td></tr>
+          <tr><td>中文乱码</td><td>未做 URL 编码</td><td>用 <code>-G --data-urlencode</code></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="cheatsheet">
+      <h2><span class="hash">#A</span> 附录 · 速查</h2>
+      <table>
+        <thead><tr><th>动作</th><th>接口</th></tr></thead>
+        <tbody>
+          <tr><td>健康检查</td><td><span class="pill get">GET</span> <code>/api/v1/actuator/health</code></td></tr>
+          <tr><td>导入商品（外部 JSON）</td><td><span class="pill post">POST</span> <code>/api/v1/admin/catalog/import/json</code></td></tr>
+          <tr><td>导入商品（批量草稿）</td><td><span class="pill post">POST</span> <code>/api/v1/admin/catalog/import</code></td></tr>
+          <tr><td>查看商品落地页 / SKU</td><td><span class="pill get">GET</span> <code>/api/v1/public/catalog/product/{id}</code>、<code>/{id}/skus</code></td></tr>
+          <tr><td>索引进度 / 时间线</td><td><span class="pill get">GET</span> <code>/api/v1/public/rag/documents/index-job/{id}</code>、<code>/index-timeline/{id}</code></td></tr>
+          <tr><td><b>导购对话（SSE）</b></td><td><span class="pill get">GET</span> <code>/api/v1/public/agent/turn</code></td></tr>
+          <tr><td>文档管理</td><td><span class="pill post">POST</span> <code>/api/v1/public/rag/documents/create</code> 等</td></tr>
+        </tbody>
+      </table>
+      <h4>对话参数速记</h4>
+      <p><code>userId</code> · <code>conversationId</code>（多轮请保持一致）· <code>message</code> · <code>requestId</code>（幂等，可选）· <code>streamMode=trace</code>（看思考路径，可选）。</p>
+      <h4>限流速记</h4>
+      <p>同一 <code>userId:conversationId</code>：1 分钟 ≤ 20 次、10 分钟 ≤ 120 次；超限 <code>429</code> + <code>Retry-After</code>。</p>
+    </section>
+
+    <footer class="page">
+      <span>RAG 多模态电商导购 Agent · E2E 体验指南</span>
+      <span><a href="architecture-pipelines.html">← 离线 / 在线链路技术文档</a> · <a href="deployment.html">部署文档</a></span>
+    </footer>
+  </main>
+</div>
+</body>
+</html>
